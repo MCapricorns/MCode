@@ -109,16 +109,34 @@ impl<'de> Deserialize<'de> for TextBlock {
 }
 
 /// Human-visible model reasoning or summary text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The optional `signature` carries provider reasoning-integrity fields (e.g.
+/// Anthropic thinking signatures). Adapters must preserve it verbatim across
+/// round-trips, including signature-only blocks whose `text` is empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ThinkingBlock {
     /// The reasoning text.
     pub text: String,
+    /// Provider reasoning-integrity signature, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl ThinkingBlock {
-    /// Creates reasoning text.
+    /// Creates reasoning text without a signature.
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
+        Self {
+            text: text.into(),
+            signature: None,
+        }
+    }
+
+    /// Attaches a provider signature.
+    #[must_use]
+    pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
     }
 }
 
@@ -131,24 +149,6 @@ impl From<String> for ThinkingBlock {
 impl From<&str> for ThinkingBlock {
     fn from(text: &str) -> Self {
         Self::new(text)
-    }
-}
-
-impl Serialize for ThinkingBlock {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.text.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ThinkingBlock {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer).map(Self::new)
     }
 }
 
@@ -321,16 +321,29 @@ mod tests {
     }
 
     #[test]
-    fn text_and_thinking_use_only_plain_string_json() {
+    fn text_is_plain_string_and_thinking_is_closed_object_json() {
         let text = TextBlock::new("hello");
         let thinking = ThinkingBlock::new("considering");
         assert_eq!(serde_json::to_string(&text).unwrap(), r#""hello""#);
         assert_eq!(
-            serde_json::to_string(&thinking).unwrap(),
-            r#""considering""#
+            serde_json::to_value(&thinking).unwrap(),
+            json!({"text": "considering"})
         );
         assert_roundtrip(&text);
         assert_roundtrip(&thinking);
+
+        let signed = ThinkingBlock::new("").with_signature("sig-1");
+        assert_eq!(
+            serde_json::to_value(&signed).unwrap(),
+            json!({"text": "", "signature": "sig-1"})
+        );
+        assert_roundtrip(&signed);
+        assert_eq!(
+            serde_json::from_value::<ThinkingBlock>(json!({"text": "", "signature": "sig-1"}))
+                .unwrap(),
+            signed,
+            "signature-only thinking must survive replay"
+        );
 
         assert!(
             serde_json::from_value::<TextBlock>(json!({
