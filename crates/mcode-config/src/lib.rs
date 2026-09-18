@@ -14,8 +14,6 @@
 //! migration, compatibility read, layered merge, alias, or fallback for old
 //! settings, model, credential, Plugin-lock, session, or sibling-Pack layouts.
 
-// Rust guideline compliant 2026-08-29
-
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -28,6 +26,7 @@ mod pack_installation;
 mod parse;
 mod root_composition;
 mod secure_fs;
+mod settings;
 mod staging;
 mod transaction_id;
 
@@ -68,6 +67,13 @@ pub use secure_fs::owned_file::{
 pub use secure_fs::{
     AccessControlEvidence, NativeUnavailableReason, OwnedKind, ensure_home_layout,
     probe_access_control,
+};
+#[doc(inline)]
+pub use settings::{
+    AppSettings, AppearanceSettings, DEFAULT_USER_AGENT, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
+    MAX_PROVIDERS, MAX_SETTINGS_BYTES, McpServerSettings, ProviderSettings,
+    SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SETTINGS_PATH, UsageSettings, VALID_PROVIDER_KINDS,
+    WebSettings, read_app_settings, replace_app_settings,
 };
 #[doc(inline)]
 pub use staging::{
