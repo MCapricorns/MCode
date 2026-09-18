@@ -48,7 +48,7 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - [x] T11:Provider runtime + 内置 adapters(含 UA 配置);桌面对话流接入(流式输出、tool 调用展示)。(已交付:`mcode-providers` 三协议适配器 + secrets store + 桌面流式回合)
 - [x] T12:移除旧插件系统:删除 mcode-tui、mcode-cli、mcode、mcode-render、mcode-plugin-host(wasmtime/WIT/pack ABI 一并移除);session/generation/task-runtime 独立为 `mcode-session` crate;孤儿 workspace 依赖(wasmtime、wat、ratatui、crossterm、clap 等)已清理。
 - [ ] T13:Web 内置搜索 + 右侧上下文面板的改动文件/diff 视图。
-- [ ] T14:MCP 内置客户端 + 设置页 servers 管理 + 上下文面板工具状态。
+- [x] T14:MCP 内置客户端(`mcode-mcp` stdio + Streamable-HTTP 双 transport,Context7 内置目录、用户自填 key)+ 设置页 servers 管理 + List tools。
 - [ ] T15:Usage 内置统计 + 面板/配额展示;设置页 usage 选项。
 - [ ] T16:内置 Workspace checkpoint/rollback;no-follow handle、并发冲突和不可回滚证据。
 - [ ] T17:内置 Resources catalog/read/render-prompt/contributions。
