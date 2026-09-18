@@ -7,16 +7,16 @@
 一套 core 后端,两个前端:
 
 - **Core 后端**(mcode-core/config/provider-api/tools/agent/plugin-host):Session、Provider、Pack 插件系统、凭据、安装与 generation substrate 全部在 core;不包含任何 UI 逻辑、渲染类型或窗口/终端细节。
-- **桌面前端**(新 crate `mcode-desktop`):Zed GPUI 构建,布局对齐 Cursor/Codex 桌面版 —— 左侧会话与历史栏,中央 agent 对话流 + composer,右侧上下文面板(改动文件/diff/Todo/Usage),顶栏模型与 route 选择;插件系统有完整管理界面(Pack 列表、签名安装/更新/启停、Provider 凭据、Theme/Wallpaper 选择)。
+- **桌面前端**(新 crate `mcode-desktop`):Zed GPUI 构建,布局对齐 Cursor/Codex 桌面版 —— 左侧会话与历史栏,中央 agent 对话流 + composer,右侧上下文面板(改动文件/diff/Todo/Usage),顶栏模型与 route 选择;插件系统有完整管理界面(Pack 列表、签名安装/更新/启停、Provider 凭据)。皮肤只用内置浅色/深色两套默认主题,不提供外部 Theme/Wallpaper 扩展。
 - **TUI 前端**(`mcode-tui`):保留,与桌面共享同一 core typed API,不复制后端逻辑。
 - 两个前端只消费 core 的公开 typed API(Session/Provider/插件/安装服务);解耦边界:界面是界面,core 是 core,禁止 UI 依赖渗入 core,也禁止前端绕过 core 直接触文件/凭据/网络。
-- headless CLI 保留 typed surface,与前端共享同一 core。
+- 目标平台仅 Windows 与 macOS;不构建、不测试、不发布 Linux。headless CLI 保留 typed surface,与前端共享同一 core。
 
 ## 当前检查点:T10 GPUI 桌面应用
 
-- [ ] 新 crate `mcode-desktop`:GPUI 应用骨架、Cursor/Codex 布局、会话侧栏(消费 T9 SessionService)、对话流与 composer 视图(Provider 接入前展示会话事件)、上下文面板骨架、插件系统管理界面(读 T6 RootComposition/PackInstallation,安装动作在 T11 后激活)、generic login 骨架。
+- [ ] 新 crate `mcode-desktop`:GPUI 应用骨架、Cursor/Codex 布局、会话侧栏(消费 T9 SessionService)、对话流与 composer 视图(Provider 接入前展示会话事件)、上下文面板骨架、插件系统管理界面(读 T6 RootComposition/PackInstallation,安装动作在 T11 后激活)、generic login 骨架、内置浅色/深色主题切换。
 - [ ] 纯状态 view-model 与 GPUI 渲染层分离;view-model 无 GPU 依赖、可测。
-- [ ] 新增 `docs/design/06-desktop-ui.md` 冻结桌面布局、解耦边界与 GPUI 约束;TUI 规格保留于 06-tui.md。
+- [ ] 新增 `docs/design/06-desktop-ui.md` 冻结桌面布局、浅色/深色主题、解耦边界与 GPUI 约束;TUI 规格保留于 06-tui.md。
 
 ## 产品与扩展边界
 
@@ -28,8 +28,6 @@
 | Web Packs | N | 0..1 | Querit 与 Synthetic Web 互斥,无 fallback |
 | MCP Packs | N | N | 每个 Pack 可挂 N 个 server/tool;identity 全局唯一 |
 | Usage Packs | N | N | 按 canonical source identity 隔离 |
-| Theme assets | N | 0..1 | versioned declarative schema(TUI token 与 GPUI token 同源),不执行代码 |
-| Wallpaper assets | N | 0..1 | signed asset/hash 与 fit/position/opacity/blur/tint |
 
 第一方和第三方外部 Pack 使用同一签名、安装、更新、限额、generation fence 和故障隔离路径。Pack 无 WASI,不取得任意 filesystem/network/process/socket/credential authority;Host 独占 transport、secret、storage、process 和 workspace handle。
 
@@ -39,7 +37,7 @@
 - Web:Querit 固定 `/v1/search` 与 `/v1/contents`,query/count/fetch/body/deadline 全部有界;Synthetic 固定 `/v2/search` 且不提供 fetch fallback。URL、redirect、DNS/IP、credential 和 remote-text sanitization 归 Host。
 - MCP:stdio/HTTP command/origin/auth/config 进入 signed binding;Host 独占进程、网络、重连、cancel/drain 和 backpressure。
 - Usage:外部 quota snapshot 与 Host accounting 分离;Pack 不查询 Provider、不猜当前模型、不直接读取 credential source。
-- UI/asset:Host/core 独占窗口、输入、IME、剪贴板与 OS capability;桌面渲染只经 GPUI,TUI 只经终端 safety/sanitization;Theme/Wallpaper 只能声明样式与签名资产,不能执行代码。
+- UI:Host/core 独占窗口、输入、IME、剪贴板与 OS capability;桌面渲染只经 GPUI 且只有内置浅色/深色主题,TUI 只经终端 safety/sanitization 与内置 terminal 主题。
 
 ## 实现参考
 
@@ -50,7 +48,7 @@
 - Ask/Todo:`juicesharp/rpiv-mono@d13677c` 的 `rpiv-ask-user-question`、`rpiv-todo`;保留 1..4 questions、typed answers、preview、abandon、可见 todo 状态、dependency/replay 语义。
 - Usage:`marckrevv/pi-sub@65deb56`;复用 source/display 分层、缓存快照与 quota windows,不读取其他工具的 `auth.json` 或环境凭据。目标覆盖 DeepSeek、OpenAI、Synthetic、Kimi、Z.AI/GLM 等真实可验证 source adapter。
 - 桌面 UI:Zed GPUI(gpui)+ gpui-component(Dock/Tab/Input/List 等桌面组件);布局基线 Cursor/Codex 桌面版;view-model 与渲染分离沿用 mcode-tui 的纯状态模式。
-- TUI:沿用现有 mcode-tui 纯状态基座与 `06-tui.md` 规格;`pi-droid-styling@902b06e`、`pi-themes@cde2ff4` 只作为 terminal Theme token 参考。
+- TUI:沿用现有 mcode-tui 纯状态基座与 `06-tui.md` 规格及内置 terminal 主题。
 - Web:`dsh-web-querit`、`pi-querit-search`、`pi-web-access`。
 - Subagents:以 Codex/Grok 的异步委派模型为主,吸收用户现有 GitHub/本地实现与 `pi-subagents` 中可证明可靠的队列、worktree 和恢复机制;父 agent 不以同步 wait 驱动正常进度。
 
@@ -73,8 +71,8 @@
 - [ ] T25:最终产品组合:headless CLI + 桌面 + TUI。
 - [ ] T26:删除旧路径的识别、读取、兼容代码和 dead code。
 - [ ] T27:最终文档与扩展指南。
-- [ ] T28:Windows/Linux/macOS 安全、offline/crash、redaction 与 e2e 门禁。
-- [ ] final:workspace 全量 audit/cleanup、三平台 CI、secret/provenance/release review,发布 `v0.0.1`。
+- [ ] T28:Windows/macOS 安全、offline/crash、redaction 与 e2e 门禁(不做 Linux)。
+- [ ] final:workspace 全量 audit/cleanup、Windows/macOS CI、secret/provenance/release review,发布 `v0.0.1`。
 
 依赖主线:`T9 -> T10`;`T10 + T6/T7/T8 -> T11 -> T12`;T11 在 Web/Usage(T18、T20)前完成;T12 后双前端同步接入。
 
