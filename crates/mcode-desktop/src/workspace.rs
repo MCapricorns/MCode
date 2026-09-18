@@ -56,6 +56,7 @@ pub struct Workspace {
     mcp_form: Option<Entity<McpForm>>,
     mcp_key_input: Option<Entity<InputState>>,
     web_query_input: Option<Entity<InputState>>,
+    ask_input: Option<Entity<InputState>>,
 }
 
 impl Workspace {
@@ -82,6 +83,7 @@ impl Workspace {
             mcp_form: None,
             mcp_key_input: None,
             web_query_input: None,
+            ask_input: None,
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -159,6 +161,15 @@ impl Workspace {
                 }
                 DesktopAction::ChatFailed(message)
             }
+            BridgeEvent::AskRequested {
+                session_id,
+                questions,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::AskRequested(questions)
+            }
             BridgeEvent::ToolStarted {
                 session_id,
                 call_id,
@@ -232,6 +243,7 @@ impl Workspace {
             BridgeReply::Resources(Ok(files)) => {
                 self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
             }
+            BridgeReply::AskAnswered(Ok(())) => {}
             BridgeReply::Sent(Ok((head, entry))) => {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
                 self.begin_chat_turn(cx);
@@ -275,7 +287,8 @@ impl Workspace {
             | BridgeReply::WebSearched(Err(message))
             | BridgeReply::McpTools(Err(message))
             | BridgeReply::RolledBack(Err(message))
-            | BridgeReply::Resources(Err(message)) => {
+            | BridgeReply::Resources(Err(message))
+            | BridgeReply::AskAnswered(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
         }
@@ -431,6 +444,52 @@ impl Workspace {
                 cx,
             );
         }
+    }
+
+    pub(super) fn ask_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<InputState> {
+        self.ask_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Type a free-text answer for every question (separate with |)")
+                })
+            })
+            .clone()
+    }
+
+    pub(super) fn on_submit_free_ask(&mut self, cx: &mut Context<Workspace>) {
+        let Some(input) = self.ask_input.clone() else {
+            return;
+        };
+        let Some(rows) = self.vm.pending_ask.clone() else {
+            return;
+        };
+        let raw = input.read(cx).value().to_string();
+        let parts: Vec<String> = raw.split('|').map(|part| part.trim().to_owned()).collect();
+        let answers: Vec<String> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, (_, _, _))| parts.get(index).cloned().unwrap_or_default())
+            .collect();
+        self.on_answer_ask(answers, cx);
+    }
+
+    pub(super) fn on_answer_ask(&mut self, answers: Vec<String>, cx: &mut Context<Workspace>) {
+        let Some(conversation) = self.vm.active.clone() else {
+            return;
+        };
+        self.apply_action(DesktopAction::AskAnswered, cx);
+        self.dispatch(
+            BridgeCommand::AskAnswer {
+                session_id: conversation.session_id,
+                answers,
+            },
+            cx,
+        );
     }
 
     pub(super) fn on_rollback(&mut self, cx: &mut Context<Workspace>) {

@@ -173,6 +173,8 @@ pub struct WorkspaceState {
     pub mcp_tools: Vec<(String, Vec<String>)>,
     /// Prompt resources for the open session: (name, path).
     pub resources: Vec<(String, String)>,
+    /// Pending ask rows awaiting user answers.
+    pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -235,6 +237,10 @@ pub enum DesktopAction {
     ToolResultAppended(ConversationEntry),
     /// Prompt resources discovered for the open session.
     ResourcesLoaded(Vec<(String, String)>),
+    /// The agent asked the user structured questions.
+    AskRequested(Vec<(String, Vec<String>, bool)>),
+    /// The user submitted answers locally; clear the pending panel.
+    AskAnswered,
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
@@ -321,6 +327,8 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ResourcesLoaded(files) => state.resources = files,
+        DesktopAction::AskRequested(rows) => state.pending_ask = Some(rows),
+        DesktopAction::AskAnswered => state.pending_ask = None,
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
         }

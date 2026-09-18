@@ -2,6 +2,7 @@
 //! [`crate::tool::Tool`] trait. File discovery and content search stay in-process and never spawn
 //! external `fd` or `rg` executables.
 
+pub mod ask;
 pub mod edit;
 pub mod exec;
 pub mod find;
@@ -15,6 +16,7 @@ pub mod read;
 pub mod shell;
 pub mod write;
 
+pub use ask::{AskAnswer, AskChannel, AskQuestion, AskTool, user_dismissed};
 pub use edit::EditTool;
 pub use exec::ExecTool;
 pub use find::FindTool;

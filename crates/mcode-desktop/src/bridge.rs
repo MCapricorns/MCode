@@ -106,6 +106,13 @@ pub enum BridgeCommand {
         /// Session identity spelling (selects the workspace directory).
         session_id: String,
     },
+    /// Deliver the user's answers to the pending ask of one session.
+    AskAnswer {
+        /// Session identity spelling.
+        session_id: String,
+        /// One answer per asked question, in order; empty string skips.
+        answers: Vec<String>,
+    },
 }
 
 /// A streaming event from an active model turn.
@@ -133,6 +140,13 @@ pub enum BridgeEvent {
         head: String,
         /// Committed assistant entry projection.
         entry: ConversationEntry,
+    },
+    /// The agent asked the user structured questions.
+    AskRequested {
+        /// Session identity spelling.
+        session_id: String,
+        /// (question, choices, optional) rows.
+        questions: Vec<(String, Vec<String>, bool)>,
     },
     /// A tool call started executing.
     ToolStarted {
@@ -186,6 +200,8 @@ pub enum BridgeReply {
     RolledBack(Result<Vec<String>, String>),
     /// Resource list: (name, absolute path) pairs.
     Resources(Result<Vec<(String, String)>, String>),
+    /// The user's answers were delivered to the waiting tool.
+    AskAnswered(Result<(), String>),
 }
 
 /// Handle to the core thread.
@@ -267,6 +283,45 @@ struct WithReply {
     reply: oneshot::Sender<BridgeReply>,
 }
 
+/// Routes user answers from the UI to the pending `ask_user` tool.
+#[derive(Default)]
+pub struct AskRouter {
+    pending: std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<Vec<String>>>,
+    >,
+}
+
+impl AskRouter {
+    fn register(&self, session_id: &str) -> tokio::sync::oneshot::Receiver<Vec<String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pending
+            .lock()
+            .expect("ask router")
+            .insert(session_id.to_owned(), tx);
+        rx
+    }
+
+    fn deliver(&self, session_id: &str, answers: Vec<String>) -> bool {
+        self.pending
+            .lock()
+            .expect("ask router")
+            .remove(session_id)
+            .is_some_and(|tx| tx.send(answers).is_ok())
+    }
+}
+
+fn deliver_ask_answer(session_id: &str, answers: Vec<String>) -> Result<(), String> {
+    let router = ASK_ROUTER.get_or_init(AskRouter::default);
+    if router.deliver(session_id, answers) {
+        Ok(())
+    } else {
+        Err("no pending question for this session".to_owned())
+    }
+}
+
+/// Process-wide ask router; one pending ask per session.
+static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
+
 fn run_core(
     home: HomeLayout,
     commands: mpsc::Receiver<WithReply>,
@@ -340,6 +395,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
         BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
         BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
+        BridgeCommand::AskAnswer { .. } => BridgeReply::AskAnswered(Err(message)),
     }
 }
 
@@ -399,6 +455,10 @@ async fn handle(
         BridgeCommand::ListResources { session_id } => {
             BridgeReply::Resources(list_resources(home, session_id))
         }
+        BridgeCommand::AskAnswer {
+            session_id,
+            answers,
+        } => BridgeReply::AskAnswered(deliver_ask_answer(session_id, answers.clone())),
     }
 }
 
@@ -784,6 +844,19 @@ async fn run_chat_turn(
     let registry = Arc::new({
         let registry = ToolRegistry::new();
         mcode_tools::register_builtins(&registry);
+        // ask_user rides the same registry; its channel forwards questions
+        // to the UI over the event channel and waits on the shared router.
+        let ask_events = events.clone();
+        let ask_session = session_id.to_owned();
+        let answer_rx = ASK_ROUTER
+            .get_or_init(AskRouter::default)
+            .register(&ask_session);
+        let channel: Arc<dyn mcode_tools::builtin::AskChannel> = Arc::new(BridgeAskChannel {
+            session_id: ask_session,
+            events: ask_events,
+            answer: tokio::sync::Mutex::new(Some(answer_rx)),
+        });
+        registry.register(Arc::new(mcode_tools::builtin::AskTool::new(channel)));
         registry
     });
 
@@ -987,6 +1060,58 @@ async fn run_chat_turn(
     // The pump emits ChatDone/ChatFailed; wait for it to finish draining.
     let _ = pump.await;
     Ok(())
+}
+
+/// Host channel forwarding `ask_user` waits through the UI event stream.
+struct BridgeAskChannel {
+    session_id: String,
+    events: mpsc::SyncSender<BridgeEvent>,
+    answer: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<Vec<String>>>>,
+}
+
+#[async_trait::async_trait]
+impl mcode_tools::builtin::AskChannel for BridgeAskChannel {
+    async fn ask(
+        &self,
+        questions: &[mcode_tools::builtin::AskQuestion],
+        cancel: &CancellationToken,
+    ) -> Result<Vec<mcode_tools::builtin::AskAnswer>, mcode_tools::ToolError> {
+        let rows = questions
+            .iter()
+            .map(|question| {
+                (
+                    question.question.clone(),
+                    question.choices.clone(),
+                    question.optional,
+                )
+            })
+            .collect();
+        let _ = self.events.send(BridgeEvent::AskRequested {
+            session_id: self.session_id.clone(),
+            questions: rows,
+        });
+        let rx = self
+            .answer
+            .lock()
+            .await
+            .take()
+            .ok_or_else(mcode_tools::builtin::user_dismissed)?;
+        let answers = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                return Err(mcode_tools::ToolError::Execution("cancelled".into()));
+            }
+            answers = rx => answers.map_err(|_| mcode_tools::builtin::user_dismissed())?,
+        };
+        Ok(questions
+            .iter()
+            .enumerate()
+            .map(|(index, question)| mcode_tools::builtin::AskAnswer {
+                question: question.question.clone(),
+                answer: answers.get(index).cloned().unwrap_or_default(),
+            })
+            .collect())
+    }
 }
 
 /// Commits one tool-result payload and projects its display entry.

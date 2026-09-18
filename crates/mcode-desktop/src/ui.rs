@@ -33,6 +33,9 @@ pub fn render_root(
         .when(workspace.vm().error.is_some(), |this| {
             this.child(render_error_banner(workspace, cx))
         })
+        .when(workspace.vm().pending_ask.is_some(), |this| {
+            this.child(render_ask_panel(workspace, window, cx))
+        })
         .child(
             div()
                 .id("columns")
@@ -128,6 +131,114 @@ fn render_error_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>) -
                     workspace.on_dismiss_error(cx);
                 })),
         )
+}
+
+/// Renders the pending ask panel: one answer row per question.
+fn render_ask_panel(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let rows: Vec<(String, Vec<String>, bool)> =
+        workspace.vm().pending_ask.clone().unwrap_or_default();
+    div()
+        .id("ask-panel")
+        .border_b_1()
+        .border_color(theme.border)
+        .p_3()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child("The agent needs your input"),
+        )
+        .children(
+            rows.iter()
+                .enumerate()
+                .map(|(index, (question, choices, optional))| {
+                    div()
+                        .id(format!("ask-row-{index}"))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(format!("{}. {}", index + 1, question)),
+                        )
+                        .when(!choices.is_empty(), |this| {
+                            let buttons: Vec<(usize, String, String)> = choices
+                                .iter()
+                                .enumerate()
+                                .map(|(choice_index, choice)| {
+                                    (choice_index, choice.clone(), choice.clone())
+                                })
+                                .collect();
+                            this.child(
+                                div()
+                                    .id(format!("ask-choices-{index}"))
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_1()
+                                    .children(buttons.into_iter().map(
+                                        |(choice_index, label, answer)| {
+                                            Button::new(format!(
+                                                "ask-{index}-{choice_index}-{label}"
+                                            ))
+                                            .label(label)
+                                            .on_click(
+                                                cx.listener(move |workspace, _, _, cx| {
+                                                    let mut answers =
+                                                        vec![String::new(); index + 1];
+                                                    answers[index] = answer.clone();
+                                                    workspace.on_answer_ask(answers, cx);
+                                                }),
+                                            )
+                                        },
+                                    )),
+                            )
+                        })
+                        .when(*optional, |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.5)
+                                    .child("This question is optional"),
+                            )
+                        })
+                }),
+        )
+        .child(
+            div()
+                .id("ask-free-row")
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .id("ask-free-input")
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(30.))
+                        .text_sm()
+                        .child(Input::new(&workspace.ask_input(window, cx))),
+                )
+                .child(
+                    Button::new("ask-submit")
+                        .label("Answer all")
+                        .primary()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_submit_free_ask(cx);
+                        })),
+                ),
+        )
+        .into_any_element()
 }
 
 fn render_sidebar(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
