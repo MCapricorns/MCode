@@ -47,22 +47,27 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 
 - [x] T11:Provider runtime + 内置 adapters(含 UA 配置);桌面对话流接入(流式输出、tool 调用展示)。(已交付:`mcode-providers` 三协议适配器 + secrets store + 桌面流式回合)
 - [x] T12:移除旧插件系统:删除 mcode-tui、mcode-cli、mcode、mcode-render、mcode-plugin-host(wasmtime/WIT/pack ABI 一并移除);session/generation/task-runtime 独立为 `mcode-session` crate;孤儿 workspace 依赖(wasmtime、wat、ratatui、crossterm、clap 等)已清理。
-- [ ] T13:Web 内置搜索 + 右侧上下文面板的改动文件/diff 视图。
+- [x] T13:Web 内置搜索(`mcode-web` bounded 客户端 + URL/SSRF 防护)+ 桌面 Web/Changes 面板 + 设置页 backend 管理。
 - [x] T14:MCP 内置客户端(`mcode-mcp` stdio + Streamable-HTTP 双 transport,Context7 内置目录、用户自填 key)+ 设置页 servers 管理 + List tools。
-- [ ] T15:Usage 内置统计 + 面板/配额展示;设置页 usage 选项。
-- [ ] T16:内置 Workspace checkpoint/rollback;no-follow handle、并发冲突和不可回滚证据。
+- [ ] T15:Usage 内置统计 + 面板/配额展示;设置页 usage 选项。(用户指示暂缓)
+- [x] T16:内置 Workspace checkpoint/rollback(write/edit 前自动快照、Changes 面板一键回滚)+ agent 工具执行接入桌面(tool call/result 流、ledger 落盘、history replay)。
 - [x] T17:内置 Resources(AGENTS.md/MCODE.md 发现、bounded 读取、system prompt 注入、Overview 展示)。
 - [x] T18:内置 Ask(`ask_user` 工具、1..4 结构化问题、cancel-safe 等待、桌面应答面板)。
 - [x] T19:内置 Todo(stable ID、blockedBy 图校验、revision CAS、durable Task 事件、Overview 展示)。
+- [x] T25:删除旧路径的识别、读取、兼容代码和 dead code(旧 crate 全删、mcode-plugin-api 收口、孤儿依赖清理)。
+- [x] T26:最终文档(README 重写、design 文档收口为 00/01/02/09 + plan.md)。
+
+### Backlog(v0.0.1 后)
+
 - [ ] T20:内置 Subagents async fan-out、bounded queue、steer/follow-up/cancel、worktree lease 与 crash recovery。
 - [ ] T21:内置 Compaction adaptive scheduling、Provider child completion 与 atomic checkpoint。
 - [ ] T22:产品 export/import。
 - [ ] T23:Core 自动更新。
-- [ ] T24:设置页收口(全部设置可视化、导入导出预设)与桌面打磨。
-- [ ] T25:删除旧路径的识别、读取、兼容代码和 dead code。
-- [ ] T26:最终文档。
-- [ ] T27:Windows/macOS 安全、offline/crash、redaction 与 e2e 门禁(不做 Linux)。
-- [ ] final:workspace 全量 audit/cleanup、Windows/macOS CI、secret/provenance/release review,发布 `v0.0.1`。
+- [ ] T24:设置页收口(usage 面板、导入导出预设)与桌面打磨。
+
+### v0.0.1 收口
+
+- [ ] final:workspace 全量 audit、Windows CI 复核、发布 `v0.0.1` tag + GitHub Release(Windows-only;macOS 按用户指示不做)。
 
 依赖主线:`T9 -> T10 -> T11 -> T12`;T13–T15 依赖 T11;T16+ 依赖 T12。
 
