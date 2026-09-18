@@ -9,10 +9,8 @@ use std::process::Output;
 use assert_cmd::Command;
 use tempfile::TempDir;
 
-const PROVIDERS_GUIDANCE: &str =
-    "install and activate the com.mcode.providers Manager with a signed Provider Pack";
-const SESSION_GUIDANCE: &str =
-    "install and activate the com.mcode.session Manager with a signed Session Pack";
+const SETUP_GUIDANCE: &str =
+    "product commands are unavailable: first-party features are not yet delivered in this build";
 
 /// Creates the isolated `mcode` process under test.
 fn mcode() -> Command {
@@ -29,8 +27,7 @@ fn assert_setup_failure(output: &Output) {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains(PROVIDERS_GUIDANCE), "{stderr}");
-    assert!(stderr.contains(SESSION_GUIDANCE), "{stderr}");
+    assert!(stderr.contains(SETUP_GUIDANCE), "{stderr}");
 }
 
 #[test]
