@@ -25,6 +25,7 @@ mod pack_component;
 mod pack_installation;
 mod parse;
 mod root_composition;
+mod secrets;
 mod secure_fs;
 mod settings;
 mod staging;
@@ -36,7 +37,6 @@ pub use authority::{
 };
 #[doc(inline)]
 pub use error::{ConfigError, ConfigErrorKind};
-#[doc(inline)]
 pub use home::{HomeEnv, HomeLayout, MCODE_DIR_NAME, MCODE_HOME_ENV, PluginFamily};
 #[doc(inline)]
 pub use host_vault::{
@@ -58,6 +58,12 @@ pub use root_composition::{
     DefaultRoute, MAX_PROVIDER_ID_BYTES, MAX_ROOT_COMPOSITION_BYTES, PackId, ProviderId,
     ROOT_COMPOSITION_FORMAT_VERSION, ROOT_COMPOSITION_KIND, RootComposition,
     RootCompositionDocument, UiSelection, read_root_composition, replace_root_composition,
+};
+#[doc(inline)]
+pub use secrets::{
+    MAX_KEY_BYTES, MAX_SECRET_PROVIDERS, MAX_SECRETS_BYTES, ProviderSecrets,
+    SECRETS_FORMAT_VERSION, SECRETS_KIND, SECRETS_PATH, read_provider_secrets,
+    replace_provider_secrets,
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{
