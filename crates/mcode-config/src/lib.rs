@@ -70,10 +70,10 @@ pub use secure_fs::{
 };
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, DEFAULT_USER_AGENT, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
-    MAX_PROVIDERS, MAX_SETTINGS_BYTES, McpServerSettings, ProviderSettings,
+    AppSettings, AppearanceSettings, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS,
+    MAX_SETTINGS_BYTES, MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings,
     SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SETTINGS_PATH, UsageSettings, VALID_PROVIDER_KINDS,
-    WebSettings, read_app_settings, replace_app_settings,
+    WebBackendSettings, WebSettings, default_user_agent, read_app_settings, replace_app_settings,
 };
 #[doc(inline)]
 pub use staging::{
