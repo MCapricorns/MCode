@@ -4236,12 +4236,14 @@ name = "mcode-desktop"
 version = "0.0.1"
 dependencies = [
  "gpui-kit",
+ "mcode-agent",
  "mcode-config",
  "mcode-core",
  "mcode-mcp",
  "mcode-provider-api",
  "mcode-providers",
  "mcode-session",
+ "mcode-tools",
  "mcode-web",
  "serde",
  "serde_json",

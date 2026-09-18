@@ -227,6 +227,10 @@ pub enum DesktopAction {
         server_id: String,
         tools: Vec<String>,
     },
+    /// A tool call started on the open conversation.
+    ToolStarted { call_id: String, name: String },
+    /// A committed tool-result entry arrived.
+    ToolResultAppended(ConversationEntry),
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
@@ -296,6 +300,21 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ChatDelta(delta) => {
             append_streaming(state, false, delta);
+        }
+        DesktopAction::ToolStarted { call_id, name } => {
+            if let Some(conversation) = state.active.as_mut() {
+                conversation.entries.push(ConversationEntry {
+                    event_id: format!("call-{call_id}"),
+                    kind: EntryKind::ToolCall,
+                    text: name,
+                    call_id: Some(call_id),
+                });
+            }
+        }
+        DesktopAction::ToolResultAppended(entry) => {
+            if let Some(conversation) = state.active.as_mut() {
+                conversation.entries.push(entry);
+            }
         }
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);

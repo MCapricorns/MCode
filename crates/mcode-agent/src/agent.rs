@@ -305,6 +305,11 @@ impl Agent {
     }
 
     /// Read-only access to the conversation state.
+    /// Loads replay history before the first prompt.
+    pub fn seed_history(&mut self, messages: impl IntoIterator<Item = Message>) {
+        self.state.messages.extend(messages);
+    }
+
     pub fn state(&self) -> &AgentState {
         &self.state
     }

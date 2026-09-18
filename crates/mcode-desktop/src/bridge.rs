@@ -11,16 +11,17 @@
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
+use mcode_agent::{Agent, AgentConfig, HookRunner};
 use mcode_config::{
     AppSettings, AuthorityRevision, HomeLayout, read_app_settings, read_provider_secrets,
     replace_app_settings, replace_provider_secrets,
 };
 use mcode_core::Message;
-use mcode_provider_api::{Provider as _, StreamEvent as ProviderStreamEvent};
 use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
 use mcode_session::session::{
-    self, BranchId, EventKind, HeadStamp, SessionError, SessionId, SessionService,
+    self, BranchId, EventKind, HeadStamp, SessionCallId, SessionError, SessionId, SessionService,
 };
+use mcode_tools::ToolRegistry;
 use mcode_web::SearchResult;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -121,6 +122,22 @@ pub enum BridgeEvent {
         /// New branch head spelling.
         head: String,
         /// Committed assistant entry projection.
+        entry: ConversationEntry,
+    },
+    /// A tool call started executing.
+    ToolStarted {
+        /// Session identity spelling.
+        session_id: String,
+        /// Provider-assigned call id.
+        call_id: String,
+        /// Tool name.
+        name: String,
+    },
+    /// A tool call finished; its result is committed to the ledger.
+    ToolCompleted {
+        /// Session identity spelling.
+        session_id: String,
+        /// Committed tool-result entry projection.
         entry: ConversationEntry,
     },
     /// The turn failed; nothing was committed.
@@ -721,56 +738,242 @@ async fn run_chat_turn(
         ResolvedProvider::resolve(provider, model, &api_key, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
     let transport = ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?;
-    let wire = WireProvider::new(resolved, std::sync::Arc::new(transport));
+    let wire = WireProvider::new(resolved, Arc::new(transport));
 
-    let request = mcode_provider_api::Request {
-        system_prompt: Vec::new(),
-        messages: history.to_vec(),
-        tools: Vec::new(),
+    // Per-session tool working directory.
+    let cwd = home.root().join("workspace").join(session_id);
+    std::fs::create_dir_all(&cwd).map_err(|error| format!("workspace dir: {error}"))?;
+    let registry = Arc::new({
+        let registry = ToolRegistry::new();
+        mcode_tools::register_builtins(&registry);
+        registry
+    });
+
+    // Split the last committed user message off as the prompt; everything
+    // before it is replay history.
+    let (history, prompt) = match history.split_last() {
+        Some((Message::User(user), prefix)) => (prefix.to_vec(), user.clone()),
+        _ => return Err("the turn has no user message to answer".to_owned()),
     };
+
+    let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
+    let hooks = HookRunner::default();
     let cancel = CancellationToken::new();
-    let mut stream = wire
-        .stream(&request, cancel)
-        .await
-        .map_err(|error| format!("provider request failed: {error:?}"))?;
-    while let Some(event) = stream.next().await {
-        match event {
-            ProviderStreamEvent::TextDelta(delta) => {
-                let _ = events.send(BridgeEvent::ChatText {
-                    session_id: session_id.to_owned(),
-                    delta,
-                });
-            }
-            ProviderStreamEvent::ThinkingDelta(delta) => {
-                let _ = events.send(BridgeEvent::ChatThinking {
-                    session_id: session_id.to_owned(),
-                    delta,
-                });
-            }
-            ProviderStreamEvent::ToolCallDelta { .. } => {}
-            ProviderStreamEvent::Done { message } => {
-                let payload = serde_json::to_vec(&message)
-                    .map_err(|_| "assistant message could not be encoded".to_owned())?;
-                let (head, entry) =
-                    append_assistant(service, &session, &branch, expected_head, &payload)
-                        .await
-                        .map_err(render_error)?;
-                let _ = events.send(BridgeEvent::ChatDone {
-                    session_id: session_id.to_owned(),
-                    head,
-                    entry,
-                });
-                return Ok(());
-            }
-            ProviderStreamEvent::Error(error) => {
-                return Err(format!(
-                    "provider stream failed: {}",
-                    error.message().unwrap_or("unknown provider error")
-                ));
+    let mut agent = Agent::new(AgentConfig::new().with_system_prompt(
+        "You are MCode, a coding agent. Use the provided tools to read, edit, and run code.          Answer concisely and explain what you did.",
+    ));
+
+    // The ledger pump owns the branch head: tool results commit as they
+    // complete, the final assistant message commits at turn end.
+    let pump_service = service.clone();
+    let pump_events = events.clone();
+    let pump_session = session.clone();
+    let pump_branch = branch.clone();
+    let pump_session_id = session_id.to_owned();
+    let pump = tokio::spawn(async move {
+        let mut head = expected_head;
+        let mut pending_assistant: Option<mcode_core::AssistantMessage> = None;
+        loop {
+            let event = match agent_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let _ = pump_events.send(BridgeEvent::ChatFailed {
+                        session_id: pump_session_id.clone(),
+                        message: "agent event stream lagged".to_owned(),
+                    });
+                    return;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            match event {
+                mcode_core::events::AgentEvent::MessageDelta(
+                    mcode_core::events::MessageDelta::TextDelta(delta),
+                ) => {
+                    let _ = pump_events.send(BridgeEvent::ChatText {
+                        session_id: pump_session_id.clone(),
+                        delta,
+                    });
+                }
+                mcode_core::events::AgentEvent::MessageDelta(
+                    mcode_core::events::MessageDelta::ThinkingDelta(delta),
+                ) => {
+                    let _ = pump_events.send(BridgeEvent::ChatThinking {
+                        session_id: pump_session_id.clone(),
+                        delta,
+                    });
+                }
+                mcode_core::events::AgentEvent::MessageDelta(
+                    mcode_core::events::MessageDelta::ToolCallDelta { .. },
+                ) => {}
+                mcode_core::events::AgentEvent::ToolStarted { call_id, name } => {
+                    let _ = pump_events.send(BridgeEvent::ToolStarted {
+                        session_id: pump_session_id.clone(),
+                        call_id: call_id.to_string(),
+                        name,
+                    });
+                }
+                mcode_core::events::AgentEvent::ToolProgress { .. } => {}
+                mcode_core::events::AgentEvent::ToolCompleted {
+                    call_id,
+                    result: tool_result,
+                } => {
+                    let Ok(payload) = serde_json::to_vec(&tool_result) else {
+                        return;
+                    };
+                    match append_tool_result(
+                        &pump_service,
+                        &pump_session,
+                        &pump_branch,
+                        head,
+                        call_id.as_str(),
+                        &payload,
+                    )
+                    .await
+                    {
+                        Ok((new_head, entry)) => {
+                            head = HeadStamp::Event(
+                                mcode_session::session::SessionEventId::parse(&new_head)
+                                    .expect("committed head spelling"),
+                            );
+                            let _ = pump_events.send(BridgeEvent::ToolCompleted {
+                                session_id: pump_session_id.clone(),
+                                entry,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = pump_events.send(BridgeEvent::ChatFailed {
+                                session_id: pump_session_id.clone(),
+                                message: render_error(error),
+                            });
+                            return;
+                        }
+                    }
+                }
+                mcode_core::events::AgentEvent::MessageAdded(Message::Assistant(message)) => {
+                    pending_assistant = Some(message);
+                }
+                mcode_core::events::AgentEvent::MessageAdded(_) => {}
+                mcode_core::events::AgentEvent::TurnStarted => {}
+                mcode_core::events::AgentEvent::TurnEnded(_) => {
+                    let Some(message) = pending_assistant.take() else {
+                        let _ = pump_events.send(BridgeEvent::ChatFailed {
+                            session_id: pump_session_id.clone(),
+                            message: "the turn ended without an assistant message".to_owned(),
+                        });
+                        return;
+                    };
+                    match serde_json::to_vec(&message) {
+                        Ok(payload) => {
+                            match append_assistant(
+                                &pump_service,
+                                &pump_session,
+                                &pump_branch,
+                                head,
+                                &payload,
+                            )
+                            .await
+                            {
+                                Ok((new_head, entry)) => {
+                                    let _ = pump_events.send(BridgeEvent::ChatDone {
+                                        session_id: pump_session_id.clone(),
+                                        head: new_head,
+                                        entry,
+                                    });
+                                }
+                                Err(error) => {
+                                    let _ = pump_events.send(BridgeEvent::ChatFailed {
+                                        session_id: pump_session_id.clone(),
+                                        message: render_error(error),
+                                    });
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            let _ = pump_events.send(BridgeEvent::ChatFailed {
+                                session_id: pump_session_id.clone(),
+                                message: "assistant message could not be encoded".to_owned(),
+                            });
+                        }
+                    }
+                    return;
+                }
+                mcode_core::events::AgentEvent::Error(error) => {
+                    let _ = pump_events.send(BridgeEvent::ChatFailed {
+                        session_id: pump_session_id.clone(),
+                        message: format!("agent error: {error}"),
+                    });
+                    return;
+                }
             }
         }
-    }
-    Err("provider stream ended without a terminal".to_owned())
+    });
+
+    agent.seed_history(history);
+    let env = mcode_agent::TurnEnv::new(&wire, &registry, &hooks)
+        .with_cancel(cancel)
+        .with_events(agent_tx)
+        .with_cwd(cwd);
+    let prompt_message = Message::User(prompt);
+    let outcome = agent.prompt(prompt_message, &env).await;
+    let _ = outcome
+        .as_ref()
+        .map_err(|error| format!("turn failed: {error}"))?;
+    // The pump emits ChatDone/ChatFailed; wait for it to finish draining.
+    let _ = pump.await;
+    Ok(())
+}
+
+/// Commits one tool-result payload and projects its display entry.
+async fn append_tool_result(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    expected_head: HeadStamp,
+    call_id: &str,
+    payload: &[u8],
+) -> Result<(String, ConversationEntry), SessionError> {
+    // The ledger requires canonical call ids; the model's opaque call id
+    // rides inside the payload and is used for history replay.
+    let ledger_call = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
+    let reservation = service
+        .reserve_event(
+            session,
+            branch,
+            EventKind::ToolResult,
+            Some(ledger_call),
+            payload,
+        )
+        .await?;
+    let appended = service
+        .append(session, branch, &expected_head, &reservation)
+        .await?;
+    let event_id = appended
+        .head
+        .event()
+        .cloned()
+        .ok_or(SessionError::Corrupt)?;
+    let result: mcode_core::ToolResultMessage =
+        serde_json::from_slice(payload).map_err(|_| SessionError::Corrupt)?;
+    let text: String = result
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            mcode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let entry = ConversationEntry {
+        event_id: event_id.as_str().to_owned(),
+        kind: EntryKind::ToolResult,
+        text: if result.is_error {
+            format!("failed: {text}")
+        } else {
+            text
+        },
+        call_id: Some(call_id.to_owned()),
+    };
+    Ok((event_id.as_str().to_owned(), entry))
 }
 
 /// Commits one assistant message payload and projects its entry.

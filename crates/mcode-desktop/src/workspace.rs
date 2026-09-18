@@ -159,6 +159,22 @@ impl Workspace {
                 }
                 DesktopAction::ChatFailed(message)
             }
+            BridgeEvent::ToolStarted {
+                session_id,
+                call_id,
+                name,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ToolStarted { call_id, name }
+            }
+            BridgeEvent::ToolCompleted { session_id, entry } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ToolResultAppended(entry)
+            }
         };
         self.apply_action(action, cx);
     }
