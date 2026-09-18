@@ -93,14 +93,14 @@ const MAX_FIELD_BYTES: usize = 8 * 1024;
 /// Base URL maximum length.
 const MAX_URL_BYTES: usize = 2 * 1024;
 
-/// One configured first-party provider adapter.
+/// One configured first-party provider endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSettings {
     /// Unique provider identity (lowercase portable).
     pub id: String,
-    /// Adapter family: `openai`, `anthropic`, `deepseek`, `kimi`, `zai`,
-    /// `synthetic`, or `custom-openai`.
+    /// Wire protocol: `anthropic-messages`, `openai-completions`, or
+    /// `openai-responses`.
     pub kind: String,
     /// Base URL for API calls (`https://` only).
     pub base_url: String,
@@ -290,15 +290,15 @@ impl AppSettings {
     }
 }
 
-/// Adapter families accepted by [`ProviderSettings::kind`].
-pub const VALID_PROVIDER_KINDS: [&str; 7] = [
-    "openai",
-    "anthropic",
-    "deepseek",
-    "kimi",
-    "zai",
-    "synthetic",
-    "custom-openai",
+/// Wire protocols accepted by [`ProviderSettings::kind`].
+///
+/// Vendor differences (DeepSeek, Kimi, Z.AI GLM, custom gateways, …) are data:
+/// a base URL plus credentials over one of these protocols. Adding a vendor
+/// never adds an adapter family.
+pub const VALID_PROVIDER_KINDS: [&str; 3] = [
+    "anthropic-messages",
+    "openai-completions",
+    "openai-responses",
 ];
 
 /// Reads and validates `settings.json` without creating filesystem objects.
@@ -475,7 +475,7 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.providers.push(provider(
             "openai-main",
-            "openai",
+            "openai-completions",
             "https://api.openai.com/v1",
         ));
         settings.web.backends.push(WebBackendSettings {
@@ -523,14 +523,16 @@ mod tests {
             .push(provider("p1", "unknown-kind", "https://api.example.com"));
         assert!(settings.validate().is_err());
 
-        settings.providers[0].kind = "openai".to_owned();
+        settings.providers[0].kind = "openai-completions".to_owned();
         settings.providers[0].base_url = "http://insecure.example.com".to_owned();
         assert!(settings.validate().is_err(), "http base URL");
 
         settings.providers[0].base_url = "https://api.example.com".to_owned();
-        settings
-            .providers
-            .push(provider("p1", "kimi", "https://api.moonshot.cn/v1"));
+        settings.providers.push(provider(
+            "p1",
+            "openai-completions",
+            "https://api.moonshot.cn/v1",
+        ));
         assert!(settings.validate().is_err(), "duplicate provider id");
 
         settings.providers.truncate(1);

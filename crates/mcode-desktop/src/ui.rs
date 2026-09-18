@@ -622,7 +622,7 @@ impl ProviderForm {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
         let id = make("id, e.g. openai-main");
-        let kind = make("openai | anthropic | deepseek | kimi | zai | synthetic | custom-openai");
+        let kind = make("anthropic-messages | openai-completions | openai-responses");
         let base_url = make("https://api.example.com/v1");
         let model = make("model id");
         cx.new(|_| Self {

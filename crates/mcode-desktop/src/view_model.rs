@@ -406,7 +406,7 @@ mod tests {
             &mut state,
             DesktopAction::SettingsProviderAdded(mcode_config::ProviderSettings {
                 id: "openai-main".to_owned(),
-                kind: "openai".to_owned(),
+                kind: "openai-completions".to_owned(),
                 base_url: "https://api.openai.com/v1".to_owned(),
                 models: vec!["gpt-x".to_owned()],
                 enabled: true,
