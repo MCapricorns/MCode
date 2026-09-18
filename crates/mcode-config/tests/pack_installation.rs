@@ -729,7 +729,10 @@ fn parser_errors_are_redacted_to_target_path_and_kind() {
     .expect("fixture");
     let error = read_pack_installation(&home, PluginFamily::Usage, &id).expect_err("duplicate");
     assert_eq!(error.kind(), ConfigErrorKind::DuplicateKey);
-    assert_eq!(error.path(), Some(target(&home, PluginFamily::Usage, &id).as_path()));
+    assert_eq!(
+        error.path(),
+        Some(target(&home, PluginFamily::Usage, &id).as_path())
+    );
     assert!(!format!("{error:?}").contains(sentinel));
     assert!(!error.to_string().contains(sentinel));
 }

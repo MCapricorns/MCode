@@ -10,7 +10,6 @@ use mcode_config::{
     AuthorityRevision, PackId, PluginFamily, RootComposition, RootCompositionDocument,
 };
 
-
 const FAMILY_COUNT: usize = PluginFamily::ALL.len();
 
 const PACK_SELECTION_PREFIX: &str = "psel1-";

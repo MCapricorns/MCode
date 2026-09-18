@@ -4,7 +4,6 @@
 
 use mcode_config::{ProviderId, Sha256Digest};
 
-
 use crate::provider_routes::{ModelAlias, ModelId, ProviderRouteId, RequestId, TurnId};
 
 use super::{ValidationError, ValidationResult};
@@ -62,12 +61,10 @@ fn is_valid_operation_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     (MIN_OPERATION_ID_BYTES..=MAX_OPERATION_ID_BYTES).contains(&bytes.len())
         && bytes[0].is_ascii_lowercase()
-        && bytes.iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || is_separator(*byte)
-        })
-        && !bytes
-            .last()
-            .is_some_and(|byte| is_separator(*byte))
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || is_separator(*byte))
+        && !bytes.last().is_some_and(|byte| is_separator(*byte))
         && !bytes
             .windows(2)
             .any(|pair| is_separator(pair[0]) && is_separator(pair[1]))

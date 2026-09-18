@@ -13,11 +13,11 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 
-use crate::home::is_windows_device_name;
 use crate::authority::{
     exact_object, parse_active, parse_trust_high_water, take_positive_revision, take_string,
     take_u32,
 };
+use crate::home::is_windows_device_name;
 use crate::pack_component::PACK_COMPONENT_BUNDLE_PATH;
 use crate::parse::{ParseLimits, parse_strict_value};
 use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};

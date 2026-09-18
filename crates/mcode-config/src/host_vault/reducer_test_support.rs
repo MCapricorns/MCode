@@ -9,9 +9,9 @@ use super::{
     BindApproval, CredentialDescriptor, CredentialTarget, ExpectedVaultState, GrantApproval,
     GrantKey, PersistedBinding, SecretInput, VaultCommand, persist_command,
 };
+use crate::authority::Sha256Digest;
 use crate::host_vault::model::{ConsumerFamily, CredentialVersion};
 use crate::host_vault::{VaultRevision, relative_path};
-use crate::authority::Sha256Digest;
 use crate::secure_fs::owned_file::replace_owned_file;
 use crate::{ConfigErrorKind, HomeLayout};
 

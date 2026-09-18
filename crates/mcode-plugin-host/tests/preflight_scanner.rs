@@ -353,12 +353,8 @@ fn root_core_module_and_instance_imports_fail_topology_or_exact_shape() {
         component_with_instance_import("external-instance", false),
     ] {
         assert_eq!(
-            preflight_component(
-                &bytes,
-                ComponentWorld::Provider,
-                ComponentLimits::default(),
-            )
-            .expect_err("external root core import"),
+            preflight_component(&bytes, ComponentWorld::Provider, ComponentLimits::default(),)
+                .expect_err("external root core import"),
             PreflightError::DeniedImport(ImportCategory::Extra),
         );
     }
@@ -397,8 +393,12 @@ fn uninstantiated_component_type_resources_are_not_live_declarations() {
     let mut component = Component::new();
     component.section(&types);
     assert_eq!(
-        preflight_component(&component.finish(), ComponentWorld::Provider, ComponentLimits::default())
-            .expect_err("no live world export"),
+        preflight_component(
+            &component.finish(),
+            ComponentWorld::Provider,
+            ComponentLimits::default()
+        )
+        .expect_err("no live world export"),
         PreflightError::MissingExport,
     );
 }
@@ -409,8 +409,12 @@ fn malformed_mutations_core_wasm_wat_and_oversize_input_are_binary_rejected() {
     let mut truncated = provider.clone();
     truncated.truncate(truncated.len() - 1);
     assert_eq!(
-        preflight_component(&truncated, ComponentWorld::Provider, ComponentLimits::default())
-            .expect_err("truncated binary"),
+        preflight_component(
+            &truncated,
+            ComponentWorld::Provider,
+            ComponentLimits::default()
+        )
+        .expect_err("truncated binary"),
         PreflightError::InvalidComponent,
     );
 

@@ -84,7 +84,6 @@ impl Reencode for BoundedMemory {
     }
 }
 
-
 fn pack_worlds() -> [(ComponentWorld, &'static str, &'static str); 4] {
     [
         (
@@ -190,7 +189,11 @@ async fn foreign_runtime_pack_is_rejected_without_consuming_the_owner() {
 async fn pack_owner_rejects_a_second_pack_instance() {
     let runtime = PluginRuntime::new();
     let web = runtime
-        .compile_pack(web_component(), ComponentWorld::Web, ComponentLimits::default())
+        .compile_pack(
+            web_component(),
+            ComponentWorld::Web,
+            ComponentLimits::default(),
+        )
         .expect("Web Pack compile");
     let provider = runtime
         .compile_pack(

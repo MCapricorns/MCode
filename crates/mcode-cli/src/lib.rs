@@ -18,7 +18,8 @@ use clap::Parser;
 
 pub use cli::{Cli, Command};
 
-const SETUP_ERROR: &str = "product commands are unavailable: first-party features are not yet delivered in this build";
+const SETUP_ERROR: &str =
+    "product commands are unavailable: first-party features are not yet delivered in this build";
 
 /// Parses the command line and returns the product setup status.
 ///

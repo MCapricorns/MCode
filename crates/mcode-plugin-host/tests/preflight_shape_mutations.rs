@@ -181,11 +181,7 @@ fn imported_and_exported_instance_member_declaration_order_is_exact() {
             "start-fetch: func",
             PreflightError::ImportShape,
         ),
-        (
-            "completed: u8,",
-            "total: u8,",
-            PreflightError::ExportShape,
-        ),
+        ("completed: u8,", "total: u8,", PreflightError::ExportShape),
     ] {
         let mut lines: Vec<_> = source.lines().map(str::to_owned).collect();
         let first = lines

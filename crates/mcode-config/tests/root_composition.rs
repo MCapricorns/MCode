@@ -235,7 +235,7 @@ fn themes_are_strictly_sorted_and_unique() {
         UiSelection::new(overflow)
             .expect_err("theme overflow")
             .kind(),
-            ConfigErrorKind::AuthorityValidation
+        ConfigErrorKind::AuthorityValidation
     );
 }
 

@@ -327,10 +327,12 @@ fn is_valid_operation_id(value: &str) -> bool {
         && bytes.iter().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         })
-        && !bytes.last().is_some_and(|byte| matches!(byte, b'.' | b'_' | b'-'))
         && !bytes
-            .windows(2)
-            .any(|pair| matches!(pair[0], b'.' | b'_' | b'-') && matches!(pair[1], b'.' | b'_' | b'-'))
+            .last()
+            .is_some_and(|byte| matches!(byte, b'.' | b'_' | b'-'))
+        && !bytes.windows(2).any(|pair| {
+            matches!(pair[0], b'.' | b'_' | b'-') && matches!(pair[1], b'.' | b'_' | b'-')
+        })
 }
 
 pub(super) fn validate_local_id(value: &str) -> Result<(), ConfigError> {

@@ -32,7 +32,6 @@ fn initialized_runtime() -> PluginRuntime {
     runtime
 }
 
-
 fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
     let mut context = Context::from_waker(Waker::noop());
     future.as_mut().poll(&mut context)
@@ -55,7 +54,11 @@ fn invalid_input_never_initializes_the_runtime_engine() {
     let core = wasm("(module)");
     assert_eq!(
         runtime
-            .compile_pack(core, crate::ComponentWorld::Web, crate::ComponentLimits::default())
+            .compile_pack(
+                core,
+                crate::ComponentWorld::Web,
+                crate::ComponentLimits::default()
+            )
             .err(),
         Some(RuntimeError::Preflight(
             crate::PreflightError::InvalidComponent
@@ -485,7 +488,6 @@ async fn failed_instantiation_disposes_old_store_and_fresh_owner_retries() {
         .expect("fresh owner retry");
     assert!(fresh_owner.is_available());
 }
-
 
 #[test]
 fn resource_admission_reaches_exact_n_under_contention_then_reacquires_n() {

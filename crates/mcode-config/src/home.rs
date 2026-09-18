@@ -71,13 +71,7 @@ pub enum PluginFamily {
 
 impl PluginFamily {
     /// Lists every external Plugin family in stable order.
-    pub const ALL: [Self; 5] = [
-        Self::Providers,
-        Self::Web,
-        Self::Mcp,
-        Self::Usage,
-        Self::Ui,
-    ];
+    pub const ALL: [Self; 5] = [Self::Providers, Self::Web, Self::Mcp, Self::Usage, Self::Ui];
 
     /// Lists the families selected through singleton composition slots.
     pub const SINGLETONS: [Self; 2] = [Self::Web, Self::Mcp];
