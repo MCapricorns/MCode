@@ -51,9 +51,9 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - [x] T14:MCP 内置客户端(`mcode-mcp` stdio + Streamable-HTTP 双 transport,Context7 内置目录、用户自填 key)+ 设置页 servers 管理 + List tools。
 - [ ] T15:Usage 内置统计 + 面板/配额展示;设置页 usage 选项。
 - [ ] T16:内置 Workspace checkpoint/rollback;no-follow handle、并发冲突和不可回滚证据。
-- [ ] T17:内置 Resources catalog/read/render-prompt/contributions。
-- [ ] T18:内置 Ask interaction、typed progress/result、cancel-safe wait。
-- [ ] T19:内置 Todo stable ID、dependency graph、revision/CAS 与 durable task event。
+- [x] T17:内置 Resources(AGENTS.md/MCODE.md 发现、bounded 读取、system prompt 注入、Overview 展示)。
+- [x] T18:内置 Ask(`ask_user` 工具、1..4 结构化问题、cancel-safe 等待、桌面应答面板)。
+- [x] T19:内置 Todo(stable ID、blockedBy 图校验、revision CAS、durable Task 事件、Overview 展示)。
 - [ ] T20:内置 Subagents async fan-out、bounded queue、steer/follow-up/cancel、worktree lease 与 crash recovery。
 - [ ] T21:内置 Compaction adaptive scheduling、Provider child completion 与 atomic checkpoint。
 - [ ] T22:产品 export/import。

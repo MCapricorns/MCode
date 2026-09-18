@@ -4236,6 +4236,7 @@ dependencies = [
 name = "mcode-desktop"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "gpui-kit",
  "mcode-agent",
  "mcode-config",
