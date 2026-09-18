@@ -743,6 +743,43 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                 .child(div().opacity(0.6).child(label))
                 .child(div().child(value))
         }))
+        .when(!vm.todo_rows.is_empty(), |this| {
+            this.child(
+                div()
+                    .id("overview-todo")
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .mt_1()
+                    .child(div().text_xs().opacity(0.6).child("Tasks"))
+                    .children(
+                        vm.todo_rows
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (content, status))| {
+                                let mark = match status.as_str() {
+                                    "done" => "\u{2705}",
+                                    "in progress" => "\u{25b6}",
+                                    _ => "\u{2b1c}",
+                                };
+                                div()
+                                    .id(format!("todo-{index}"))
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .text_sm()
+                                    .child(div().child(mark))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .when(status == "done", |this| this.opacity(0.5))
+                                            .child(content.clone()),
+                                    )
+                                    .child(div().text_xs().opacity(0.5).child(status.clone()))
+                            }),
+                    ),
+            )
+        })
         .child(
             div()
                 .id("overview-resources")

@@ -54,6 +54,8 @@ pub enum EventKind {
     ToolResult,
     /// A bounded usage record.
     Usage,
+    /// A durable task/todo state payload.
+    Task,
 }
 
 impl EventKind {
@@ -65,6 +67,7 @@ impl EventKind {
             Self::ToolCall => 1,
             Self::ToolResult => 2,
             Self::Usage => 3,
+            Self::Task => 4,
         }
     }
 
@@ -76,6 +79,7 @@ impl EventKind {
             1 => Some(Self::ToolCall),
             2 => Some(Self::ToolResult),
             3 => Some(Self::Usage),
+            4 => Some(Self::Task),
             _ => None,
         }
     }
@@ -85,7 +89,9 @@ impl EventKind {
     pub const fn payload_bound(self) -> usize {
         match self {
             Self::Usage => MAX_USAGE_PAYLOAD_BYTES,
-            Self::Message | Self::ToolCall | Self::ToolResult => MAX_EVENT_PAYLOAD_BYTES,
+            Self::Message | Self::ToolCall | Self::ToolResult | Self::Task => {
+                MAX_EVENT_PAYLOAD_BYTES
+            }
         }
     }
 }

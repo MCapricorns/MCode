@@ -141,6 +141,13 @@ pub enum BridgeEvent {
         /// Committed assistant entry projection.
         entry: ConversationEntry,
     },
+    /// The durable task list changed.
+    TodoUpdated {
+        /// Session identity spelling.
+        session_id: String,
+        /// (content, status) rows in list order.
+        tasks: Vec<(String, String)>,
+    },
     /// The agent asked the user structured questions.
     AskRequested {
         /// Session identity spelling.
@@ -841,6 +848,12 @@ async fn run_chat_turn(
     // Per-session tool working directory.
     let cwd = home.root().join("workspace").join(session_id);
     std::fs::create_dir_all(&cwd).map_err(|error| format!("workspace dir: {error}"))?;
+    let writer = HeadWriter::new(
+        service.clone(),
+        session.clone(),
+        branch.clone(),
+        expected_head,
+    );
     let registry = Arc::new({
         let registry = ToolRegistry::new();
         mcode_tools::register_builtins(&registry);
@@ -857,6 +870,18 @@ async fn run_chat_turn(
             answer: tokio::sync::Mutex::new(Some(answer_rx)),
         });
         registry.register(Arc::new(mcode_tools::builtin::AskTool::new(channel)));
+        // todo_write persists the plan and appends a durable Task event.
+        let todo_events = events.clone();
+        let todo_session = session_id.to_owned();
+        let todo_writer = writer.clone();
+        let todo_home = home.clone();
+        let store: Arc<dyn mcode_tools::builtin::TodoStore> = Arc::new(BridgeTodoStore {
+            events: todo_events,
+            session_id: todo_session,
+            writer: todo_writer,
+            home: todo_home,
+        });
+        registry.register(Arc::new(mcode_tools::builtin::TodoWriteTool::new(store)));
         registry
     });
 
@@ -904,13 +929,13 @@ async fn run_chat_turn(
 
     // The ledger pump owns the branch head: tool results commit as they
     // complete, the final assistant message commits at turn end.
-    let pump_service = service.clone();
     let pump_events = events.clone();
-    let pump_session = session.clone();
-    let pump_branch = branch.clone();
     let pump_session_id = session_id.to_owned();
+    let writer = {
+        let _ = &writer;
+        writer
+    };
     let pump = tokio::spawn(async move {
-        let mut head = expected_head;
         let mut pending_assistant: Option<mcode_core::AssistantMessage> = None;
         loop {
             let event = match agent_rx.recv().await {
@@ -959,21 +984,12 @@ async fn run_chat_turn(
                     let Ok(payload) = serde_json::to_vec(&tool_result) else {
                         return;
                     };
-                    match append_tool_result(
-                        &pump_service,
-                        &pump_session,
-                        &pump_branch,
-                        head,
-                        call_id.as_str(),
-                        &payload,
-                    )
-                    .await
+                    match writer
+                        .write(EventKind::ToolResult, Some(call_id.as_str()), &payload)
+                        .await
                     {
-                        Ok((new_head, entry)) => {
-                            head = HeadStamp::Event(
-                                mcode_session::session::SessionEventId::parse(&new_head)
-                                    .expect("committed head spelling"),
-                            );
+                        Ok(event_id) => {
+                            let entry = project_tool_result(&event_id, &payload);
                             let _ = pump_events.send(BridgeEvent::ToolCompleted {
                                 session_id: pump_session_id.clone(),
                                 entry,
@@ -1003,19 +1019,12 @@ async fn run_chat_turn(
                     };
                     match serde_json::to_vec(&message) {
                         Ok(payload) => {
-                            match append_assistant(
-                                &pump_service,
-                                &pump_session,
-                                &pump_branch,
-                                head,
-                                &payload,
-                            )
-                            .await
-                            {
-                                Ok((new_head, entry)) => {
+                            match writer.write(EventKind::Message, None, &payload).await {
+                                Ok(event_id) => {
+                                    let entry = project_assistant_from(&event_id, &payload);
                                     let _ = pump_events.send(BridgeEvent::ChatDone {
                                         session_id: pump_session_id.clone(),
-                                        head: new_head,
+                                        head: event_id,
                                         entry,
                                     });
                                 }
@@ -1060,6 +1069,56 @@ async fn run_chat_turn(
     // The pump emits ChatDone/ChatFailed; wait for it to finish draining.
     let _ = pump.await;
     Ok(())
+}
+
+/// Shared branch-head writer: the event pump and host-backed tools commit
+/// through one CAS head.
+#[derive(Clone)]
+struct HeadWriter {
+    service: SessionService,
+    session: SessionId,
+    branch: BranchId,
+    head: Arc<tokio::sync::Mutex<HeadStamp>>,
+}
+
+impl HeadWriter {
+    fn new(service: SessionService, session: SessionId, branch: BranchId, head: HeadStamp) -> Self {
+        Self {
+            service,
+            session,
+            branch,
+            head: Arc::new(tokio::sync::Mutex::new(head)),
+        }
+    }
+
+    /// Commits one payload of `kind` and returns (event id spelling, bytes).
+    async fn write(
+        &self,
+        kind: EventKind,
+        call_id: Option<&str>,
+        payload: &[u8],
+    ) -> Result<String, SessionError> {
+        let mut head = self.head.lock().await;
+        let ledger_call = match call_id {
+            Some(_) => Some(SessionCallId::generate().ok_or(SessionError::Corrupt)?),
+            None => None,
+        };
+        let reservation = self
+            .service
+            .reserve_event(&self.session, &self.branch, kind, ledger_call, payload)
+            .await?;
+        let appended = self
+            .service
+            .append(&self.session, &self.branch, &head, &reservation)
+            .await?;
+        let event_id = appended
+            .head
+            .event()
+            .cloned()
+            .ok_or(SessionError::Corrupt)?;
+        *head = HeadStamp::Event(event_id.clone());
+        Ok(event_id.as_str().to_owned())
+    }
 }
 
 /// Host channel forwarding `ask_user` waits through the UI event stream.
@@ -1114,37 +1173,101 @@ impl mcode_tools::builtin::AskChannel for BridgeAskChannel {
     }
 }
 
-/// Commits one tool-result payload and projects its display entry.
-async fn append_tool_result(
-    service: &SessionService,
-    session: &SessionId,
-    branch: &BranchId,
-    expected_head: HeadStamp,
-    call_id: &str,
-    payload: &[u8],
-) -> Result<(String, ConversationEntry), SessionError> {
-    // The ledger requires canonical call ids; the model's opaque call id
-    // rides inside the payload and is used for history replay.
-    let ledger_call = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
-    let reservation = service
-        .reserve_event(
-            session,
-            branch,
-            EventKind::ToolResult,
-            Some(ledger_call),
-            payload,
-        )
-        .await?;
-    let appended = service
-        .append(session, branch, &expected_head, &reservation)
-        .await?;
-    let event_id = appended
-        .head
-        .event()
-        .cloned()
-        .ok_or(SessionError::Corrupt)?;
+/// Persists `todo_write` payloads and mirrors them to the UI.
+struct BridgeTodoStore {
+    events: mpsc::SyncSender<BridgeEvent>,
+    session_id: String,
+    writer: HeadWriter,
+    home: HomeLayout,
+}
+
+#[async_trait::async_trait]
+impl mcode_tools::builtin::TodoStore for BridgeTodoStore {
+    async fn store(
+        &self,
+        tasks: &[mcode_tools::builtin::TodoWireTask],
+    ) -> Result<String, mcode_tools::ToolError> {
+        // Resolve or mint stable ids, then validate the graph.
+        let mut document = mcode_config::TodoDocument::default();
+        for task in tasks {
+            let id = match &task.id {
+                Some(id) => id.clone(),
+                None => mcode_config::new_todo_id()
+                    .ok_or_else(|| mcode_tools::ToolError::Execution("id minting failed".into()))?,
+            };
+            let status = match task.status.as_str() {
+                "pending" => mcode_config::TodoStatus::Pending,
+                "in_progress" => mcode_config::TodoStatus::InProgress,
+                _ => mcode_config::TodoStatus::Completed,
+            };
+            document.tasks.push(mcode_config::TodoTask {
+                id,
+                content: task.content.clone(),
+                status,
+                blocked_by: task.blocked_by.clone(),
+            });
+        }
+        document
+            .validate()
+            .map_err(|error| mcode_tools::ToolError::Execution(error.to_string()))?;
+
+        // CAS revision: read the current header.
+        let revision = mcode_config::read_todo_revision(&self.home, &self.session_id)
+            .map_err(|error| mcode_tools::ToolError::Execution(error.to_string()))?;
+        mcode_config::replace_todo_document(&self.home, &self.session_id, revision, &document)
+            .map_err(|error| mcode_tools::ToolError::Execution(error.to_string()))?;
+
+        // Durable Task event on the branch.
+        let payload = document
+            .to_payload()
+            .map_err(|error| mcode_tools::ToolError::Execution(error.to_string()))?;
+        if let Err(error) = self.writer.write(EventKind::Task, None, &payload).await {
+            return Err(mcode_tools::ToolError::Execution(render_error(error)));
+        }
+
+        let in_progress = document
+            .tasks
+            .iter()
+            .filter(|task| matches!(task.status, mcode_config::TodoStatus::InProgress))
+            .count();
+        let completed = document
+            .tasks
+            .iter()
+            .filter(|task| matches!(task.status, mcode_config::TodoStatus::Completed))
+            .count();
+        let _ = self.events.send(BridgeEvent::TodoUpdated {
+            session_id: self.session_id.clone(),
+            tasks: document
+                .tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.content.clone(),
+                        match task.status {
+                            mcode_config::TodoStatus::Pending => "pending".to_owned(),
+                            mcode_config::TodoStatus::InProgress => "in progress".to_owned(),
+                            mcode_config::TodoStatus::Completed => "done".to_owned(),
+                        },
+                    )
+                })
+                .collect(),
+        });
+        Ok(format!(
+            "stored {} tasks ({completed} done, {in_progress} in progress)",
+            document.tasks.len()
+        ))
+    }
+}
+
+/// Projects a committed tool-result payload into a display entry.
+fn project_tool_result(event_id: &str, payload: &[u8]) -> ConversationEntry {
     let result: mcode_core::ToolResultMessage =
-        serde_json::from_slice(payload).map_err(|_| SessionError::Corrupt)?;
+        serde_json::from_slice(payload).unwrap_or_else(|_| mcode_core::ToolResultMessage {
+            tool_call_id: String::new(),
+            content: Vec::new(),
+            is_error: true,
+            details: None,
+        });
     let text: String = result
         .content
         .iter()
@@ -1154,65 +1277,37 @@ async fn append_tool_result(
         })
         .collect::<Vec<_>>()
         .join("");
-    let entry = ConversationEntry {
-        event_id: event_id.as_str().to_owned(),
+    ConversationEntry {
+        event_id: event_id.to_owned(),
         kind: EntryKind::ToolResult,
         text: if result.is_error {
             format!("failed: {text}")
         } else {
             text
         },
-        call_id: Some(call_id.to_owned()),
-    };
-    Ok((event_id.as_str().to_owned(), entry))
+        call_id: Some(result.tool_call_id),
+    }
 }
 
-/// Commits one assistant message payload and projects its entry.
-async fn append_assistant(
-    service: &SessionService,
-    session: &SessionId,
-    branch: &BranchId,
-    expected_head: HeadStamp,
-    payload: &[u8],
-) -> Result<(String, ConversationEntry), SessionError> {
-    let reservation = service
-        .reserve_event(session, branch, EventKind::Message, None, payload)
-        .await?;
-    let appended = service
-        .append(session, branch, &expected_head, &reservation)
-        .await?;
-    let event_id = appended
-        .head
-        .event()
-        .cloned()
-        .ok_or(SessionError::Corrupt)?;
-    let entry = project_assistant(&event_id, payload);
-    Ok((event_id.as_str().to_owned(), entry))
-}
-
-/// Projects a serialized assistant payload into a display entry.
-fn project_assistant(
-    event_id: &mcode_session::session::SessionEventId,
-    payload: &[u8],
-) -> ConversationEntry {
+/// Projects a committed assistant payload into a display entry.
+fn project_assistant_from(event_id: &str, payload: &[u8]) -> ConversationEntry {
     let mut text = String::new();
     if let Ok(message) = serde_json::from_slice::<mcode_core::AssistantMessage>(payload) {
         for block in &message.blocks {
             match block {
                 mcode_core::ContentBlock::Text(block) => text.push_str(&block.text),
-                mcode_core::ContentBlock::Thinking(_) => {}
                 mcode_core::ContentBlock::ToolCall(call) => {
                     if !text.is_empty() {
                         text.push('\n');
                     }
                     text.push_str(&format!("tool call {}", call.name));
                 }
-                mcode_core::ContentBlock::Image(_) => {}
+                _ => {}
             }
         }
     }
     ConversationEntry {
-        event_id: event_id.as_str().to_owned(),
+        event_id: event_id.to_owned(),
         kind: EntryKind::AssistantMessage,
         text,
         call_id: None,

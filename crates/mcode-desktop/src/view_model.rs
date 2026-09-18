@@ -175,6 +175,8 @@ pub struct WorkspaceState {
     pub resources: Vec<(String, String)>,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
+    /// Durable task list rows: (content, status).
+    pub todo_rows: Vec<(String, String)>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -237,6 +239,8 @@ pub enum DesktopAction {
     ToolResultAppended(ConversationEntry),
     /// Prompt resources discovered for the open session.
     ResourcesLoaded(Vec<(String, String)>),
+    /// The durable task list changed.
+    TodoUpdated(Vec<(String, String)>),
     /// The agent asked the user structured questions.
     AskRequested(Vec<(String, Vec<String>, bool)>),
     /// The user submitted answers locally; clear the pending panel.
@@ -327,6 +331,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ResourcesLoaded(files) => state.resources = files,
+        DesktopAction::TodoUpdated(tasks) => state.todo_rows = tasks,
         DesktopAction::AskRequested(rows) => state.pending_ask = Some(rows),
         DesktopAction::AskAnswered => state.pending_ask = None,
         DesktopAction::ChatThinkingDelta(delta) => {
@@ -499,7 +504,7 @@ pub fn project_entry(
             EventKind::Message => EntryKind::UserMessage,
             EventKind::ToolCall => EntryKind::ToolCall,
             EventKind::ToolResult => EntryKind::ToolResult,
-            EventKind::Usage => EntryKind::Usage,
+            EventKind::Usage | EventKind::Task => EntryKind::Usage,
         },
         text,
         call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),

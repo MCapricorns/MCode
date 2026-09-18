@@ -31,6 +31,7 @@ mod secrets;
 mod secure_fs;
 mod settings;
 mod staging;
+mod todos;
 mod transaction_id;
 
 #[doc(inline)]
@@ -97,6 +98,11 @@ pub use staging::{
     MAX_STAGING_DIRECTORIES, MAX_STAGING_ENTRIES, MAX_STAGING_FILE_BYTES, MAX_STAGING_FILES,
     MAX_STAGING_JOURNAL_BYTES, MAX_STAGING_ROOT_ENTRIES, MAX_STAGING_TOTAL_BYTES,
     StagedTransaction, StagingTransaction, begin_staging, recover_abandoned_staging,
+};
+pub use todos::{
+    MAX_TODO_CONTENT_CHARS, MAX_TODO_DEPS, MAX_TODO_TASKS, TODO_FORMAT_VERSION, TODO_KIND,
+    TodoDocument, TodoStatus, TodoTask, new_todo_id, read_todo_document, read_todo_revision,
+    replace_todo_document,
 };
 #[doc(inline)]
 pub use transaction_id::TransactionId;
