@@ -120,7 +120,11 @@ where
     Ok(())
 }
 
-/// Decode captured process text without consulting a legacy system code page.
+/// Decode captured process text.
+///
+/// Precedence: byte-order marks, strict UTF-8, the active console output
+/// code page (Windows child processes such as PowerShell emit the console
+/// code page when their streams are redirected), then lossy UTF-8.
 pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
     if let Some(payload) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
         return String::from_utf8_lossy(payload).into_owned();
@@ -131,7 +135,68 @@ pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
     if let Some(payload) = bytes.strip_prefix(&[0xfe, 0xff]) {
         return decode_utf16(payload, u16::from_be_bytes);
     }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    if let Some(text) = decode_console_codepage(bytes) {
+        return text;
+    }
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Decodes bytes in the machine's console output code page when that page is
+/// not UTF-8 already.
+#[cfg(windows)]
+fn decode_console_codepage(bytes: &[u8]) -> Option<String> {
+    // SAFETY: GetConsoleOutputCP reads a process-global value; no handles
+    // or buffers are involved.
+    let codepage = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+    decode_multibyte(bytes, codepage)
+}
+
+#[cfg(not(windows))]
+const fn decode_console_codepage(_bytes: &[u8]) -> Option<String> {
+    None
+}
+
+/// Best-effort conversion of one Windows code page; `None` keeps the lossy
+/// UTF-8 fallback when the conversion fails or the page is UTF-8 itself.
+#[cfg(windows)]
+pub(crate) fn decode_multibyte(bytes: &[u8], codepage: u32) -> Option<String> {
+    if codepage == 0 || codepage == 65001 || bytes.is_empty() {
+        return None;
+    }
+    // SAFETY: MultiByteToWideChar receives the input buffer by pointer with
+    // its exact length and writes only into the sized output buffer.
+    let size = unsafe {
+        windows_sys::Win32::Globalization::MultiByteToWideChar(
+            codepage,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if size <= 0 {
+        return None;
+    }
+    let mut buffer = vec![0_u16; size as usize];
+    let written = unsafe {
+        windows_sys::Win32::Globalization::MultiByteToWideChar(
+            codepage,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            buffer.as_mut_ptr(),
+            size,
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    buffer.truncate(written as usize);
+    String::from_utf16(&buffer).ok()
 }
 
 fn decode_utf16(payload: &[u8], decode_unit: fn([u8; 2]) -> u16) -> String {
@@ -142,4 +207,46 @@ fn decode_utf16(payload: &[u8], decode_unit: fn([u8; 2]) -> u16) -> String {
         decoded.push('\u{fffd}');
     }
     decoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf8_and_bom_marked_utf16_win_over_code_pages() {
+        assert_eq!(decode_captured_text("中文".as_bytes()), "中文");
+
+        let mut utf16le = vec![0xff, 0xfe];
+        utf16le.extend("中文".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(decode_captured_text(&utf16le), "中文");
+
+        let mut utf16be = vec![0xfe, 0xff];
+        utf16be.extend("中文".encode_utf16().flat_map(u16::to_be_bytes));
+        assert_eq!(decode_captured_text(&utf16be), "中文");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn console_code_page_decodes_legacy_bytes_only_as_fallback() {
+        let gbk = [0xd6, 0xd0, 0xce, 0xc4];
+        // SAFETY: test reads the process console output code page only.
+        let console = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+        let decoded = decode_captured_text(&gbk);
+        if console == 936 {
+            assert_eq!(decoded, "中文", "GBK console output must decode");
+        } else {
+            assert_ne!(decoded, "中文");
+            assert!(decoded.contains('\u{fffd}'));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn multibyte_decode_honors_the_requested_code_page() {
+        let gbk = [0xd6, 0xd0, 0xce, 0xc4];
+        assert_eq!(decode_multibyte(&gbk, 936), Some("中文".to_owned()));
+        assert_eq!(decode_multibyte(&gbk, 65001), None);
+        assert_eq!(decode_multibyte(&[], 936), None);
+    }
 }

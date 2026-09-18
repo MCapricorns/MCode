@@ -390,7 +390,7 @@ fn public_contract_keeps_shell_name_and_unsandboxed_boundary() {
 }
 
 #[test]
-fn captured_text_decodes_utf8_and_bom_marked_utf16_without_ansi() {
+fn captured_text_prefers_utf8_over_legacy_code_pages() {
     assert_eq!(decode_captured_text("中文".as_bytes()), "中文");
 
     let mut utf16le = vec![0xff, 0xfe];
@@ -401,10 +401,26 @@ fn captured_text_decodes_utf8_and_bom_marked_utf16_without_ansi() {
     utf16be.extend("中文".encode_utf16().flat_map(u16::to_be_bytes));
     assert_eq!(decode_captured_text(&utf16be), "中文");
 
+    // GBK bytes for "中文" (code page 936): decoded when the console output
+    // code page matches, kept lossy otherwise.
     let legacy_code_page = [0xd6, 0xd0, 0xce, 0xc4];
-    let decoded = decode_captured_text(&legacy_code_page);
-    assert_ne!(decoded, "中文");
-    assert!(decoded.contains('\u{fffd}'));
+    #[cfg(windows)]
+    {
+        let console = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+        let decoded = decode_captured_text(&legacy_code_page);
+        if console == 936 {
+            assert_eq!(decoded, "中文", "GBK console output must decode");
+        } else {
+            assert_ne!(decoded, "中文");
+            assert!(decoded.contains('\u{fffd}'));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let decoded = decode_captured_text(&legacy_code_page);
+        assert_ne!(decoded, "中文");
+        assert!(decoded.contains('\u{fffd}'));
+    }
 }
 
 #[test]
