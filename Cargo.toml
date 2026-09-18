@@ -4,6 +4,7 @@ members = [
     "crates/mcode-core",
     "crates/mcode-config",
     "crates/mcode-provider-api",
+    "crates/mcode-providers",
     "crates/mcode-tools",
     "crates/mcode-agent",
     "crates/mcode-plugin-api",
@@ -33,6 +34,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1.9"
 anyhow = "1"
 reqwest = { version = "0.13", features = ["stream"] }
+futures-util = "0.3"
+bytes = "1"
 tokio-util = "0.7"
 globset = "0.4"
 ignore = "0.4"
