@@ -65,7 +65,15 @@ mod fallback {
 use fallback as platform;
 
 /// Creates only the owned directories named by `relative`.
-pub(crate) fn ensure_owned_directory(
+///
+/// Every component is created no-follow and private. This is the Host-side
+/// substrate used by first-party durable stores that live below `plugins/`.
+///
+/// # Errors
+///
+/// Returns [`ConfigErrorKind::PathEscape`] for unsafe components and native
+/// security, access, identity, or durability failures otherwise.
+pub fn ensure_owned_directory(
     home: &HomeLayout,
     relative: impl AsRef<Path>,
 ) -> Result<(), ConfigError> {
@@ -74,7 +82,13 @@ pub(crate) fn ensure_owned_directory(
 }
 
 /// Reads a private regular file without creating any filesystem object.
-pub(crate) fn read_owned_file(
+///
+/// # Errors
+///
+/// Returns [`ConfigErrorKind::Oversized`] when content exceeds
+/// `maximum_bytes` and [`ConfigError`] for owned-path security, access,
+/// identity, or I/O failures.
+pub fn read_owned_file(
     home: &HomeLayout,
     relative: impl AsRef<Path>,
     maximum_bytes: usize,
@@ -85,7 +99,12 @@ pub(crate) fn read_owned_file(
 }
 
 /// Replaces a private regular file while holding its persistent lock.
-pub(crate) fn replace_owned_file(
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] for owned-path security, lock, access, identity,
+/// serialization-bound, or durability failures.
+pub fn replace_owned_file(
     home: &HomeLayout,
     relative: impl AsRef<Path>,
     bytes: &[u8],
@@ -97,7 +116,12 @@ pub(crate) fn replace_owned_file(
 }
 
 /// Runs one read-modify-replace callback under a persistent advisory lock.
-pub(crate) fn locked_update_owned_file(
+///
+/// # Errors
+///
+/// Returns the callback error unchanged plus [`ConfigError`] for lock,
+/// access, identity, or durability failures.
+pub fn locked_update_owned_file(
     home: &HomeLayout,
     relative: impl AsRef<Path>,
     maximum_bytes: usize,

@@ -8,14 +8,14 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
+use crate::generation::{GenerationActivity, GenerationFence, HostGeneration};
+use crate::runtime::{CompiledPackComponent, PluginRuntime};
+use crate::{ComponentLimits, ComponentWorld, MAX_COMPONENT_BYTES};
 use mcode_config::{
     ArtifactRef, AuthorityRevision, HomeLayout, MAX_PACK_COMPONENT_BYTES, PackId, PluginFamily,
     Sha256Digest, SourceBindingId, TrustHighWater, read_pack_component, read_pack_installation,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
-use crate::generation::{GenerationActivity, GenerationFence, HostGeneration};
-use crate::runtime::{CompiledPackComponent, PluginRuntime};
-use crate::{ComponentLimits, ComponentWorld, MAX_COMPONENT_BYTES};
 
 const _: () = assert!(MAX_PACK_COMPONENT_BYTES == MAX_COMPONENT_BYTES);
 
@@ -199,9 +199,18 @@ impl<'a> CurrentPackSetService<'a> {
     /// Returns [`PackLoadError`] for a stale or closed generation,
     /// unreadable exact authority or bytes, digest mismatch, or exact-world
     /// compilation failure.
-    pub(crate) fn load_candidate(&self, pack_id: &PackId) -> Result<CompiledPackCandidate, PackLoadError> {
+    pub(crate) fn load_candidate(
+        &self,
+        pack_id: &PackId,
+    ) -> Result<CompiledPackCandidate, PackLoadError> {
         let _initial = self.bind_current()?;
-        let verified = load_verified_pack(self.runtime, self.home, self.fence.family(), pack_id)?;
+        let family = match self.fence.domain() {
+            crate::generation::GenerationDomain::Family(family) => family,
+            crate::generation::GenerationDomain::Session => {
+                return Err(PackLoadError::FamilyHasNoComponent);
+            }
+        };
+        let verified = load_verified_pack(self.runtime, self.home, family, pack_id)?;
         #[cfg(test)]
         if let Some(checkpoint) = &self.checkpoint {
             checkpoint.pause();

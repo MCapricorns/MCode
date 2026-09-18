@@ -21,10 +21,6 @@ mod component_scanner;
 mod component_shape;
 mod component_world;
 mod error;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "T10+ consumes the Host-owned generation fence")
-)]
 mod generation;
 #[cfg_attr(
     not(test),
@@ -33,7 +29,10 @@ mod generation;
 mod pack_activation;
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "T10+ consumes the generation-bound Pack candidate boundary")
+    expect(
+        dead_code,
+        reason = "T10+ consumes the generation-bound Pack candidate boundary"
+    )
 )]
 mod pack_loading;
 #[cfg_attr(
@@ -47,6 +46,8 @@ mod provider_validation;
 mod provider_wit;
 /// Scanner-gated, fail-closed Wasmtime ownership and admission.
 pub mod runtime;
+/// First-party built-in Session service over the typed task runtime.
+pub mod session;
 
 #[doc(inline)]
 pub use component::{ComponentLimits, MAX_COMPONENT_BYTES, preflight_component};

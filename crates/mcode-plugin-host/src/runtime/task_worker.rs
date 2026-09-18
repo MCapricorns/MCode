@@ -112,10 +112,12 @@ impl<A: PackTaskActor> TaskActorClient<A> {
         }
     }
 
+    #[expect(dead_code, reason = "T10+ activation probes actor availability")]
     pub(crate) fn is_available(&self) -> bool {
         !self.sender.is_closed()
     }
 
+    #[expect(dead_code, reason = "T10+ activation probes live operations")]
     pub(crate) fn is_operation_open(&self, operation: TaskActorOperationId) -> bool {
         self.live
             .lock()
@@ -242,7 +244,7 @@ impl TaskCloseSignal {
 }
 
 impl TaskOperationAdmission {
-    pub(super) const fn new(operation: OperationPermit, resource: ResourcePermit) -> Self {
+    pub(crate) const fn new(operation: OperationPermit, resource: ResourcePermit) -> Self {
         Self {
             _operation: operation,
             _resource: resource,

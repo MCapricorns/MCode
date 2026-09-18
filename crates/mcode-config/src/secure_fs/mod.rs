@@ -5,9 +5,9 @@
 //! are opened or created relative to a trusted ancestor without following
 //! links. Platform implementations verify
 //! ownership, apply private access control, and durably publish newly created
-//! directories. Crate-private owned-file machinery adds bounded reads,
-//! persistent locks, and handle-relative atomic replacement without defining
-//! any document schema.
+//! directories. The owned-file machinery adds bounded reads, persistent
+//! locks, and handle-relative atomic replacement without defining any
+//! document schema; Host-substrate stores consume it publicly.
 
 // Rust guideline compliant 2026-08-28
 
@@ -15,13 +15,6 @@ use std::path::Path;
 
 use crate::{ConfigError, HomeLayout};
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "transaction substrate is consumed by dependency-ordered later slices"
-    )
-)]
 pub(crate) mod owned_file;
 #[cfg(unix)]
 mod unix;

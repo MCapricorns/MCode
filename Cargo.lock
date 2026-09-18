@@ -1793,6 +1793,7 @@ dependencies = [
  "getrandom 0.4.3",
  "mcode-config",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "thiserror",

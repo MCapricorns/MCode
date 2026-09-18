@@ -198,7 +198,7 @@ pub(crate) fn publish_installation(
 fn current_fence(family: PluginFamily) -> Arc<GenerationFence> {
     let fence = Arc::new(GenerationFence::new(
         Arc::new(AtomicU64::new(0)),
-        family,
+        crate::generation::GenerationDomain::Family(family),
         crate::generation::HostGeneration::new(1).expect("host generation"),
     ));
     fence.mark_current();
@@ -321,9 +321,7 @@ fn retirement_before_final_revalidation_rejects_the_loaded_candidate() {
         unblock.resume();
         let loaded = worker.join();
         assert_eq!(
-            loaded
-                .expect("Pack load worker must not panic")
-                .err(),
+            loaded.expect("Pack load worker must not panic").err(),
             Some(PackLoadError::StaleGeneration)
         );
     });
@@ -482,14 +480,10 @@ fn every_family_maps_to_its_typed_pack_world() {
         (PluginFamily::Web, Ok(ComponentWorld::Web)),
         (PluginFamily::Mcp, Ok(ComponentWorld::Mcp)),
         (PluginFamily::Usage, Ok(ComponentWorld::Usage)),
-        (
-            PluginFamily::Ui,
-            Err(PackLoadError::FamilyHasNoComponent),
-        ),
+        (PluginFamily::Ui, Err(PackLoadError::FamilyHasNoComponent)),
     ];
 
     for (family, expected) in cases {
         assert_eq!(pack_world(family), expected);
     }
 }
-

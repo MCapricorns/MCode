@@ -68,7 +68,11 @@ impl PackActivationClient {
             .selection
             .begin_activation(selection_stamp)
             .map_err(PackActivationError::from)?;
-        if self.active.as_ref().is_some_and(|active| active.target == target) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.target == target)
+        {
             return self.commit(activity, target, None);
         }
 
@@ -105,11 +109,10 @@ impl PackActivationClient {
             .commit_activation(&target)
             .map_err(PackActivationError::from)?;
         let previous = replacement.and_then(|packs| {
-            self.active
-                .replace(ActivePackSet {
-                    target: target.clone(),
-                    packs,
-                })
+            self.active.replace(ActivePackSet {
+                target: target.clone(),
+                packs,
+            })
         });
         let selection_stamp = self
             .active

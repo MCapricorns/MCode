@@ -41,6 +41,10 @@ impl HostGeneration {
     }
 
     /// Returns the exact generation value.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "T10+ generation publication reads the value")
+    )]
     pub(crate) const fn get(self) -> u64 {
         self.0
     }
@@ -49,10 +53,26 @@ impl HostGeneration {
 /// Marks a publication authority as finally closed.
 pub(crate) const PUBLICATION_CLOSED: u64 = u64::MAX;
 
+/// Names the authority one generation fence gates.
+///
+/// External Pack families are gated by their plugin family; first-party
+/// built-in services are gated by their dedicated fixed domain so a built-in
+/// generation can never be confused with an external Pack publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GenerationDomain {
+    /// One external Plugin family's active Pack set.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "T10+ publishes family Pack generations")
+    )]
+    Family(PluginFamily),
+    /// The first-party built-in Session service publication.
+    Session,
+}
 
 pub(crate) struct GenerationFence {
     publication_state: Arc<AtomicU64>,
-    family: PluginFamily,
+    domain: GenerationDomain,
     generation: HostGeneration,
     state: AtomicUsize,
     drained: Notify,
@@ -71,12 +91,12 @@ const MAX_GENERATION_ACTIVITIES: usize = usize::MAX >> 2;
 impl GenerationFence {
     pub(crate) fn new(
         publication_state: Arc<AtomicU64>,
-        family: PluginFamily,
+        domain: GenerationDomain,
         generation: HostGeneration,
     ) -> Self {
         Self {
             publication_state,
-            family,
+            domain,
             generation,
             state: AtomicUsize::new(GENERATION_PREPARING),
             drained: Notify::new(),
@@ -84,9 +104,9 @@ impl GenerationFence {
         }
     }
 
-    /// Returns the family this fence gates.
-    pub(crate) const fn family(&self) -> PluginFamily {
-        self.family
+    /// Returns the authority domain this fence gates.
+    pub(crate) const fn domain(&self) -> GenerationDomain {
+        self.domain
     }
 
     /// Returns the generation this fence gates.
@@ -261,7 +281,7 @@ mod tests {
         let publication_state = Arc::new(AtomicU64::new(publication));
         let fence = Arc::new(GenerationFence::new(
             Arc::clone(&publication_state),
-            PluginFamily::Providers,
+            GenerationDomain::Family(PluginFamily::Providers),
             HostGeneration::new(1).expect("nonzero generation"),
         ));
         (publication_state, fence)
@@ -361,6 +381,9 @@ mod tests {
                 });
             }
         });
-        assert_eq!(generation_activity_count(fence.state.load(Ordering::Acquire)), 0);
+        assert_eq!(
+            generation_activity_count(fence.state.load(Ordering::Acquire)),
+            0
+        );
     }
 }

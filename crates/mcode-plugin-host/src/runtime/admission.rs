@@ -22,18 +22,18 @@ pub enum AdmissionError {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct AdmissionLedger {
+pub(crate) struct AdmissionLedger {
     counters: Arc<AdmissionCounters>,
 }
 
 impl AdmissionLedger {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             counters: Arc::new(AdmissionCounters::default()),
         }
     }
 
-    pub(super) fn admit_resource(&self) -> Result<ResourcePermit, AdmissionError> {
+    pub(crate) fn admit_resource(&self) -> Result<ResourcePermit, AdmissionError> {
         if !reserve(&self.counters.live_resources, MAX_LIVE_RESOURCES) {
             return Err(AdmissionError::ResourceCapacity);
         }
@@ -42,7 +42,7 @@ impl AdmissionLedger {
         })
     }
 
-    pub(super) fn open_operation(&self) -> Result<OperationPermit, AdmissionError> {
+    pub(crate) fn open_operation(&self) -> Result<OperationPermit, AdmissionError> {
         if !reserve(&self.counters.open_operations, MAX_OPEN_OPERATIONS) {
             return Err(AdmissionError::OperationCapacity);
         }
@@ -66,7 +66,7 @@ impl Drop for ResourcePermit {
 }
 
 #[derive(Debug)]
-pub(super) struct OperationPermit {
+pub(crate) struct OperationPermit {
     counters: Arc<AdmissionCounters>,
 }
 

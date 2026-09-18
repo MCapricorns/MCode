@@ -8,14 +8,14 @@
 
 // Rust guideline compliant 2026-09-05.
 
-mod admission;
+pub(crate) mod admission;
 mod epoch;
 mod limits;
 mod owner;
 mod pack;
 mod segment;
-#[expect(dead_code, reason = "T9+ consumes the first-party typed task runtime")]
-mod task_worker;
+/// Serialized first-party task actor protocol shared by built-in services.
+pub(crate) mod task_worker;
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -31,6 +31,9 @@ use crate::{ComponentLimits, ComponentWorld, PreflightError};
 pub use admission::{AdmissionError, MAX_LIVE_RESOURCES, MAX_OPEN_OPERATIONS, ResourcePermit};
 pub use owner::{CompiledPackComponent, OperationLease, PluginOwner};
 pub(crate) use pack::PackInstance;
+pub(crate) use task_worker::{
+    PackTaskActor, TaskActorClient, TaskActorError, TaskCloseSignal, TaskOperationAdmission,
+};
 
 /// Deterministic total fuel budget shared by all segments of one operation.
 pub const OPERATION_FUEL_BUDGET: u64 = 100_000_000;

@@ -32,6 +32,10 @@ mod staging;
 mod transaction_id;
 
 #[doc(inline)]
+pub use authority::{
+    ArtifactRef, AuthorityRevision, CanonicalVersion, Sha256Digest, SourceBindingId, TrustHighWater,
+};
+#[doc(inline)]
 pub use error::{ConfigError, ConfigErrorKind};
 #[doc(inline)]
 pub use home::{HomeEnv, HomeLayout, MCODE_DIR_NAME, MCODE_HOME_ENV, PluginFamily};
@@ -39,11 +43,6 @@ pub use home::{HomeEnv, HomeLayout, MCODE_DIR_NAME, MCODE_HOME_ENV, PluginFamily
 pub use host_vault::{
     HOST_VAULT_FORMAT_VERSION, HOST_VAULT_KIND, HostVaultState, MAX_HOST_VAULT_BYTES,
     VaultRevision, initialize_empty_host_vault, read_host_vault_state,
-};
-#[doc(inline)]
-pub use authority::{
-    ArtifactRef, AuthorityRevision, CanonicalVersion, Sha256Digest, SourceBindingId,
-    TrustHighWater,
 };
 #[doc(inline)]
 pub use pack_component::{
@@ -60,6 +59,10 @@ pub use root_composition::{
     DefaultRoute, MAX_PROVIDER_ID_BYTES, MAX_ROOT_COMPOSITION_BYTES, PackId, ProviderId,
     ROOT_COMPOSITION_FORMAT_VERSION, ROOT_COMPOSITION_KIND, RootComposition,
     RootCompositionDocument, UiSelection, read_root_composition, replace_root_composition,
+};
+#[doc(inline)]
+pub use secure_fs::owned_file::{
+    ensure_owned_directory, locked_update_owned_file, read_owned_file, replace_owned_file,
 };
 #[doc(inline)]
 pub use secure_fs::{

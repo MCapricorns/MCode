@@ -82,6 +82,18 @@ impl ConfigError {
         }
     }
 
+    /// Builds one authority-validation rejection for a Host-side storage
+    /// callback (for example a compare-and-swap that lost or a document that
+    /// failed strict revalidation).
+    ///
+    /// Host-substrate stores reuse the hardened owned-file transaction and
+    /// signal domain-level rejections through this constructor; the stored
+    /// document is never modified when it is returned.
+    #[must_use]
+    pub fn authority_rejection() -> Self {
+        Self::new(ConfigErrorKind::AuthorityValidation)
+    }
+
     pub(crate) fn for_path(kind: ConfigErrorKind, path: &Path) -> Self {
         let mut error = Self::new(kind);
         error.inner.path = Some(path.to_path_buf());

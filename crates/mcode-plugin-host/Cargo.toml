@@ -10,6 +10,8 @@ async-trait.workspace = true
 base64.workspace = true
 getrandom.workspace = true
 mcode-config = { path = "../mcode-config" }
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -21,7 +21,7 @@ use crate::runtime::PluginRuntime;
 fn current_activity() -> (Arc<GenerationFence>, crate::generation::GenerationActivity) {
     let fence = Arc::new(GenerationFence::new(
         Arc::new(AtomicU64::new(0)),
-        PluginFamily::Providers,
+        crate::generation::GenerationDomain::Family(PluginFamily::Providers),
         HostGeneration::new(1).expect("host generation"),
     ));
     fence.mark_current();
