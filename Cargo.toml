@@ -10,6 +10,7 @@ members = [
     "crates/mcode-plugin-api",
     "crates/mcode-session",
     "crates/mcode-web",
+    "crates/mcode-mcp",
     "crates/mcode-desktop",
 ]
 [workspace.package]

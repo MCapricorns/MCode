@@ -13,6 +13,7 @@ mcode-providers = { path = "../mcode-providers" }
 mcode-provider-api = { path = "../mcode-provider-api" }
 mcode-session = { path = "../mcode-session" }
 mcode-web = { path = "../mcode-web" }
+mcode-mcp = { path = "../mcode-mcp" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

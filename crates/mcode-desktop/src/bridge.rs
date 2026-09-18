@@ -8,7 +8,7 @@
 //! as concurrent runtime tasks that stream [`BridgeEvent`]s back through a
 //! bounded channel the UI polls. Configuration reads stay synchronous on the
 //! same thread.
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
 use mcode_config::{
@@ -90,6 +90,11 @@ pub enum BridgeCommand {
         /// The search query.
         query: String,
     },
+    /// List tools exposed by one enabled MCP server.
+    McpListTools {
+        /// Server identity from settings.
+        server_id: String,
+    },
 }
 
 /// A streaming event from an active model turn.
@@ -139,7 +144,7 @@ pub enum BridgeReply {
     /// Send result (new head plus committed entry).
     Sent(Result<(String, ConversationEntry), String>),
     /// Settings load result: document, revision, provider ids with keys.
-    Settings(Result<(AppSettings, AuthorityRevision, Vec<String>), String>),
+    Settings(Result<(AppSettings, AuthorityRevision, Vec<String>, Vec<String>), String>),
     /// Settings save result: the new revision.
     SettingsSaved(Result<AuthorityRevision, String>),
     /// Provider key save result.
@@ -148,6 +153,8 @@ pub enum BridgeReply {
     ChatStarted(Result<(), String>),
     /// Web search result list.
     WebSearched(Result<Vec<SearchResult>, String>),
+    /// MCP tools listing for one server.
+    McpTools(Result<(String, Vec<String>), String>),
 }
 
 /// Handle to the core thread.
@@ -299,6 +306,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::SaveProviderKey { .. } => BridgeReply::ProviderKeySaved(Err(message)),
         BridgeCommand::ChatTurn { .. } => BridgeReply::ChatStarted(Err(message)),
         BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
+        BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
     }
 }
 
@@ -348,7 +356,73 @@ async fn handle(
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
         }
         BridgeCommand::WebSearch { query } => BridgeReply::WebSearched(web_search(home, query)),
+        BridgeCommand::McpListTools { server_id } => {
+            BridgeReply::McpTools(mcp_list_tools(home, server_id))
+        }
     }
+}
+
+/// Lists tools of one enabled MCP server over stdio or HTTP.
+fn mcp_list_tools(home: &HomeLayout, server_id: &str) -> Result<(String, Vec<String>), String> {
+    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
+    let server = settings
+        .mcp_servers
+        .iter()
+        .find(|server| server.id == server_id && server.enabled)
+        .ok_or_else(|| "MCP server not found or disabled in settings".to_owned())?;
+    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
+    let api_key = secrets.key(&format!("mcp-{server_id}")).map(str::to_owned);
+    let timeout = mcode_mcp::DEFAULT_REQUEST_TIMEOUT;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "mcp runtime unavailable".to_owned())?;
+    runtime.block_on(async {
+        let channel: Arc<dyn mcode_mcp::JsonRpcChannel> = match server.transport.as_str() {
+            "stdio" => {
+                let command = server
+                    .command
+                    .as_deref()
+                    .ok_or("stdio server is missing its command")?;
+                Arc::new(
+                    mcode_mcp::StdioChannel::spawn(command, &server.args, timeout)
+                        .await
+                        .map_err(|error| format!("MCP spawn failed: {error}"))?,
+                )
+            }
+            "http" => {
+                let endpoint = server
+                    .endpoint
+                    .as_deref()
+                    .ok_or("http server is missing its endpoint")?;
+                Arc::new(
+                    mcode_mcp::HttpChannel::new(
+                        endpoint,
+                        mcode_mcp::HttpChannelOptions {
+                            key_header: mcode_mcp::KeyHeader::parse(server.key_header.as_deref()),
+                            api_key,
+                            timeout,
+                        },
+                    )
+                    .map_err(|error| format!("MCP channel failed: {error}"))?,
+                )
+            }
+            _ => return Err("unknown MCP transport".to_owned()),
+        };
+        let mut client = mcode_mcp::McpClient::new(channel);
+        client
+            .initialize()
+            .await
+            .map_err(|error| format!("MCP handshake failed: {error}"))?;
+        let tools = client
+            .list_tools()
+            .await
+            .map_err(|error| format!("MCP tools listing failed: {error}"))?;
+        Ok((
+            server_id.to_owned(),
+            tools.iter().map(|tool| tool.name.clone()).collect(),
+        ))
+    })
 }
 
 /// Runs one bounded search over the enabled backend, if any.
@@ -378,7 +452,7 @@ fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>, Strin
 
 fn load_settings(
     home: &HomeLayout,
-) -> Result<(AppSettings, AuthorityRevision, Vec<String>), String> {
+) -> Result<(AppSettings, AuthorityRevision, Vec<String>, Vec<String>), String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let revision = mcode_config::read_owned_file(
         home,
@@ -390,13 +464,19 @@ fn load_settings(
     .transpose()
     .map_err(|()| "stored settings failed validation".to_owned())?
     .unwrap_or(AuthorityRevision::ABSENT);
-    let key_ids = read_provider_secrets(home)
-        .map_err(|error| render_config_error(&error))?
-        .provider_ids()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    Ok((settings, revision, key_ids))
+    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
+    let mut provider_keys = Vec::new();
+    let mut mcp_keys = Vec::new();
+    for id in secrets.provider_ids() {
+        if let Some(server_id) = id.strip_prefix("mcp-") {
+            if !server_id.is_empty() {
+                mcp_keys.push(server_id.to_owned());
+            }
+        } else {
+            provider_keys.push(id.to_owned());
+        }
+    }
+    Ok((settings, revision, provider_keys, mcp_keys))
 }
 
 fn settings_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
@@ -817,8 +897,8 @@ mod tests {
         let BridgeReply::Settings(settings) = drive(&bridge, BridgeCommand::LoadSettings) else {
             panic!("settings reply");
         };
-        let (document, revision, key_ids) = settings.expect("settings load");
-        assert!(key_ids.is_empty());
+        let (document, revision, key_ids, mcp_ids) = settings.expect("settings load");
+        assert!(key_ids.is_empty() && mcp_ids.is_empty());
         assert_eq!(revision, AuthorityRevision::ABSENT);
         assert!(document.providers.is_empty());
         assert!(document.effective_user_agent().starts_with("pi ("));
@@ -851,7 +931,7 @@ mod tests {
         let BridgeReply::Settings(reloaded) = drive(&bridge, BridgeCommand::LoadSettings) else {
             panic!("reloaded reply");
         };
-        let (document, revision, key_ids) = reloaded.expect("settings reload");
+        let (document, revision, key_ids, _mcp_ids) = reloaded.expect("settings reload");
         assert_eq!(key_ids, vec!["openai-main".to_owned()]);
         assert_eq!(document.user_agent, "mcode-desktop-test/1");
         assert_eq!(revision.get(), 1);

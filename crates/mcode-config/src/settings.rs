@@ -111,17 +111,48 @@ pub struct ProviderSettings {
 }
 
 /// One configured MCP server binding.
+///
+/// Stdio servers spawn a local command; HTTP servers speak the MCP
+/// Streamable-HTTP wire against one https endpoint. The optional API key is
+/// stored in the secret store under `mcp-<id>`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerSettings {
     /// Unique server identity (lowercase portable).
     pub id: String,
-    /// Executable command.
-    pub command: String,
-    /// Bounded argument list.
-    pub args: Vec<String>,
     /// Enabled.
     pub enabled: bool,
+    /// Transport: `stdio` or `http`.
+    #[serde(rename = "transport")]
+    pub transport: String,
+    /// Stdio: executable command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Stdio: bounded argument list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// HTTP: full https endpoint URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// HTTP: credential header style, `bearer` (default) or `x-api-key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_header: Option<String>,
+}
+
+/// The built-in recommended MCP servers offered by the settings UI.
+///
+/// Users add them with one click and supply their own API keys; keys live in
+/// the secret store, never in settings.
+pub fn builtin_mcp_servers() -> Vec<McpServerSettings> {
+    vec![McpServerSettings {
+        id: "context7".to_owned(),
+        enabled: false,
+        transport: "http".to_owned(),
+        command: None,
+        args: Vec::new(),
+        endpoint: Some("https://mcp.context7.com/mcp".to_owned()),
+        key_header: Some("bearer".to_owned()),
+    }]
 }
 
 /// One configured search backend.
@@ -269,15 +300,45 @@ impl AppSettings {
             return Err(invalid());
         }
         for (index, server) in self.mcp_servers.iter().enumerate() {
-            if !is_portable_id(&server.id)
-                || bounded_text(&server.command, MAX_FIELD_BYTES).is_err()
-                || server.args.len() > 64
-                || server
-                    .args
-                    .iter()
-                    .any(|arg| bounded_text(arg, MAX_FIELD_BYTES).is_err())
-            {
+            if !is_portable_id(&server.id) || server.args.len() > 64 {
                 return Err(invalid());
+            }
+            for arg in &server.args {
+                bounded_text(arg, MAX_FIELD_BYTES)?;
+            }
+            match server.transport.as_str() {
+                "stdio" => {
+                    if server.command.is_none()
+                        || server.endpoint.is_some()
+                        || server.key_header.is_some()
+                    {
+                        return Err(invalid());
+                    }
+                    bounded_text(
+                        server.command.as_deref().unwrap_or_default(),
+                        MAX_FIELD_BYTES,
+                    )?;
+                }
+                "http" => {
+                    let endpoint_ok = server
+                        .endpoint
+                        .as_deref()
+                        .map(is_https_url)
+                        .unwrap_or(false);
+                    if !endpoint_ok {
+                        return Err(invalid());
+                    }
+                    if server.command.is_some()
+                        || !server.args.is_empty()
+                        || server
+                            .key_header
+                            .as_deref()
+                            .is_some_and(|header| !matches!(header, "bearer" | "x-api-key"))
+                    {
+                        return Err(invalid());
+                    }
+                }
+                _ => return Err(invalid()),
             }
             if self.mcp_servers[..index].iter().any(|s| s.id == server.id) {
                 return Err(invalid());
@@ -456,6 +517,49 @@ mod tests {
     }
 
     #[test]
+    fn builtin_catalog_and_transport_validation() {
+        let catalog = builtin_mcp_servers();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].id, "context7");
+        assert_eq!(catalog[0].transport, "http");
+
+        let mut settings = AppSettings {
+            mcp_servers: catalog,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_ok(), "built-in servers validate");
+
+        settings.mcp_servers[0].enabled = true;
+        assert!(settings.validate().is_ok());
+
+        settings.mcp_servers[0].endpoint = Some("http://insecure.example.com".to_owned());
+        assert!(settings.validate().is_err(), "http endpoint rejected");
+        settings.mcp_servers[0].endpoint = Some("https://mcp.context7.com/mcp".to_owned());
+        settings.mcp_servers[0].key_header = Some("cookie".to_owned());
+        assert!(settings.validate().is_err(), "unknown key header rejected");
+        settings.mcp_servers[0].key_header = Some("x-api-key".to_owned());
+        assert!(settings.validate().is_ok());
+
+        settings.mcp_servers[0].transport = "stdio".to_owned();
+        assert!(
+            settings.validate().is_err(),
+            "http fields on stdio rejected"
+        );
+        settings.mcp_servers[0] = McpServerSettings {
+            id: "local".to_owned(),
+            enabled: true,
+            transport: "stdio".to_owned(),
+            command: Some("npx".to_owned()),
+            args: vec!["-y".to_owned(), "@x/y".to_owned()],
+            endpoint: None,
+            key_header: None,
+        };
+        assert!(settings.validate().is_ok(), "valid stdio accepted");
+        settings.mcp_servers[0].endpoint = Some("https://x.example.com".to_owned());
+        assert!(settings.validate().is_err(), "endpoint on stdio rejected");
+    }
+
+    #[test]
     fn missing_settings_default_without_touching_disk() {
         let (parent, layout) = layout();
         let settings = read_app_settings(&layout).expect("defaults");
@@ -486,12 +590,15 @@ mod tests {
         });
         settings.mcp_servers.push(McpServerSettings {
             id: "docs".to_owned(),
-            command: "npx".to_owned(),
+            enabled: false,
+            transport: "stdio".to_owned(),
+            command: Some("npx".to_owned()),
             args: vec![
                 "-y".to_owned(),
                 "@modelcontextprotocol/server-docs".to_owned(),
             ],
-            enabled: false,
+            endpoint: None,
+            key_header: None,
         });
 
         let first = replace_app_settings(&layout, AuthorityRevision::ABSENT, &settings)

@@ -8,7 +8,7 @@ use mcode_config::HomeLayout;
 use mcode_session::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 
 use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
-use crate::ui::{BackendForm, ProviderForm};
+use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{ContextTab, DesktopAction, SettingsState, WorkspaceState, reduce};
 
 /// Window chrome bounds for the first window.
@@ -53,6 +53,8 @@ pub struct Workspace {
     ua_sync_pending: bool,
     provider_form: Option<Entity<ProviderForm>>,
     backend_form: Option<Entity<BackendForm>>,
+    mcp_form: Option<Entity<McpForm>>,
+    mcp_key_input: Option<Entity<InputState>>,
     web_query_input: Option<Entity<InputState>>,
 }
 
@@ -77,6 +79,8 @@ impl Workspace {
             ua_sync_pending: false,
             provider_form: None,
             backend_form: None,
+            mcp_form: None,
+            mcp_key_input: None,
             web_query_input: None,
         });
         workspace.update(cx, |workspace, cx| {
@@ -180,7 +184,7 @@ impl Workspace {
         }
     }
 
-    fn apply_action(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
+    pub(super) fn apply_action(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
         reduce(&mut self.vm, action);
         cx.notify();
     }
@@ -211,9 +215,10 @@ impl Workspace {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
                 self.begin_chat_turn(cx);
             }
-            BridgeReply::Settings(Ok((settings, revision, keyed_ids))) => {
+            BridgeReply::Settings(Ok((settings, revision, provider_keys, mcp_keys))) => {
                 let revision = revision.get();
-                let state = SettingsState::from_settings(&settings, revision, keyed_ids);
+                let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
+                state.mcp_with_keys = mcp_keys;
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
             }
@@ -227,6 +232,9 @@ impl Workspace {
             BridgeReply::WebSearched(Ok(results)) => {
                 self.apply_action(DesktopAction::WebSearched(results), cx);
             }
+            BridgeReply::McpTools(Ok((server_id, tools))) => {
+                self.apply_action(DesktopAction::McpToolsListed { server_id, tools }, cx);
+            }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))
             | BridgeReply::Conversation(Err(message))
@@ -235,7 +243,8 @@ impl Workspace {
             | BridgeReply::SettingsSaved(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::ChatStarted(Err(message))
-            | BridgeReply::WebSearched(Err(message)) => {
+            | BridgeReply::WebSearched(Err(message))
+            | BridgeReply::McpTools(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
         }
@@ -365,7 +374,35 @@ impl Workspace {
         self.apply_action(DesktopAction::ShowContextTab(tab), cx);
     }
 
-    pub(super) fn on_web_search(&mut self, query: &str, cx: &mut Context<Self>) {
+    pub(super) fn on_list_mcp_tools(&mut self, server_id: &str, cx: &mut Context<Workspace>) {
+        self.dispatch(
+            BridgeCommand::McpListTools {
+                server_id: server_id.to_owned(),
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn on_add_builtin_mcp(
+        &mut self,
+        server: mcode_config::McpServerSettings,
+        api_key: &str,
+        cx: &mut Context<Workspace>,
+    ) {
+        let server_id = server.id.clone();
+        self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: format!("mcp-{server_id}"),
+                    api_key: api_key.to_owned(),
+                },
+                cx,
+            );
+        }
+    }
+
+    pub(super) fn on_web_search(&mut self, query: &str, cx: &mut Context<Workspace>) {
         if query.trim().is_empty() {
             return;
         }
@@ -548,6 +585,101 @@ impl Workspace {
             .map(|backend| !backend.enabled)
             .unwrap_or(false);
         self.apply_action(DesktopAction::SettingsBackendToggled(index, enabled), cx);
+    }
+
+    pub(super) fn mcp_form(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<McpForm> {
+        self.mcp_form
+            .get_or_insert_with(|| McpForm::new(window, cx))
+            .clone()
+    }
+
+    pub(super) fn mcp_key_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<InputState> {
+        self.mcp_key_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+            })
+            .clone()
+    }
+
+    pub(super) fn on_add_mcp(&mut self, cx: &mut Context<Workspace>) {
+        let Some(form) = self.mcp_form.clone() else {
+            return;
+        };
+        let id = form.read(cx).id.read(cx).value().trim().to_string();
+        let transport = form.read(cx).transport.read(cx).value().trim().to_string();
+        let endpoint = form.read(cx).endpoint.read(cx).value().trim().to_string();
+        let command = form.read(cx).command.read(cx).value().trim().to_string();
+        let api_key = form.read(cx).api_key.read(cx).value().trim().to_string();
+        if id.is_empty() || transport.is_empty() {
+            self.apply_action(
+                DesktopAction::Failed("fill id and transport".to_owned()),
+                cx,
+            );
+            return;
+        }
+        let server = match transport.as_str() {
+            "http" => {
+                if endpoint.is_empty() {
+                    self.apply_action(
+                        DesktopAction::Failed("http servers need an endpoint".to_owned()),
+                        cx,
+                    );
+                    return;
+                }
+                mcode_config::McpServerSettings {
+                    id: id.clone(),
+                    enabled: false,
+                    transport,
+                    command: None,
+                    args: Vec::new(),
+                    endpoint: Some(endpoint),
+                    key_header: Some("bearer".to_owned()),
+                }
+            }
+            "stdio" => {
+                if command.is_empty() {
+                    self.apply_action(
+                        DesktopAction::Failed("stdio servers need a command".to_owned()),
+                        cx,
+                    );
+                    return;
+                }
+                mcode_config::McpServerSettings {
+                    id: id.clone(),
+                    enabled: false,
+                    transport,
+                    command: Some(command),
+                    args: Vec::new(),
+                    endpoint: None,
+                    key_header: None,
+                }
+            }
+            _ => {
+                self.apply_action(
+                    DesktopAction::Failed("transport must be http or stdio".to_owned()),
+                    cx,
+                );
+                return;
+            }
+        };
+        self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: format!("mcp-{id}"),
+                    api_key,
+                },
+                cx,
+            );
+        }
     }
 
     pub(super) fn on_save_settings(&mut self, cx: &mut Context<Self>) {

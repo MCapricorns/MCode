@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 use gpui_kit::{px, rems};
 
-use crate::view_model::{ContextTab, ConversationEntry, EntryKind};
+use crate::view_model::{ContextTab, ConversationEntry, DesktopAction, EntryKind};
 use crate::workspace::Workspace;
 
 /// Renders the whole window chrome and content.
@@ -642,6 +642,7 @@ fn render_settings(
     let ua_input = workspace.settings_ua_input(window, cx);
     let provider_form_element = render_provider_form(workspace, window, cx);
     let backend_form_element = render_backend_form(workspace, window, cx);
+    let mcp_form_element = render_mcp_form(workspace, window, cx);
     let theme = cx.theme();
     let provider_rows: Vec<String> = settings
         .providers
@@ -652,6 +653,29 @@ fn render_settings(
         .web_backends
         .iter()
         .map(|backend| (backend.id.clone(), backend.kind.clone(), backend.enabled))
+        .collect();
+    let mcp_rows: Vec<(String, String, bool, bool)> = settings
+        .mcp_servers
+        .iter()
+        .map(|server| {
+            (
+                server.id.clone(),
+                server.transport.clone(),
+                server.enabled,
+                settings.mcp_with_keys.iter().any(|id| id == &server.id),
+            )
+        })
+        .collect();
+    let builtin_servers = mcode_config::builtin_mcp_servers();
+    let catalog_rows: Vec<(String, String)> = builtin_servers
+        .iter()
+        .filter(|server| {
+            !settings
+                .mcp_servers
+                .iter()
+                .any(|configured| configured.id == server.id)
+        })
+        .map(|server| (server.id.clone(), server.transport.clone()))
         .collect();
     div()
         .id("settings")
@@ -779,6 +803,149 @@ fn render_settings(
                 ),
         )
         .child(backend_form_element)
+        .child(
+            div()
+                .id("settings-mcp")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().opacity(0.7).child("MCP servers"))
+                .when(mcp_rows.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .child("No MCP servers yet"),
+                    )
+                })
+                .children(
+                    mcp_rows
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (id, transport, enabled, keyed))| {
+                            div()
+                                .id(format!("mcp-row-{id}"))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .py_1()
+                                .child(
+                                    div().text_sm().child(format!(
+                                        "{id} \u{b7} {transport} \u{b7} {} \u{b7} key {}",
+                                        if *enabled { "enabled" } else { "disabled" },
+                                        if *keyed { "\u{2713}" } else { "-" }
+                                    )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_1()
+                                        .child(
+                                            Button::new(format!("mcp-toggle-{id}"))
+                                                .label(if *enabled { "Disable" } else { "Enable" })
+                                                .on_click(cx.listener(
+                                                    move |workspace, _, _, cx| {
+                                                        let on = !workspace
+                                                            .vm()
+                                                            .settings
+                                                            .as_ref()
+                                                            .and_then(|settings| {
+                                                                settings.mcp_servers.get(index)
+                                                            })
+                                                            .map(|server| server.enabled)
+                                                            .unwrap_or(false);
+                                                        workspace.apply_action(
+                                                            DesktopAction::SettingsMcpToggled(
+                                                                index, on,
+                                                            ),
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            Button::new(format!("mcp-tools-{id}"))
+                                                .label("List tools")
+                                                .on_click({
+                                                    let id = id.clone();
+                                                    cx.listener(
+                                                        move |workspace, _, _, cx| {
+                                                            workspace.on_list_mcp_tools(&id, cx);
+                                                        },
+                                                    )
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(format!("mcp-remove-{id}"))
+                                                .label("Remove")
+                                                .on_click(cx.listener(
+                                                    move |workspace, _, _, cx| {
+                                                        workspace.apply_action(
+                                                            DesktopAction::SettingsMcpRemoved(
+                                                                index,
+                                                            ),
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        ),
+                                )
+                        }),
+                )
+                .when(!catalog_rows.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().opacity(0.5).child("Built-in catalog"))
+                            .children(catalog_rows.iter().map(|(id, transport)| {
+                                div()
+                                    .id(format!("mcp-catalog-{id}"))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div().text_sm().opacity(0.8).child(format!(
+                                            "{id} \u{b7} {transport} \u{b7} paste your API key, then Add"
+                                        )),
+                                    )
+                                    .child(
+                                        Button::new(format!("mcp-add-{id}"))
+                                            .label("Add")
+                                            .primary()
+                                            .on_click({
+                                                let id = id.clone();
+                                                cx.listener(
+                                                move |workspace, _, window, cx| {
+                                                    let server =
+                                                        mcode_config::builtin_mcp_servers()
+                                                            .into_iter()
+                                                            .find(|server| server.id == id)
+                                                            .expect("catalog entry");
+                                                    let key = workspace
+                                                        .mcp_key_input(window, cx)
+                                                        .read(cx)
+                                                        .value()
+                                                        .trim()
+                                                        .to_owned();
+                                                    workspace.on_add_builtin_mcp(
+                                                        server, &key, cx,
+                                                    );
+                                                },
+                                            )
+                                            }),
+                                    )
+                            })),
+                    )
+                }),
+        )
+        .child(mcp_form_element)
         .child(
             div()
                 .id("settings-footer")
@@ -913,6 +1080,82 @@ fn render_backend_form(
                 .label("Add backend")
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_add_backend(cx);
+                })),
+        )
+        .into_any_element()
+}
+
+/// Inline add-MCP-server form state (http or stdio).
+pub(crate) struct McpForm {
+    /// Server identity input.
+    pub id: Entity<InputState>,
+    /// Transport input (`http` or `stdio`).
+    pub transport: Entity<InputState>,
+    /// HTTP endpoint input (http transport).
+    pub endpoint: Entity<InputState>,
+    /// Command input (stdio transport).
+    pub command: Entity<InputState>,
+    /// API key input, stored in the secret store.
+    pub api_key: Entity<InputState>,
+}
+
+impl McpForm {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Entity<Self> {
+        let mut make = |placeholder: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let id = make("id, e.g. my-mcp");
+        let transport = make("http | stdio");
+        let endpoint = make("https://mcp.example.com/mcp");
+        let command = make("stdio: command (e.g. npx)");
+        let api_key = make("api key (leave empty to skip)");
+        cx.new(|_| Self {
+            id,
+            transport,
+            endpoint,
+            command,
+            api_key,
+        })
+    }
+}
+
+fn render_mcp_form(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let form = workspace.mcp_form(window, cx);
+    div()
+        .id("mcp-form")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .child(div().text_xs().opacity(0.7).child("Add MCP server"))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_sm()
+                .child(form_field("id", form.read(cx).id.clone()))
+                .child(form_field("transport", form.read(cx).transport.clone()))
+                .child(form_field(
+                    "endpoint (http)",
+                    form.read(cx).endpoint.clone(),
+                ))
+                .child(form_field("command (stdio)", form.read(cx).command.clone()))
+                .child(form_field(
+                    "api key (stored in secrets.json)",
+                    form.read(cx).api_key.clone(),
+                )),
+        )
+        .child(
+            Button::new("mcp-add")
+                .label("Add server")
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_add_mcp(cx);
                 })),
         )
         .into_any_element()

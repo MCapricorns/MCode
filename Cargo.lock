@@ -4238,6 +4238,7 @@ dependencies = [
  "gpui-kit",
  "mcode-config",
  "mcode-core",
+ "mcode-mcp",
  "mcode-provider-api",
  "mcode-providers",
  "mcode-session",
@@ -4247,6 +4248,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "mcode-mcp"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

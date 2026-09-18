@@ -90,6 +90,8 @@ pub struct SettingsState {
     pub theme: String,
     /// Provider ids that have a stored API key.
     pub providers_with_keys: Vec<String>,
+    /// MCP key ids (form `mcp-<server>`) that have a stored key.
+    pub mcp_with_keys: Vec<String>,
     /// A save is in flight.
     pub saving: bool,
     /// Unsaved local edits exist.
@@ -104,6 +106,7 @@ impl SettingsState {
         revision: u64,
         providers_with_keys: Vec<String>,
     ) -> Self {
+        let _ = providers_with_keys;
         Self {
             revision,
             user_agent: settings.user_agent.clone(),
@@ -113,6 +116,7 @@ impl SettingsState {
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.appearance.theme.clone(),
             providers_with_keys,
+            mcp_with_keys: Vec::new(),
             saving: false,
             dirty: false,
         }
@@ -165,6 +169,8 @@ pub struct WorkspaceState {
     pub context_tab: ContextTab,
     /// Latest web search results.
     pub web_results: Vec<mcode_web::SearchResult>,
+    /// Per-server tool names from the last listing, keyed by server id.
+    pub mcp_tools: Vec<(String, Vec<String>)>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -210,6 +216,17 @@ pub enum DesktopAction {
     SettingsBackendRemoved(usize),
     /// The settings editor toggled a web backend.
     SettingsBackendToggled(usize, bool),
+    /// The settings editor added an MCP server.
+    SettingsMcpAdded(mcode_config::McpServerSettings),
+    /// The settings editor removed an MCP server.
+    SettingsMcpRemoved(usize),
+    /// The settings editor toggled an MCP server.
+    SettingsMcpToggled(usize, bool),
+    /// A server's tools listing arrived.
+    McpToolsListed {
+        server_id: String,
+        tools: Vec<String>,
+    },
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
@@ -376,6 +393,37 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::WebSearched(results) => state.web_results = results,
+        DesktopAction::SettingsMcpAdded(server) => {
+            if let Some(settings) = state.settings.as_mut()
+                && settings.mcp_servers.len() < mcode_config::MAX_MCP_SERVERS
+            {
+                settings.mcp_servers.push(server);
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::SettingsMcpRemoved(index) => {
+            if let Some(settings) = state.settings.as_mut()
+                && index < settings.mcp_servers.len()
+            {
+                settings.mcp_servers.remove(index);
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::SettingsMcpToggled(index, enabled) => {
+            if let Some(settings) = state.settings.as_mut()
+                && let Some(server) = settings.mcp_servers.get_mut(index)
+            {
+                server.enabled = enabled;
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::McpToolsListed { server_id, tools } => {
+            if let Some(entry) = state.mcp_tools.iter_mut().find(|(id, _)| *id == server_id) {
+                entry.1 = tools;
+            } else {
+                state.mcp_tools.push((server_id, tools));
+            }
+        }
         DesktopAction::ToggleTheme => state.dark_theme = !state.dark_theme,
         DesktopAction::DismissError => state.error = None,
     }
