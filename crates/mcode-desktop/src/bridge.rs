@@ -101,6 +101,11 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
+    /// List discovered prompt resources for the session workspace.
+    ListResources {
+        /// Session identity spelling (selects the workspace directory).
+        session_id: String,
+    },
 }
 
 /// A streaming event from an active model turn.
@@ -179,6 +184,8 @@ pub enum BridgeReply {
     McpTools(Result<(String, Vec<String>), String>),
     /// Rollback outcome: restored absolute paths.
     RolledBack(Result<Vec<String>, String>),
+    /// Resource list: (name, absolute path) pairs.
+    Resources(Result<Vec<(String, String)>, String>),
 }
 
 /// Handle to the core thread.
@@ -332,6 +339,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
         BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
         BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
+        BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
     }
 }
 
@@ -388,7 +396,25 @@ async fn handle(
             mcode_config::rollback_session(home, session_id)
                 .map_err(|error| render_config_error(&error)),
         ),
+        BridgeCommand::ListResources { session_id } => {
+            BridgeReply::Resources(list_resources(home, session_id))
+        }
     }
+}
+
+/// Discovers prompt resources for one session workspace.
+fn list_resources(home: &HomeLayout, session_id: &str) -> Result<Vec<(String, String)>, String> {
+    let workspace = home.root().join("workspace").join(session_id);
+    let files = mcode_config::discover_resources(home, &workspace);
+    Ok(files
+        .iter()
+        .map(|file| {
+            (
+                file.name.clone(),
+                file.path.as_os_str().to_string_lossy().into_owned(),
+            )
+        })
+        .collect())
 }
 
 /// Lists tools of one enabled MCP server over stdio or HTTP.
@@ -771,6 +797,19 @@ async fn run_chat_turn(
     // the pump; give each its own copy.
     let session_id = session_id.to_owned();
 
+    let resources = mcode_config::discover_resources(home, &cwd);
+    let mut system_prompt = String::from(
+        "You are MCode, a coding agent. Use the provided tools to read, edit, and run code.          Answer concisely and explain what you did.",
+    );
+    for part in mcode_config::render_resource_prompt(&resources) {
+        system_prompt.push_str(
+            "
+
+",
+        );
+        system_prompt.push_str(&part);
+    }
+
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
     let checkpoint_home = home.clone();
     let checkpoint_cwd = cwd.clone();
@@ -788,9 +827,7 @@ async fn run_chat_turn(
         let _ = mcode_config::checkpoint_file(&checkpoint_home, &checkpoint_session, &path);
     });
     let cancel = CancellationToken::new();
-    let mut agent = Agent::new(AgentConfig::new().with_system_prompt(
-        "You are MCode, a coding agent. Use the provided tools to read, edit, and run code.          Answer concisely and explain what you did.",
-    ));
+    let mut agent = Agent::new(AgentConfig::new().with_system_prompt(system_prompt));
 
     // The ledger pump owns the branch head: tool results commit as they
     // complete, the final assistant message commits at turn end.

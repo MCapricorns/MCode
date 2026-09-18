@@ -634,13 +634,31 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
         }))
         .child(
             div()
+                .id("overview-resources")
+                .flex()
+                .flex_col()
+                .gap_1()
                 .mt_2()
-                .p_2()
-                .rounded_md()
-                .bg(theme.secondary)
-                .text_xs()
-                .opacity(0.7)
-                .child("Files, diffs, todo, and usage land here with T13–T15"),
+                .child(div().text_xs().opacity(0.6).child("Prompt resources"))
+                .when(vm.resources.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .child("No AGENTS.md / MCODE.md found in the workspace or home"),
+                    )
+                })
+                .children(vm.resources.iter().map(|(name, path)| {
+                    div()
+                        .id(format!("resource-{name}-{path}"))
+                        .flex()
+                        .flex_col()
+                        .p_2()
+                        .rounded_md()
+                        .bg(theme.secondary)
+                        .child(div().text_sm().child(name.clone()))
+                        .child(div().text_xs().opacity(0.6).child(path.clone()))
+                })),
         )
 }
 

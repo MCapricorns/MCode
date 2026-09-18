@@ -225,7 +225,12 @@ impl Workspace {
                 self.dispatch(BridgeCommand::OpenSession(session_id), cx);
             }
             BridgeReply::Conversation(Ok(conversation)) => {
+                let session_id = conversation.session_id.clone();
                 self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
+                self.dispatch(BridgeCommand::ListResources { session_id }, cx);
+            }
+            BridgeReply::Resources(Ok(files)) => {
+                self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
             }
             BridgeReply::Sent(Ok((head, entry))) => {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
@@ -269,7 +274,8 @@ impl Workspace {
             | BridgeReply::ChatStarted(Err(message))
             | BridgeReply::WebSearched(Err(message))
             | BridgeReply::McpTools(Err(message))
-            | BridgeReply::RolledBack(Err(message)) => {
+            | BridgeReply::RolledBack(Err(message))
+            | BridgeReply::Resources(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
         }

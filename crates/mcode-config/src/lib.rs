@@ -25,6 +25,7 @@ mod host_vault;
 mod pack_component;
 mod pack_installation;
 mod parse;
+mod resources;
 mod root_composition;
 mod secrets;
 mod secure_fs;
@@ -36,7 +37,6 @@ mod transaction_id;
 pub use authority::{
     ArtifactRef, AuthorityRevision, CanonicalVersion, Sha256Digest, SourceBindingId, TrustHighWater,
 };
-#[doc(inline)]
 pub use checkpoints::{
     CheckpointEntry, MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOTS_PER_SESSION, checkpoint_file,
     list_checkpoints, rollback_session,
@@ -58,6 +58,11 @@ pub use pack_installation::{
     BundlePath, InventoryEntry, MAX_PACK_INSTALLATION_BYTES, MAX_PACK_INVENTORY_ENTRIES,
     PACK_INSTALLATION_FORMAT_VERSION, PACK_INSTALLATION_KIND, PackInstallation,
     PackInstallationDocument, read_pack_installation, replace_pack_installation,
+};
+#[doc(inline)]
+pub use resources::{
+    MAX_RESOURCE_BYTES, MAX_RESOURCES, MAX_TOTAL_PROMPT_CHARS, ResourceFile, discover_resources,
+    read_resource, render_resource_prompt,
 };
 #[doc(inline)]
 pub use root_composition::{

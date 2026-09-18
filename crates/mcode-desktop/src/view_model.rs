@@ -171,6 +171,8 @@ pub struct WorkspaceState {
     pub web_results: Vec<mcode_web::SearchResult>,
     /// Per-server tool names from the last listing, keyed by server id.
     pub mcp_tools: Vec<(String, Vec<String>)>,
+    /// Prompt resources for the open session: (name, path).
+    pub resources: Vec<(String, String)>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -231,6 +233,8 @@ pub enum DesktopAction {
     ToolStarted { call_id: String, name: String },
     /// A committed tool-result entry arrived.
     ToolResultAppended(ConversationEntry),
+    /// Prompt resources discovered for the open session.
+    ResourcesLoaded(Vec<(String, String)>),
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
@@ -316,6 +320,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.entries.push(entry);
             }
         }
+        DesktopAction::ResourcesLoaded(files) => state.resources = files,
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
         }
