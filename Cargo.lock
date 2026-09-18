@@ -4241,6 +4241,7 @@ dependencies = [
  "mcode-provider-api",
  "mcode-providers",
  "mcode-session",
+ "mcode-web",
  "serde",
  "serde_json",
  "tempfile",
@@ -4346,6 +4347,20 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "zip",
+]
+
+[[package]]
+name = "mcode-web"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "mcode-config",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

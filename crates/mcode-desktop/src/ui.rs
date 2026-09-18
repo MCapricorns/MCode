@@ -407,6 +407,8 @@ fn render_context_panel(
                     "Overview",
                     cx,
                 ))
+                .child(context_tab_button(tab, ContextTab::Web, "Web", cx))
+                .child(context_tab_button(tab, ContextTab::Changes, "Changes", cx))
                 .child(context_tab_button(
                     tab,
                     ContextTab::Settings,
@@ -424,11 +426,141 @@ fn render_context_panel(
                 .pb_3()
                 .child(match tab {
                     ContextTab::Overview => render_overview(workspace, cx).into_any_element(),
+                    ContextTab::Web => render_web(workspace, window, cx).into_any_element(),
+                    ContextTab::Changes => render_changes(workspace, cx).into_any_element(),
                     ContextTab::Settings => {
                         render_settings(workspace, window, cx).into_any_element()
                     }
                 }),
         )
+}
+
+/// Renders the bounded web search panel.
+fn render_web(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let query_input = workspace.web_query_input(window, cx);
+    let results: Vec<(String, String, String)> = workspace
+        .vm()
+        .web_results
+        .iter()
+        .map(|result| {
+            (
+                result.url.clone(),
+                result.title.clone(),
+                result.snippet.clone(),
+            )
+        })
+        .collect();
+    div()
+        .id("web-panel")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child("Web search"),
+        )
+        .child(
+            div()
+                .id("web-query-row")
+                .flex()
+                .flex_row()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(30.))
+                        .child(Input::new(&query_input)),
+                )
+                .child(
+                    Button::new("web-search-run")
+                        .label("Search")
+                        .primary()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_web_search_run(cx);
+                        })),
+                ),
+        )
+        .when(results.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .opacity(0.5)
+                    .child("No results yet — enable a backend in Settings"),
+            )
+        })
+        .children(results.into_iter().map(|(url, title, snippet)| {
+            div()
+                .id(format!("web-result-{url}"))
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .p_2()
+                .rounded_md()
+                .bg(cx.theme().secondary)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(title),
+                )
+                .child(div().text_xs().opacity(0.7).child(snippet))
+                .child(div().text_xs().opacity(0.5).child(url))
+        }))
+        .into_any_element()
+}
+
+/// Renders the changed-files panel fed by tool activity details.
+fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> gpui_kit::AnyElement {
+    let changed: Vec<String> = workspace
+        .vm()
+        .active
+        .as_ref()
+        .map(|conversation| {
+            conversation
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry.kind, EntryKind::ToolCall | EntryKind::ToolResult))
+                .map(|entry| entry.text.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    div()
+        .id("changes-panel")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child("Changes"),
+        )
+        .when(changed.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .opacity(0.5)
+                    .child("File edits and diffs from tool runs appear here"),
+            )
+        })
+        .children(changed.into_iter().map(|text| {
+            div()
+                .id(format!("change-item-{}", short_id(&text)))
+                .p_2()
+                .rounded_md()
+                .text_sm()
+                .bg(cx.theme().secondary)
+                .child(text)
+        }))
+        .into_any_element()
 }
 
 fn context_tab_button(
@@ -509,11 +641,17 @@ fn render_settings(
     };
     let ua_input = workspace.settings_ua_input(window, cx);
     let provider_form_element = render_provider_form(workspace, window, cx);
+    let backend_form_element = render_backend_form(workspace, window, cx);
     let theme = cx.theme();
     let provider_rows: Vec<String> = settings
         .providers
         .iter()
         .map(|provider| provider.id.clone())
+        .collect();
+    let backend_rows: Vec<(String, String, bool)> = settings
+        .web_backends
+        .iter()
+        .map(|backend| (backend.id.clone(), backend.kind.clone(), backend.enabled))
         .collect();
     div()
         .id("settings")
@@ -581,6 +719,66 @@ fn render_settings(
                 })),
         )
         .child(provider_form_element)
+        .child(
+            div()
+                .id("settings-backends")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().opacity(0.7).child("Web search backends"))
+                .when(backend_rows.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .child("No backends yet — add one below"),
+                    )
+                })
+                .children(
+                    backend_rows
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (id, kind, enabled))| {
+                            div()
+                                .id(format!("backend-row-{id}"))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .py_1()
+                                .child(div().text_sm().child(format!(
+                                    "{id} · {kind} · {}",
+                                    if *enabled { "enabled" } else { "disabled" }
+                                )))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_1()
+                                        .child(
+                                            Button::new(format!("backend-toggle-{id}"))
+                                                .label(if *enabled { "Disable" } else { "Enable" })
+                                                .on_click(cx.listener(
+                                                    move |workspace, _, _, cx| {
+                                                        workspace.on_toggle_backend(index, cx);
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            Button::new(format!("backend-remove-{id}"))
+                                                .label("Remove")
+                                                .on_click(cx.listener(
+                                                    move |workspace, _, _, cx| {
+                                                        workspace.on_remove_backend(index, cx);
+                                                    },
+                                                )),
+                                        ),
+                                )
+                        }),
+                ),
+        )
+        .child(backend_form_element)
         .child(
             div()
                 .id("settings-footer")
@@ -659,6 +857,62 @@ fn render_provider_form(
                 .label("Add")
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_add_provider(cx);
+                })),
+        )
+        .into_any_element()
+}
+
+/// Inline add-backend form state.
+pub(crate) struct BackendForm {
+    /// Backend identity input.
+    pub id: Entity<InputState>,
+    /// Backend kind input (`querit` or `custom`).
+    pub kind: Entity<InputState>,
+    /// HTTPS endpoint input.
+    pub endpoint: Entity<InputState>,
+}
+
+impl BackendForm {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Entity<Self> {
+        let mut make = |placeholder: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let id = make("id, e.g. querit-main");
+        let kind = make("querit | custom");
+        let endpoint = make("https://search.example.com");
+        cx.new(|_| Self { id, kind, endpoint })
+    }
+}
+
+fn render_backend_form(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let form = workspace.backend_form(window, cx);
+    div()
+        .id("backend-form")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .child(div().text_xs().opacity(0.7).child("Add web search backend"))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_sm()
+                .child(form_field("id", form.read(cx).id.clone()))
+                .child(form_field("kind", form.read(cx).kind.clone()))
+                .child(form_field("endpoint", form.read(cx).endpoint.clone())),
+        )
+        .child(
+            Button::new("backend-add")
+                .label("Add backend")
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_add_backend(cx);
                 })),
         )
         .into_any_element()

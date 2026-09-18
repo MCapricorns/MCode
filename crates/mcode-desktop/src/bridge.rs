@@ -21,6 +21,7 @@ use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
 use mcode_session::session::{
     self, BranchId, EventKind, HeadStamp, SessionError, SessionId, SessionService,
 };
+use mcode_web::SearchResult;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -84,6 +85,11 @@ pub enum BridgeCommand {
         /// Conversation history including the committed user message.
         history: Vec<Message>,
     },
+    /// Run one bounded web search over the enabled backend.
+    WebSearch {
+        /// The search query.
+        query: String,
+    },
 }
 
 /// A streaming event from an active model turn.
@@ -140,6 +146,8 @@ pub enum BridgeReply {
     ProviderKeySaved(Result<(), String>),
     /// Chat turn acceptance; streaming continues over the event channel.
     ChatStarted(Result<(), String>),
+    /// Web search result list.
+    WebSearched(Result<Vec<SearchResult>, String>),
 }
 
 /// Handle to the core thread.
@@ -290,6 +298,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::SaveSettings { .. } => BridgeReply::SettingsSaved(Err(message)),
         BridgeCommand::SaveProviderKey { .. } => BridgeReply::ProviderKeySaved(Err(message)),
         BridgeCommand::ChatTurn { .. } => BridgeReply::ChatStarted(Err(message)),
+        BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
     }
 }
 
@@ -338,7 +347,33 @@ async fn handle(
         BridgeCommand::ChatTurn { .. } => {
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
         }
+        BridgeCommand::WebSearch { query } => BridgeReply::WebSearched(web_search(home, query)),
     }
+}
+
+/// Runs one bounded search over the enabled backend, if any.
+fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>, String> {
+    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
+    let backend = settings
+        .web
+        .backends
+        .iter()
+        .find(|backend| backend.enabled)
+        .ok_or_else(|| "no enabled search backend — add one in Settings".to_owned())?;
+    let transport = mcode_web::reqwest_transport::ReqwestWebTransport::new()
+        .map_err(|_| "web transport unavailable".to_owned())?;
+    let client = mcode_web::WebClient::new(&backend.endpoint, std::sync::Arc::new(transport))
+        .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "web runtime unavailable".to_owned())?;
+    runtime.block_on(async {
+        client
+            .search(query, 8, tokio_util::sync::CancellationToken::new())
+            .await
+            .map_err(|error| format!("search failed: {error}"))
+    })
 }
 
 fn load_settings(

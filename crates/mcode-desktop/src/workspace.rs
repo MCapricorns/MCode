@@ -8,7 +8,7 @@ use mcode_config::HomeLayout;
 use mcode_session::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 
 use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
-use crate::ui::ProviderForm;
+use crate::ui::{BackendForm, ProviderForm};
 use crate::view_model::{ContextTab, DesktopAction, SettingsState, WorkspaceState, reduce};
 
 /// Window chrome bounds for the first window.
@@ -52,6 +52,8 @@ pub struct Workspace {
     ua_input: Option<Entity<InputState>>,
     ua_sync_pending: bool,
     provider_form: Option<Entity<ProviderForm>>,
+    backend_form: Option<Entity<BackendForm>>,
+    web_query_input: Option<Entity<InputState>>,
 }
 
 impl Workspace {
@@ -74,6 +76,8 @@ impl Workspace {
             ua_input: None,
             ua_sync_pending: false,
             provider_form: None,
+            backend_form: None,
+            web_query_input: None,
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -220,6 +224,9 @@ impl Workspace {
                 self.dispatch(BridgeCommand::LoadSettings, cx);
             }
             BridgeReply::ChatStarted(Ok(())) => {}
+            BridgeReply::WebSearched(Ok(results)) => {
+                self.apply_action(DesktopAction::WebSearched(results), cx);
+            }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))
             | BridgeReply::Conversation(Err(message))
@@ -227,7 +234,8 @@ impl Workspace {
             | BridgeReply::Settings(Err(message))
             | BridgeReply::SettingsSaved(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
-            | BridgeReply::ChatStarted(Err(message)) => {
+            | BridgeReply::ChatStarted(Err(message))
+            | BridgeReply::WebSearched(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
         }
@@ -357,6 +365,18 @@ impl Workspace {
         self.apply_action(DesktopAction::ShowContextTab(tab), cx);
     }
 
+    pub(super) fn on_web_search(&mut self, query: &str, cx: &mut Context<Self>) {
+        if query.trim().is_empty() {
+            return;
+        }
+        self.dispatch(
+            BridgeCommand::WebSearch {
+                query: query.trim().to_owned(),
+            },
+            cx,
+        );
+    }
+
     pub(super) fn on_dismiss_error(&mut self, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::DismissError, cx);
     }
@@ -404,6 +424,29 @@ impl Workspace {
             self.ua_sync_pending = false;
         }
         input
+    }
+
+    pub(super) fn web_query_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<InputState> {
+        self.web_query_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search the web…"))
+            })
+            .clone()
+    }
+
+    pub(super) fn on_web_search_run(&mut self, cx: &mut Context<Workspace>) {
+        let Some(input) = self.web_query_input.clone() else {
+            return;
+        };
+        let query = input.read(cx).value().trim().to_owned();
+        if query.is_empty() {
+            return;
+        }
+        self.on_web_search(&query, cx);
     }
 
     pub(super) fn provider_form(
@@ -455,6 +498,56 @@ impl Workspace {
 
     pub(super) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::SettingsProviderRemoved(index), cx);
+    }
+
+    pub(super) fn backend_form(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<BackendForm> {
+        self.backend_form
+            .get_or_insert_with(|| BackendForm::new(window, cx))
+            .clone()
+    }
+
+    pub(super) fn on_add_backend(&mut self, cx: &mut Context<Workspace>) {
+        let Some(form) = self.backend_form.clone() else {
+            return;
+        };
+        let id = form.read(cx).id.read(cx).value().trim().to_string();
+        let kind = form.read(cx).kind.read(cx).value().trim().to_string();
+        let endpoint = form.read(cx).endpoint.read(cx).value().trim().to_string();
+        if id.is_empty() || kind.is_empty() || endpoint.is_empty() {
+            self.apply_action(
+                DesktopAction::Failed("fill id, kind, and endpoint".to_owned()),
+                cx,
+            );
+            return;
+        }
+        self.apply_action(
+            DesktopAction::SettingsBackendAdded(mcode_config::WebBackendSettings {
+                id,
+                kind,
+                endpoint,
+                enabled: false,
+            }),
+            cx,
+        );
+    }
+
+    pub(super) fn on_remove_backend(&mut self, index: usize, cx: &mut Context<Workspace>) {
+        self.apply_action(DesktopAction::SettingsBackendRemoved(index), cx);
+    }
+
+    pub(super) fn on_toggle_backend(&mut self, index: usize, cx: &mut Context<Workspace>) {
+        let enabled = self
+            .vm
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.web_backends.get(index))
+            .map(|backend| !backend.enabled)
+            .unwrap_or(false);
+        self.apply_action(DesktopAction::SettingsBackendToggled(index, enabled), cx);
     }
 
     pub(super) fn on_save_settings(&mut self, cx: &mut Context<Self>) {

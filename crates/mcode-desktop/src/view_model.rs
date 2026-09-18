@@ -142,6 +142,10 @@ pub enum ContextTab {
     /// Session overview.
     #[default]
     Overview,
+    /// Bounded web search.
+    Web,
+    /// Changed files and diffs from tool activity.
+    Changes,
     /// Visual settings.
     Settings,
 }
@@ -159,6 +163,8 @@ pub struct WorkspaceState {
     pub sending: bool,
     /// Selected right-panel tab.
     pub context_tab: ContextTab,
+    /// Latest web search results.
+    pub web_results: Vec<mcode_web::SearchResult>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -198,6 +204,12 @@ pub enum DesktopAction {
     SettingsProviderAdded(mcode_config::ProviderSettings),
     /// The settings editor removed a provider row.
     SettingsProviderRemoved(usize),
+    /// The settings editor added a web backend row.
+    SettingsBackendAdded(mcode_config::WebBackendSettings),
+    /// The settings editor removed a web backend row.
+    SettingsBackendRemoved(usize),
+    /// The settings editor toggled a web backend.
+    SettingsBackendToggled(usize, bool),
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
@@ -213,6 +225,8 @@ pub enum DesktopAction {
     },
     /// The model turn failed without committing anything.
     ChatFailed(String),
+    /// Web search completed.
+    WebSearched(Vec<mcode_web::SearchResult>),
     /// Toggle light/dark theme.
     ToggleTheme,
     /// Clear the surfaced error.
@@ -324,6 +338,30 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.dirty = true;
             }
         }
+        DesktopAction::SettingsBackendAdded(backend) => {
+            if let Some(settings) = state.settings.as_mut()
+                && settings.web_backends.len() < mcode_config::MAX_WEB_BACKENDS
+            {
+                settings.web_backends.push(backend);
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::SettingsBackendRemoved(index) => {
+            if let Some(settings) = state.settings.as_mut()
+                && index < settings.web_backends.len()
+            {
+                settings.web_backends.remove(index);
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::SettingsBackendToggled(index, enabled) => {
+            if let Some(settings) = state.settings.as_mut()
+                && let Some(backend) = settings.web_backends.get_mut(index)
+            {
+                backend.enabled = enabled;
+                settings.dirty = true;
+            }
+        }
         DesktopAction::SettingsSaved(revision) => {
             if let Some(settings) = state.settings.as_mut() {
                 settings.revision = revision;
@@ -337,6 +375,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.providers_with_keys = keyed_ids;
             }
         }
+        DesktopAction::WebSearched(results) => state.web_results = results,
         DesktopAction::ToggleTheme => state.dark_theme = !state.dark_theme,
         DesktopAction::DismissError => state.error = None,
     }
