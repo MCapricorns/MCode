@@ -251,6 +251,14 @@ impl Workspace {
             BridgeReply::McpTools(Ok((server_id, tools))) => {
                 self.apply_action(DesktopAction::McpToolsListed { server_id, tools }, cx);
             }
+            BridgeReply::RolledBack(Ok(restored)) => {
+                let message = if restored.is_empty() {
+                    "nothing to roll back".to_owned()
+                } else {
+                    format!("restored {} file(s)", restored.len())
+                };
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))
             | BridgeReply::Conversation(Err(message))
@@ -260,7 +268,8 @@ impl Workspace {
             | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::ChatStarted(Err(message))
             | BridgeReply::WebSearched(Err(message))
-            | BridgeReply::McpTools(Err(message)) => {
+            | BridgeReply::McpTools(Err(message))
+            | BridgeReply::RolledBack(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
         }
@@ -416,6 +425,18 @@ impl Workspace {
                 cx,
             );
         }
+    }
+
+    pub(super) fn on_rollback(&mut self, cx: &mut Context<Workspace>) {
+        let Some(conversation) = self.vm.active.clone() else {
+            return;
+        };
+        self.dispatch(
+            BridgeCommand::RollbackWorkspace {
+                session_id: conversation.session_id,
+            },
+            cx,
+        );
     }
 
     pub(super) fn on_web_search(&mut self, query: &str, cx: &mut Context<Workspace>) {

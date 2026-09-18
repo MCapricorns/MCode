@@ -96,6 +96,11 @@ pub enum BridgeCommand {
         /// Server identity from settings.
         server_id: String,
     },
+    /// Roll every snapshotted file of one session back to its earliest state.
+    RollbackWorkspace {
+        /// Session identity spelling.
+        session_id: String,
+    },
 }
 
 /// A streaming event from an active model turn.
@@ -172,6 +177,8 @@ pub enum BridgeReply {
     WebSearched(Result<Vec<SearchResult>, String>),
     /// MCP tools listing for one server.
     McpTools(Result<(String, Vec<String>), String>),
+    /// Rollback outcome: restored absolute paths.
+    RolledBack(Result<Vec<String>, String>),
 }
 
 /// Handle to the core thread.
@@ -324,6 +331,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::ChatTurn { .. } => BridgeReply::ChatStarted(Err(message)),
         BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
         BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
+        BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
     }
 }
 
@@ -376,6 +384,10 @@ async fn handle(
         BridgeCommand::McpListTools { server_id } => {
             BridgeReply::McpTools(mcp_list_tools(home, server_id))
         }
+        BridgeCommand::RollbackWorkspace { session_id } => BridgeReply::RolledBack(
+            mcode_config::rollback_session(home, session_id)
+                .map_err(|error| render_config_error(&error)),
+        ),
     }
 }
 
@@ -755,9 +767,26 @@ async fn run_chat_turn(
         Some((Message::User(user), prefix)) => (prefix.to_vec(), user.clone()),
         _ => return Err("the turn has no user message to answer".to_owned()),
     };
+    // session_id is borrowed by the checkpoint closure and later moved into
+    // the pump; give each its own copy.
+    let session_id = session_id.to_owned();
 
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
-    let hooks = HookRunner::default();
+    let checkpoint_home = home.clone();
+    let checkpoint_cwd = cwd.clone();
+    let checkpoint_session = session_id.to_owned();
+    let hooks = HookRunner::default().with_before_tool(move |tool, args| {
+        // Mutating file tools snapshot their target before dispatch; a
+        // relative path resolves against the turn's working directory.
+        if !matches!(tool, "write" | "edit") {
+            return;
+        }
+        let Some(raw_path) = args.get("path").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        let path = checkpoint_cwd.join(raw_path);
+        let _ = mcode_config::checkpoint_file(&checkpoint_home, &checkpoint_session, &path);
+    });
     let cancel = CancellationToken::new();
     let mut agent = Agent::new(AgentConfig::new().with_system_prompt(
         "You are MCode, a coding agent. Use the provided tools to read, edit, and run code.          Answer concisely and explain what you did.",

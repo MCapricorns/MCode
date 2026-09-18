@@ -518,7 +518,7 @@ fn render_web(
 }
 
 /// Renders the changed-files panel fed by tool activity details.
-fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> gpui_kit::AnyElement {
+fn render_changes(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpui_kit::AnyElement {
     let changed: Vec<String> = workspace
         .vm()
         .active
@@ -539,16 +539,33 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> gpui_kit::A
         .gap_2()
         .child(
             div()
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child("Changes"),
+                .id("changes-header")
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child("Changes"),
+                )
+                .child(
+                    Button::new("changes-rollback")
+                        .label("Rollback")
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_rollback(cx);
+                        })),
+                ),
         )
         .when(changed.is_empty(), |this| {
             this.child(
                 div()
                     .text_xs()
                     .opacity(0.5)
-                    .child("File edits and diffs from tool runs appear here"),
+                    .child(
+                        "File edits and diffs from tool runs appear here.                          Mutating tools snapshot their targets first; Rollback                          restores every snapshotted file.",
+                    ),
             )
         })
         .children(changed.into_iter().map(|text| {

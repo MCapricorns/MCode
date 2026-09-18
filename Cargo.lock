@@ -4208,6 +4208,7 @@ name = "mcode-config"
 version = "0.0.1"
 dependencies = [
  "base64 0.23.1",
+ "blake3",
  "getrandom 0.4.3",
  "junction",
  "rustix",

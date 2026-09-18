@@ -18,6 +18,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod authority;
+mod checkpoints;
 mod error;
 mod home;
 mod host_vault;
@@ -34,6 +35,11 @@ mod transaction_id;
 #[doc(inline)]
 pub use authority::{
     ArtifactRef, AuthorityRevision, CanonicalVersion, Sha256Digest, SourceBindingId, TrustHighWater,
+};
+#[doc(inline)]
+pub use checkpoints::{
+    CheckpointEntry, MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOTS_PER_SESSION, checkpoint_file,
+    list_checkpoints, rollback_session,
 };
 #[doc(inline)]
 pub use error::{ConfigError, ConfigErrorKind};
@@ -59,7 +65,6 @@ pub use root_composition::{
     ROOT_COMPOSITION_FORMAT_VERSION, ROOT_COMPOSITION_KIND, RootComposition,
     RootCompositionDocument, UiSelection, read_root_composition, replace_root_composition,
 };
-#[doc(inline)]
 pub use secrets::{
     MAX_KEY_BYTES, MAX_SECRET_PROVIDERS, MAX_SECRETS_BYTES, ProviderSecrets,
     SECRETS_FORMAT_VERSION, SECRETS_KIND, SECRETS_PATH, read_provider_secrets,

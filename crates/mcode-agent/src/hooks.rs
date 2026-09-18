@@ -58,15 +58,43 @@ pub enum HookEvent {
 /// passes except when tests install [`HookRunner::with_test_gate`], which
 /// may rewrite arguments or block.
 type TestGate = Arc<dyn Fn(&mut Value) -> GateResult + Send + Sync>;
+type BeforeToolObserver = Arc<dyn Fn(&str, &Value) + Send + Sync>;
 
 pub struct HookRunner {
     test_gate: Option<TestGate>,
+    before_tool: Option<BeforeToolObserver>,
 }
 
 impl HookRunner {
     /// An empty runner.
     pub fn new() -> Self {
-        Self { test_gate: None }
+        Self {
+            test_gate: None,
+            before_tool: None,
+        }
+    }
+
+    /// Installs a synchronous observer fired after tool-call admission and
+    /// argument validation, immediately before dispatch. Observer panics
+    /// are contained and never affect the turn.
+    pub fn with_before_tool(
+        mut self,
+        observer: impl Fn(&str, &Value) + Send + Sync + 'static,
+    ) -> Self {
+        self.before_tool = Some(Arc::new(observer));
+        self
+    }
+
+    /// Fires the before-tool observer, if installed.
+    pub fn observe_before_tool(&self, tool: &str, args: &Value) {
+        if let Some(observer) = &self.before_tool {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                observer(tool, args);
+            }));
+            if outcome.is_err() {
+                eprintln!("mcode-agent: before_tool observer panicked (contained)");
+            }
+        }
     }
 
     /// Install a tool-call gate used by tests to rewrite or block arguments.
