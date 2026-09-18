@@ -12,12 +12,12 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - **core 与 UI 解耦**:core(`mcode-core/config/provider-api/tools/agent` + session 服务)不包含 UI/渲染/窗口概念;桌面只经 core 公开 typed API 访问会话、Provider、设置与凭据,不直接触文件/密钥/网络。
 - HTTP User-Agent 等请求标识可配置,默认沿用 pi agent 的 UA(pinned 参考),其余请求头策略仍由 core 统一管理。
 
-## 当前检查点:T10 桌面应用 + 设置模型
+## 当前检查点:T10 桌面应用 + 设置模型(已交付)
 
-- [ ] `mcode-desktop` GPUI 应用:Cursor/Codex 布局、会话侧栏(消费 T9 SessionService)、对话流 + composer(Provider 接入前展示会话事件)、上下文面板、浅色/深色切换。
-- [ ] core 设置存储:`~/.mcode` 下新的 strict 设置文档(providers、UA、web、mcp、usage、appearance),CAS 写入、vault 存密钥;桌面设置页可视化读写。
-- [ ] 纯状态 view-model 与 GPUI 渲染分离,view-model 无 GPU 依赖、可测。
-- [ ] 新增 `docs/design/06-desktop-ui.md` 冻结桌面布局、设置页结构与解耦边界。
+- [x] `mcode-desktop` GPUI 应用:Cursor/Codex 布局、会话侧栏(消费 T9 SessionService)、对话流 + composer(Provider 接入前展示会话事件)、上下文面板、浅色/深色切换。
+- [x] core 设置存储:`~/.mcode` 下新的 strict 设置文档(providers、UA、web、mcp、usage、appearance),CAS 写入、vault 存密钥;桌面设置页可视化读写。
+- [x] 纯状态 view-model 与 GPUI 渲染分离,view-model 无 GPU 依赖、可测。
+- [x] 桌面 UI 契约冻结(`docs/design/09-desktop-ui.md`)。
 
 ## 内置能力边界
 
@@ -39,6 +39,7 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - 桌面 UI:Zed GPUI + gpui-component;布局基线 Cursor/Codex 桌面版。
 - Ask/Todo:`juicesharp/rpiv-mono@d13677c` 的 `rpiv-ask-user-question`、`rpiv-todo`;1..4 questions、typed answers、preview、可见 todo 状态。
 - Usage/Provider 行为:`marckrenn/pi-sub@65deb56`(source/display 分层、quota windows);UA 默认值取 pi agent 的请求标识。
+- Provider/BYOK 架构:`MiniMax-AI/minimax-code`(vendored pi + 装配层;BYOK 三个通用 wire 协议、宿主注入 fetch、typed provider 错误、thinking signature 保真、模型发现回退链;笔记见 `docs/research/2026-09-18-minimax-code-notes.md`)。
 - Web:`dsh-web-querit`、`pi-querit-search`、`pi-web-access` 的 bounded reader/sanitization 行为。
 - Subagents:Codex/Grok 异步委派模型 + 用户现有实现中可靠的队列、worktree、恢复机制。
 
