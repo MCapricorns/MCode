@@ -370,10 +370,10 @@ fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta: String) {
 /// Maps one committed session event to its conversation projection.
 #[must_use]
 pub fn project_entry(
-    event: &mcode_plugin_host::session::SessionEvent,
+    event: &mcode_session::session::SessionEvent,
     text: String,
 ) -> ConversationEntry {
-    use mcode_plugin_host::session::EventKind;
+    use mcode_session::session::EventKind;
     ConversationEntry {
         event_id: event.event_id.as_str().to_owned(),
         kind: match event.kind {

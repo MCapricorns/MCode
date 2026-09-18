@@ -16,11 +16,11 @@ use mcode_config::{
     replace_app_settings, replace_provider_secrets,
 };
 use mcode_core::Message;
-use mcode_plugin_host::session::{
-    self, BranchId, EventKind, HeadStamp, SessionError, SessionId, SessionService,
-};
 use mcode_provider_api::{Provider as _, StreamEvent as ProviderStreamEvent};
 use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
+use mcode_session::session::{
+    self, BranchId, EventKind, HeadStamp, SessionError, SessionId, SessionService,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -420,7 +420,7 @@ async fn open_conversation(
     let branch_id = root.branch_id.clone();
     let snapshot_head = root.head.clone();
     let mut entries = Vec::new();
-    let mut after: Option<mcode_plugin_host::session::SessionEventId> = None;
+    let mut after: Option<mcode_session::session::SessionEventId> = None;
     loop {
         let page = service
             .read(session, &branch_id, &snapshot_head, after.as_ref(), 256)
@@ -683,7 +683,7 @@ async fn append_assistant(
 
 /// Projects a serialized assistant payload into a display entry.
 fn project_assistant(
-    event_id: &mcode_plugin_host::session::SessionEventId,
+    event_id: &mcode_session::session::SessionEventId,
     payload: &[u8],
 ) -> ConversationEntry {
     let mut text = String::new();
@@ -713,7 +713,7 @@ fn project_assistant(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcode_plugin_host::session::EventKind;
+    use mcode_session::session::EventKind;
 
     fn home() -> (tempfile::TempDir, HomeLayout) {
         let parent = tempfile::tempdir().expect("parent");

@@ -8,12 +8,8 @@ members = [
     "crates/mcode-tools",
     "crates/mcode-agent",
     "crates/mcode-plugin-api",
-    "crates/mcode-plugin-host",
-    "crates/mcode-render",
-    "crates/mcode-tui",
-    "crates/mcode-cli",
+    "crates/mcode-session",
     "crates/mcode-desktop",
-    "crates/mcode",
 ]
 [workspace.package]
 version = "0.0.1"
@@ -32,7 +28,6 @@ async-trait = "0.1"
 schemars = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1.9"
-anyhow = "1"
 reqwest = { version = "0.13", features = ["stream"] }
 futures-util = "0.3"
 bytes = "1"
@@ -57,24 +52,8 @@ sha2 = "0.11"
 fs2 = "0.4"
 getrandom = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-clap = { version = "4", features = ["derive", "env"] }
-assert_cmd = "2"
-predicates = "3"
-ratatui = { version = "0.30", default-features = false }
-crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
-unicode-width = "0.2"
-unicode-segmentation = "1"
 semver = { version = "1", features = ["serde"] }
 syn = { version = "2", features = ["full", "visit"] }
-wasmtime = { version = "48.0.1", default-features = false, features = [
-    "std",
-    "runtime",
-    "component-model",
-    # Required for store-aware async Host bindings; guest concurrency stays disabled.
-    "component-model-async",
-    "cranelift",
-] }
-wat = "1.258.0"
 # tree-sitter 0.25.10: Parser::set_language(&Language), Query::new(&Language, &str),
 # QueryCursor::matches + StreamingIterator. Grammar crates export LanguageFn via
 # LANGUAGE / LANGUAGE_TYPESCRIPT / LANGUAGE_TSX; pin exact so ABI stays compatible.

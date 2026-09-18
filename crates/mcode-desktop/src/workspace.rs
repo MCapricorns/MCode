@@ -5,7 +5,7 @@ use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Bounds, Context, Entity, Pixels, Window, WindowBounds};
 use gpui_kit::{px, size};
 use mcode_config::HomeLayout;
-use mcode_plugin_host::session::{BranchId, HeadStamp, SessionEventId, SessionId};
+use mcode_session::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 
 use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 use crate::ui::ProviderForm;
