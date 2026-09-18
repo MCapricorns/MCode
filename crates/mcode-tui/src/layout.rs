@@ -2,9 +2,6 @@
 //!
 //! The renderer and scroll actions consume the same calculated transcript
 //! region so wrapping, page steps, and offset clamping stay aligned.
-
-// Rust guideline compliant 2026-08-27.
-
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::Block;
 

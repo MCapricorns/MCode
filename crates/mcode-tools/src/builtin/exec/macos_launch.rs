@@ -5,9 +5,6 @@
 //! retained pin stays `O_RDONLY` for digest rechecks. After file actions the
 //! only `posix_spawn` path is `/dev/fd/3` (`HOLD_FD`); there is no
 //! canonical-path fallback.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd};

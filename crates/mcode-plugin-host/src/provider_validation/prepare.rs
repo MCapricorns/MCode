@@ -1,7 +1,4 @@
 //! Prepare-input, message-reducer, image/proof, and header validation.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{

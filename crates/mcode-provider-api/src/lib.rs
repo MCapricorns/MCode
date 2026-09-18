@@ -15,5 +15,3 @@ pub use error::{ProviderError, ProviderErrorKind};
 pub use provider::{MAX_REQUEST_ENCODED_BYTES, Provider, Request, StreamEvent};
 #[doc(inline)]
 pub use stream::{EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES};
-
-// Rust guideline compliant 2026-08-29.

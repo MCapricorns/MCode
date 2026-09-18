@@ -6,9 +6,6 @@
 //! inactive, or whose key is claimed by a later registration, are not
 //! advertised. Reconfigured bindings are therefore shown truthfully and
 //! unbound actions never claim built-in keys.
-
-// Rust guideline compliant 2026-08-26.
-
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::actions::{ActionId, ActionRegistry, KeyPattern};

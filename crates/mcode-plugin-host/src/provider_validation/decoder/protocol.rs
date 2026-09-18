@@ -1,7 +1,4 @@
 //! Pure decoder protocol, cumulative-limit, and backpressure reducer.
-
-// Rust guideline compliant 2026-08-30.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     DecoderPull, FrameAcceptance, NormalizedEvent, ProviderError, ResponseFrame,
 };

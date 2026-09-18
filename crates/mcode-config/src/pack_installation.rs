@@ -4,8 +4,6 @@
 //! not inspect payloads, establish inventory completeness, verify signatures or
 //! relationships, or install or activate artifacts.
 
-// Rust guideline compliant 2026-08-29
-
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 

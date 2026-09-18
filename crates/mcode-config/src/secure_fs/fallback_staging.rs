@@ -1,7 +1,5 @@
 //! Fail-closed staging backend for unsupported operating systems.
 
-// Rust guideline compliant 2026-08-29
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 

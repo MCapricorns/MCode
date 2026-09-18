@@ -4,9 +4,6 @@
 //! claims atomically, and mints capability-bound stamps after validating the
 //! registered owner, route, request, turn, and terminal state. It contains no
 //! guest codec, transport, credential, URL, header, socket, or raw handle.
-
-// Rust guideline compliant 2026-08-29.
-
 mod identity;
 mod ledger;
 mod stamps;

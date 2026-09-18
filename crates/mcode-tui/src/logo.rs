@@ -4,9 +4,6 @@
 //! escapes or concrete colors. Wide terminals receive a horizontal lockup,
 //! compact terminals receive a small terminal badge, and no-color or
 //! non-Unicode terminals receive an ASCII badge.
-
-// Rust guideline compliant 2026-08-26.
-
 use mcode_render::{display_width, truncate_display_width};
 
 use crate::labels::{LOGO_TAGLINE, LOGO_WORKFLOW};

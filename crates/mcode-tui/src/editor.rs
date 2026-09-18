@@ -3,9 +3,6 @@
 //! The editor stores UTF-8 text and keeps the caret on an extended grapheme
 //! boundary. Display width is measured with [`mcode_render::display_width`]
 //! (unicode-width). The type performs no I/O.
-
-// Rust guideline compliant 2026-08-27.
-
 use mcode_render::{display_width, prev_grapheme_boundary, sanitize_terminal_text};
 
 /// Multiline input buffer with a grapheme-cluster caret.

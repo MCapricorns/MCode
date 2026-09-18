@@ -1,7 +1,4 @@
 //! Shared line-boundary and line-range primitives for edit operations.
-
-// Rust guideline compliant 2026-08-27.
-
 use super::engine::Planned;
 use crate::tool::ToolError;
 

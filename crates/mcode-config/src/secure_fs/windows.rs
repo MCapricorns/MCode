@@ -1,7 +1,5 @@
 //! Windows no-reparse directory bootstrap with exact protected DACLs.
 
-// Rust guideline compliant 2026-08-28
-
 #[path = "windows_staging.rs"]
 pub(crate) mod staging;
 #[path = "windows_acl.rs"]

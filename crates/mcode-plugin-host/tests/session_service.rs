@@ -1,7 +1,4 @@
 //! End-to-end session service tests over a real owned home.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::path::Path;
 
 use mcode_config::HomeLayout;

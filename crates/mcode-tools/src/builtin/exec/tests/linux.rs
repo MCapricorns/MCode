@@ -1,7 +1,4 @@
 //! Linux x86_64 GNU native structured-exec tests.
-
-// Rust guideline compliant 2026-08-27.
-
 use super::*;
 
 fn require(path: &str) -> bool {

@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-28
-
 use std::ffi::OsStr;
 use std::fs;
 use std::fs::OpenOptions;

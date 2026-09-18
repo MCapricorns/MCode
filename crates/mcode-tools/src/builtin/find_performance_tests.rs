@@ -6,9 +6,6 @@
 //! `listing_key_allocations`, and `retained_handle_peak`. `rss_bytes` is
 //! explicitly unavailable because process-wide RSS cannot isolate one
 //! in-crate invocation and this harness does not install a global allocator.
-
-// Rust guideline compliant 2026-08-28.
-
 use std::fs::File;
 use std::time::{Duration, Instant};
 

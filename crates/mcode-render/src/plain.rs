@@ -3,9 +3,6 @@
 //! The renderer deliberately emits no ANSI styling. It strips terminal
 //! control sequences from data, truncates long logical lines by display
 //! columns, and applies fixed width and line-count budgets.
-
-// Rust guideline compliant 2026-08-27.
-
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 

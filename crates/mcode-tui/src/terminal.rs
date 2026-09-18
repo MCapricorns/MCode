@@ -4,9 +4,6 @@
 //! this module reads or prints environment values. OSC 11 probing is optional,
 //! writes the real protocol query, and waits through a bounded channel timeout;
 //! it does not enable raw mode or retain terminal objects.
-
-// Rust guideline compliant 2026-08-26.
-
 use std::io::{self, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;

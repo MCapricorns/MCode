@@ -62,5 +62,3 @@ mod tests {
         assert!(serde_json::from_value::<ToolSpec>(encoded).is_err());
     }
 }
-
-// Rust guideline compliant 2026-08-26

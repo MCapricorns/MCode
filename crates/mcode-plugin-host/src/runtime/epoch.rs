@@ -1,7 +1,4 @@
 //! Private monotonic epoch interruption and deadline policy.
-
-// Rust guideline compliant 2026-08-30.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};

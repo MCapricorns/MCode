@@ -6,9 +6,6 @@
 //! identifier so restore can put it back. Unicode rendering also requires a
 //! non-raster console font, or virtual-terminal output when font metadata is
 //! unavailable. The input page is never modified.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::fmt;
 use std::io;
 use std::sync::Arc;

@@ -693,5 +693,3 @@ mod tests {
         assert!(safe.chars().count() < 540);
     }
 }
-
-// Rust guideline compliant 2026-08-29.

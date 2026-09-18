@@ -1,7 +1,4 @@
 //! Checked logical-charge tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::ValidationError;
 use super::charge::LogicalCharge;
 

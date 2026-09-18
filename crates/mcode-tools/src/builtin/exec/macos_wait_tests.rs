@@ -1,7 +1,4 @@
 //! Deterministic PID-authority tests for macOS suspended verification.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};

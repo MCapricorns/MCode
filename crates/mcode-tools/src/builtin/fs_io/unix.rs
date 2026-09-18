@@ -5,9 +5,6 @@
 //! directories) plus `fstat`/`statat` device and type checks. Android shares
 //! a compile-time branch but is not a product target. Hardlinks are allowed;
 //! callers detach them by publishing a new inode.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};

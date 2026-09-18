@@ -1,7 +1,4 @@
 //! Request policy, source debt, and per-wire projection rules.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::collections::BTreeSet;
 
 use crate::provider_validation::catalog::{is_supported, same_selection};

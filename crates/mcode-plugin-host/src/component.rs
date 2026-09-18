@@ -1,7 +1,4 @@
 //! Scanner-first binary preflight for all sole-current component worlds.
-
-// Rust guideline compliant 2026-08-30.
-
 use std::sync::OnceLock;
 
 use wasmtime::component::Component;

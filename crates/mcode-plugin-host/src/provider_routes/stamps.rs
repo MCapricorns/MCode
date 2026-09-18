@@ -1,7 +1,4 @@
 //! Immutable provider ownership, route leases, and usage stamps.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

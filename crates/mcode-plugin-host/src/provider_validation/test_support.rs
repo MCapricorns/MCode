@@ -1,7 +1,4 @@
 //! Shared construction of generated Provider DTO test values.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     CacheRetention, CapabilitySupport, CatalogEntry, InputModality, ModelSelection, PrepareInput,
     Reasoning, ReasoningCapability, ToolCapability, ToolChoice, WireJsonDocument, WireJsonNode,

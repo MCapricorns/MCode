@@ -117,5 +117,3 @@ fn resume_without_prompt_prints_usage() {
     assert!(stderr.contains("Usage:"), "{stderr}");
     assert!(stderr.contains("resume <SESSION> <PROMPT>"), "{stderr}");
 }
-
-// Rust guideline compliant 2026-08-28

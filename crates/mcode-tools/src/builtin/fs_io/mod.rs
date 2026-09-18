@@ -5,9 +5,6 @@
 //! accepted only when they are lexically and handle-proven inside that cwd.
 //! Hidden names are readable and writable; Search ignore policy is not applied.
 //! Prepared handles are host-owned and are never re-exported to WASM.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, ErrorKind};

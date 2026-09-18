@@ -4,8 +4,6 @@
 //! spelling. Documents built on these values keep their own exact schemas;
 //! this module defines no file format.
 
-// Rust guideline compliant 2026-09-05
-
 use std::fmt::{self, Display, Formatter};
 
 use semver::Version;

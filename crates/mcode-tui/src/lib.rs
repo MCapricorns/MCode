@@ -4,9 +4,6 @@
 //! injectable [`ActionRegistry`] for crossterm input, pure [`Action`] reduction,
 //! data-only [`Effect`] requests, semantic theme resolution, and Ratatui
 //! drawing. It does not modify the `mcode` binary or connect to a session actor.
-
-// Rust guideline compliant 2026-08-27.
-
 pub mod actions;
 pub mod app_view;
 pub mod editor;

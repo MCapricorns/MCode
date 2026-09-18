@@ -529,7 +529,6 @@ mod tests {
     ///
     /// Checked through `u64` so Linux Clippy does not see a same-type
     /// `try_from` and Darwin cannot silently truncate.
-    // Rust guideline compliant 2026-08-27
     #[cfg(unix)]
     fn unix_mode_t(bits: u32) -> libc::mode_t {
         libc::mode_t::try_from(u64::from(bits)).expect("Unix permission bits fit mode_t")

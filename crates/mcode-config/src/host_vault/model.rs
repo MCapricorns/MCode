@@ -5,8 +5,6 @@
 //! zeroizing allocations. Every return path drops these owners before the input
 //! or replacement leaves its scope.
 
-// Rust guideline compliant 2026-08-29
-
 mod parser;
 mod serializer;
 

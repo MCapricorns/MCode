@@ -6,9 +6,6 @@
 //! exact ABI shape; `reserve-event`, `reserve-branch`, and `load-event` are
 //! first-party-only extensions that expose the Host-side reservation issuance
 //! and payload reads the external world reaches through Host imports.
-
-// Rust guideline compliant 2026-09-18.
-
 use super::ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
 
 /// Maximum number of branches in one session ledger.

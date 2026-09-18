@@ -1,7 +1,4 @@
 //! Exhaustive closed source, transform, enum, and wire matrix tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::super::adapter::types::{
     AdapterEnumSource, AdapterScalarSource, AdapterTransform, AdapterWireId,
 };

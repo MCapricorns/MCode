@@ -207,5 +207,3 @@ fn assert_shape(resolve: &Resolve, package_id: PackageId) {
     );
     assert_denied_types(resolve);
 }
-
-// Rust guideline compliant 2026-08-30.

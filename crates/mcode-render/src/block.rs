@@ -3,9 +3,6 @@
 //! These types describe presentation intent without selecting a terminal,
 //! web, or headless renderer. Fields remain owned so blocks can cross task,
 //! process, and persistence boundaries through serde.
-
-// Rust guideline compliant 2026-08-26.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

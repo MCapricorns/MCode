@@ -1,7 +1,4 @@
 //! Closed `AdapterContractV1` validation and interpretation.
-
-// Rust guideline compliant 2026-08-29.
-
 pub(super) mod digest;
 pub(super) mod evaluate;
 mod header;

@@ -839,5 +839,3 @@ mod stream_tests {
         assert!(receiver.try_recv().is_err(), "abort must not emit an error");
     }
 }
-
-// Rust guideline compliant 2026-08-29.

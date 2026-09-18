@@ -6,9 +6,6 @@
 //! followed; the regular target is opened and retained. Identity is the
 //! canonical path, native file identity, and SHA-256 digest of that opened
 //! target.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};

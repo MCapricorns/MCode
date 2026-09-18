@@ -4,8 +4,6 @@
 //! one persistent lowercase hexadecimal spelling. This module intentionally
 //! exposes generation and formatting but no public parsing or raw construction.
 
-// Rust guideline compliant 2026-08-29
-
 use std::fmt::{self, Display, Formatter};
 
 use crate::{ConfigError, ConfigErrorKind};

@@ -1,7 +1,5 @@
 //! Tests strict private Host-vault mechanics.
 
-// Rust guideline compliant 2026-08-29
-
 use std::borrow::Cow;
 use std::fs;
 use std::sync::{Arc, Barrier};

@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-27.
-
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, MutexGuard};
 

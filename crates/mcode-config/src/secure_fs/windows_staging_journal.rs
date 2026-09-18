@@ -1,7 +1,5 @@
 //! Windows staging journal publication and temporary-file lifecycle.
 
-// Rust guideline compliant 2026-08-29
-
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};

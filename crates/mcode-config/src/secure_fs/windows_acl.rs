@@ -1,7 +1,5 @@
 //! Exact owner and protected-DACL handling for Windows owned directories.
 
-// Rust guideline compliant 2026-08-28
-
 use std::fs::File;
 use std::io;
 use std::mem::size_of;

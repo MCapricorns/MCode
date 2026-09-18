@@ -1,7 +1,4 @@
 //! Contained spawn, output collection, and teardown for structured exec.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::future::Future;
 use std::pin::Pin;
 use std::process::ExitStatus;

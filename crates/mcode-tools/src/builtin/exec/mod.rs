@@ -12,9 +12,6 @@
 //! await terminate-and-reap; dropping the future transfers cleanup ownership.
 //! Launch is Windows x86_64, Linux x86_64 GNU, and macOS Apple Silicon.
 //! Other Unix (musl, Android, BSD) is unsupported.
-
-// Rust guideline compliant 2026-08-27.
-
 #[cfg(any(all(windows, target_arch = "x86_64"), test))]
 mod argv;
 mod env;

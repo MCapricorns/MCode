@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-27.
-
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use mcode_tui::{
     Action, ActionBinding, ActionId, ActionRegistry, AppView, ColorCapability, Effect,

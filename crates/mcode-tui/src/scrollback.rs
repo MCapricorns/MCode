@@ -3,9 +3,6 @@
 //! Replacement keeps only the newest blocks. Materialization walks history
 //! only until the requested window is filled, clamps oversized offsets, and
 //! never walks blocks when the viewport has zero width or zero height.
-
-// Rust guideline compliant 2026-08-27.
-
 use mcode_render::{MAX_PLAIN_WIDTH, RenderBlock};
 
 use crate::state::Viewport;

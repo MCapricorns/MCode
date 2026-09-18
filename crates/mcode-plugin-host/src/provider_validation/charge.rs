@@ -1,7 +1,4 @@
 //! Checked WIT logical-charge accounting.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::{ValidationError, ValidationResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

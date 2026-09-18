@@ -1,7 +1,4 @@
 //! Store-free binary scanner and nested core-resource policy.
-
-// Rust guideline compliant 2026-08-30.
-
 use wasmparser::{
     Encoding, FuncValidatorAllocations, MemoryType, Parser, Payload, TableType, TypeRef,
     ValidPayload, Validator, WasmFeatures,

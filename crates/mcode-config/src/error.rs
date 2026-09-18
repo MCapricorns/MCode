@@ -1,7 +1,5 @@
 //! Value-redacted errors returned by configuration operations.
 
-// Rust guideline compliant 2026-08-29
-
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::error::Error as StdError;
 use std::fmt::{self, Debug, Display, Formatter};

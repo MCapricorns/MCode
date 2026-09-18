@@ -5,9 +5,6 @@
 //! wrapped; `n` backslashes immediately before a quote become `2n+1`
 //! backslashes plus the escaped quote, and `n` trailing backslashes before a
 //! closing quote become `2n`.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::OsStr;
 
 use crate::tool::ToolError;

@@ -123,5 +123,3 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 }
-
-// Rust guideline compliant 2026-08-28

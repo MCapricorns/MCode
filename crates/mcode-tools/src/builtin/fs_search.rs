@@ -40,9 +40,6 @@
 //!
 //! Everything stays in-process (handle-relative walk plus ripgrep's
 //! search core); no external `rg` or `fd` executable is used.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;

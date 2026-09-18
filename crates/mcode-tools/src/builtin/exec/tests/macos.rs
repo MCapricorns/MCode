@@ -1,7 +1,4 @@
 //! macOS native structured-exec tests.
-
-// Rust guideline compliant 2026-08-27.
-
 use super::*;
 
 #[tokio::test]

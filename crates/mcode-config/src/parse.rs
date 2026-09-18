@@ -1,7 +1,5 @@
 //! Strict, bounded JSON parsing with duplicate-key detection.
 
-// Rust guideline compliant 2026-08-26
-
 use std::collections::BTreeSet;
 use std::fmt::{self, Formatter};
 

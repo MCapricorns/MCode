@@ -1,7 +1,5 @@
 //! Exercises adversarial Host-vault source mutations.
 
-// Rust guideline compliant 2026-08-29
-
 use std::fs;
 
 use super::{audit_source, collect_production_sources, guarded_type_violations};

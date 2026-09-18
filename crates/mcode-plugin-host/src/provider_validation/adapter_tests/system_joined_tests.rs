@@ -1,7 +1,4 @@
 //! End-to-end system collection and join-composite alternatives.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::super::adapter::json::AdapterJson;
 use super::super::adapter::types::{
     AdapterCollection, AdapterContractV1, AdapterModelSource, AdapterPresence,

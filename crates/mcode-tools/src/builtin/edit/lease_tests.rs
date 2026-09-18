@@ -3,9 +3,6 @@
 //! Planning and no-op paths must not hold the process-wide write/edit/exec
 //! lease. Publication takes the lease and keeps it on the write worker even
 //! when the caller future is dropped.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

@@ -3,8 +3,6 @@
 //! This standalone document does not participate in layered configuration,
 //! merge patch, project configuration, activation, or migration.
 
-// Rust guideline compliant 2026-08-29
-
 use std::fmt::{self, Display, Formatter};
 
 use serde::ser::SerializeStruct;

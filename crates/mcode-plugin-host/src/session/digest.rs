@@ -6,9 +6,6 @@
 //! new-branch-id`; every string is `u32be byte-length || UTF-8`, the kind is a
 //! zero-based `u8`, and a head is a zero-based `u8` tag where `event` is
 //! followed by the framed event ID. All length conversions are checked.
-
-// Rust guideline compliant 2026-09-18.
-
 use sha2::{Digest, Sha256};
 
 use super::dto::{BranchMutationKind, HeadStamp};

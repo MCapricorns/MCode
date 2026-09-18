@@ -197,5 +197,3 @@ Rules:\n\
         );
     }
 }
-
-// Rust guideline compliant 2026-08-28.

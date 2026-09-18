@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-27.
-
 use super::*;
 use crate::builtin::exec::{ResolveError, prepare_from_snapshot, snapshot_child_environment};
 use crate::builtin::test_support::{run_dyn, text_of};

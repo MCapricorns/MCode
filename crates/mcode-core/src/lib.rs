@@ -18,5 +18,3 @@ pub use message::{
     ThinkingBlock, ToolCall, ToolResultMessage, Usage, UserMessage,
 };
 pub use tool::ToolSpec;
-
-// Rust guideline compliant 2026-08-26

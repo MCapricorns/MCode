@@ -22,5 +22,3 @@ fn provider_constants_identify_the_sole_current_contract() {
         "mcode:provider-pack/provider-api@0.0.1"
     );
 }
-
-// Rust guideline compliant 2026-08-30.

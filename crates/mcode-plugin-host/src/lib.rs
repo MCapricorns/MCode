@@ -9,9 +9,6 @@
 //! fence. Private Provider bindings and pure DTO validators remain Store-free.
 //! The runtime module also carries the first-party typed task runtime
 //! substrate shared by every built-in feature family.
-
-// Rust guideline compliant 2026-09-05.
-
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![forbid(unsafe_code)]

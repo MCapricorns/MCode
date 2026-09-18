@@ -83,5 +83,3 @@ fn assert_interface_item(item: (&WorldKey, &WorldItem), expected: wit_parser::In
     };
     assert_eq!(*id, expected);
 }
-
-// Rust guideline compliant 2026-08-30.

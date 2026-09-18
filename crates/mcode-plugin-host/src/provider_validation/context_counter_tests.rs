@@ -1,7 +1,4 @@
 //! Closed context-counter registry and measurement contract tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::cell::Cell;
 
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::ModelSelection;

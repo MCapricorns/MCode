@@ -6,8 +6,6 @@
 //! never canonicalize or follow links, and do not depend on the current
 //! directory.
 
-// Rust guideline compliant 2026-08-29
-
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 

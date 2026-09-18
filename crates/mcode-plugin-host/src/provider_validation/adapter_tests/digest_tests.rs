@@ -1,7 +1,4 @@
 //! Typed adapter digest ordering mutation tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::OrdinaryHeader;
 
 use super::super::adapter::digest::{body_digest, contract_digest, ordinary_header_digest};

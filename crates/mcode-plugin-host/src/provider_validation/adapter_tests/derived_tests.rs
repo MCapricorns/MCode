@@ -1,7 +1,4 @@
 //! Checked derived-string and provenance tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     ImageMediaType, ImageMetadata, ImageView, WireJsonDocument, WireJsonField, WireJsonNode,
     WireJsonObject,

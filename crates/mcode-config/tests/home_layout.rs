@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-29
-
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 

@@ -1,7 +1,4 @@
 //! Prepare-input reducer, capability, sidecar-local, and header tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     AssistantBlock, AssistantMessage, CapabilitySupport, EnabledReasoning, ImageMediaType,
     ImageMetadata, ImageView, Message, OrdinaryHeader, PreparedRequest, Reasoning, ReasoningBlock,

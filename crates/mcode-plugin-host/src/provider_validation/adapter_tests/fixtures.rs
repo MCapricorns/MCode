@@ -1,7 +1,4 @@
 //! Trusted in-memory dummy adapter fixtures.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     CatalogEntry, OrdinaryHeader, PrepareInput, WireJsonArray, WireJsonDocument, WireJsonField,
     WireJsonNode, WireJsonObject,

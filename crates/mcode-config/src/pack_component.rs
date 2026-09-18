@@ -4,8 +4,6 @@
 //! trust state, or activation state. Callers select the typed family, Pack ID,
 //! and canonical version; this module owns the sole artifact path mapping.
 
-// Rust guideline compliant 2026-08-31
-
 use std::path::PathBuf;
 
 use zeroize::Zeroizing;

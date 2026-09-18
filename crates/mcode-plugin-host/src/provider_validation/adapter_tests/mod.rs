@@ -1,7 +1,4 @@
 //! Closed adapter contract validator tests.
-
-// Rust guideline compliant 2026-08-29.
-
 mod derived_tests;
 mod digest_tests;
 mod exhaustive_fixture;

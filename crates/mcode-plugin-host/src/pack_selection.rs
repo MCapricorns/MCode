@@ -1,7 +1,4 @@
 //! Generation-bound issuance for exact configured Pack selections.
-
-// Rust guideline compliant 2026-08-31.
-
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex, MutexGuard};

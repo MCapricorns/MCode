@@ -173,5 +173,3 @@ mod tests {
         }
     }
 }
-
-// Rust guideline compliant 2026-08-26

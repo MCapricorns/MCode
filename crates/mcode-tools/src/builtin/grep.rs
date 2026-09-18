@@ -20,9 +20,6 @@
 //! ordinary per-file I/O produces a model-visible incomplete lower-bound
 //! notice. Paths use `/`, and cancellation or future drop is supervised
 //! until the worker is interrupted and joined.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{self, Read};

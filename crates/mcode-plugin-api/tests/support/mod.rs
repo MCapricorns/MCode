@@ -559,5 +559,3 @@ fn type_shape(resolve: &Resolve, ty: &Type) -> String {
         other => panic!("unexpected field type {other:?}"),
     }
 }
-
-// Rust guideline compliant 2026-08-30.

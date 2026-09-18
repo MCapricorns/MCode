@@ -3,9 +3,6 @@
 //! MCode uses `pwsh.exe` from `PATH` when it can be spawned. If it is absent,
 //! this module installs a pinned Microsoft portable ZIP below the MCode home
 //! directory. The compiled JSON matrix fixes every URL, size, and SHA-256.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};

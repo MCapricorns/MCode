@@ -1,7 +1,4 @@
 //! Lifecycle, lease, and public-contract tests for structured exec.
-
-// Rust guideline compliant 2026-08-27.
-
 use super::*;
 use crate::builtin::edit::EditTool;
 use crate::builtin::fs_io::{install_pre_publish_hook, serialize_pre_publish_tests};

@@ -4,8 +4,6 @@
 //! reparses. The owned root and each child are opened or created relative to a
 //! parent handle with `FILE_OPEN_REPARSE_POINT`.
 
-// Rust guideline compliant 2026-08-28
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;

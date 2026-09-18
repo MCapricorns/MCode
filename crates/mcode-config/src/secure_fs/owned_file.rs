@@ -4,8 +4,6 @@
 //! relative path through [`HomeLayout`], then delegates handle-relative native
 //! operations to the active platform implementation.
 
-// Rust guideline compliant 2026-08-29
-
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 

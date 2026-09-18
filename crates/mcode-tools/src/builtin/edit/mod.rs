@@ -5,9 +5,6 @@
 //! sorted by byte range, and rejected on ambiguity, UTF-8 boundary errors,
 //! overlap, or empty search matches. `fuzzy` commits only a unique-best
 //! normalized match; `ast` replaces tree-sitter capture ranges only.
-
-// Rust guideline compliant 2026-08-27.
-
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;

@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-09-05.
-
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{TryRecvError, sync_channel};

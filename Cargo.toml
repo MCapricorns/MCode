@@ -11,6 +11,7 @@ members = [
     "crates/mcode-render",
     "crates/mcode-tui",
     "crates/mcode-cli",
+    "crates/mcode-desktop",
     "crates/mcode",
 ]
 [workspace.package]

@@ -3,9 +3,6 @@
 //! Streams are drained together while a fixed retained prefix is kept. The
 //! retained size covers a UTF-16 BOM plus two raw bytes per rendered UTF-8
 //! byte so truncation remains observable after decoding.
-
-// Rust guideline compliant 2026-08-27.
-
 #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 use std::process::ExitStatus;
 

@@ -1,7 +1,5 @@
 //! Unix anchored private regular-file transactions.
 
-// Rust guideline compliant 2026-08-29
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};

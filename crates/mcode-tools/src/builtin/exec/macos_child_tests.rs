@@ -1,7 +1,4 @@
 //! macOS child wait and pipe tests.
-
-// Rust guideline compliant 2026-08-27.
-
 use tokio::io::AsyncReadExt as _;
 
 use super::*;

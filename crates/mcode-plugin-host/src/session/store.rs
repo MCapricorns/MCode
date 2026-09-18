@@ -8,9 +8,6 @@
 //! them. A torn log tail beyond the committed length is discarded during
 //! recovery; any structural or digest failure inside the committed prefix is
 //! corruption and fails closed.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};

@@ -2,9 +2,6 @@
 //!
 //! This module performs only local, deterministic validation. It has no
 //! Store, resource, route, credential, transport, cache, or network state.
-
-// Rust guideline compliant 2026-08-30.
-
 #![expect(
     dead_code,
     reason = "T7 pure validators are private foundations consumed by the T8 Provider runtime"

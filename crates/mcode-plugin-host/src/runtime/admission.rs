@@ -1,7 +1,4 @@
 //! Atomic Host-visible resource and operation admission.
-
-// Rust guideline compliant 2026-08-30.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

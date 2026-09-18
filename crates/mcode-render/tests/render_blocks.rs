@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-27.
-
 use mcode_render::{
     Diff, DiffHunk, DiffLine, DiffLineKind, ErrorBlock, MAX_PLAIN_LINES, MAX_PLAIN_WIDTH, Progress,
     ProgressState, RenderBlock, Table, Tree, TreeNode, display_width, next_grapheme_boundary,

@@ -2,9 +2,6 @@
 //!
 //! The state contains only owned data and capability-independent choices. It
 //! has no channels, terminal handles, clocks, or callbacks.
-
-// Rust guideline compliant 2026-08-27.
-
 use mcode_render::RenderBlock;
 
 use crate::editor::LineEditor;

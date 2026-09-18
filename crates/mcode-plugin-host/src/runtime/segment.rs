@@ -1,7 +1,4 @@
 //! Cancellation-safe guest-active segment ownership.
-
-// Rust guideline compliant 2026-08-31.
-
 use wasmtime::Store;
 #[cfg(test)]
 use wasmtime::{TypedFunc, WasmParams, WasmResults};

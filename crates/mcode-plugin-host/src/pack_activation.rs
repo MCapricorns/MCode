@@ -1,7 +1,4 @@
 //! Generation-bound atomic Pack set preparation and publication.
-
-// Rust guideline compliant 2026-09-05.
-
 use std::sync::Arc;
 
 use mcode_config::{HomeLayout, PluginFamily};

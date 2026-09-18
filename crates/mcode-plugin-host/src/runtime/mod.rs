@@ -5,9 +5,6 @@
 //! this module so callers cannot bypass the runtime invariants. The module also
 //! carries the first-party typed task runtime substrate shared by every
 //! built-in feature family.
-
-// Rust guideline compliant 2026-09-05.
-
 pub(crate) mod admission;
 mod epoch;
 mod limits;

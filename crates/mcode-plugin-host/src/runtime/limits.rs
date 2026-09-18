@@ -1,7 +1,4 @@
 //! Monotone aggregate and per-resource Wasmtime Store limits.
-
-// Rust guideline compliant 2026-08-30.
-
 use wasmtime::{ResourceLimiter, ResourceLimiterAsync, StoreLimits, StoreLimitsBuilder};
 
 // These fixed T8 policy values bound every Store; changing one changes guest

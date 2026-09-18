@@ -11,9 +11,6 @@
 //! original `OsString` as the complete tie-break, and visited best-first by the
 //! full rendered path. Resolution and walk share one [`WalkLimiter`],
 //! including the handle budget.
-
-// Rust guideline compliant 2026-08-26.
-
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ffi::{OsStr, OsString};

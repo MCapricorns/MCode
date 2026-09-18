@@ -1,7 +1,4 @@
 //! Shared fixtures for pure decoder reducer tests.
-
-// Rust guideline compliant 2026-08-30.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     DecoderPull, FrameAcceptance, NormalizedEvent, ResponseFrame, ResponseHead, ResponseMedia,
 };

@@ -5,9 +5,6 @@
 //! the user selects an option or cancels. The host assigns semantics to those
 //! responses. An unreadable viewport fail-closes by cancelling so hidden input
 //! cannot accept a request.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::fmt;
 
 use mcode_render::{display_width, sanitize_terminal_text, truncate_display_width};

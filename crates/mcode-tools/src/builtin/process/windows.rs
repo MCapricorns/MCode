@@ -2,9 +2,6 @@
 //!
 //! A child is created with `CREATE_SUSPENDED`, assigned to a dedicated
 //! kill-on-close Job, and only then resumed.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 
 /// RAII owner for a Windows Job Object configured to kill all members when its

@@ -9,8 +9,6 @@
 //! locks, and handle-relative atomic replacement without defining any
 //! document schema; Host-substrate stores consume it publicly.
 
-// Rust guideline compliant 2026-08-28
-
 use std::path::Path;
 
 use crate::{ConfigError, HomeLayout};

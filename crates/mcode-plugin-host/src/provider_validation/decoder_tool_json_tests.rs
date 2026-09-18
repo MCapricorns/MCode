@@ -1,7 +1,4 @@
 //! Strict canonical tool-argument JSON tests.
-
-// Rust guideline compliant 2026-08-30.
-
 use super::ValidationError;
 use super::decoder::tool_json::validate_tool_arguments;
 

@@ -4,9 +4,6 @@
 //! executable behavior, terminal handles, or backend-specific styling. Every
 //! block also has a bounded, control-sequence-free plain-text representation
 //! for headless and limited-capability consumers.
-
-// Rust guideline compliant 2026-08-27.
-
 mod block;
 mod plain;
 

@@ -4,9 +4,6 @@
 //! punctuation). Candidate windows are scored with a capped Levenshtein
 //! distance on the space-joined token form. Only a unique best match whose
 //! margin over the runner-up is large enough is committed.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::collections::BTreeSet;
 
 use super::MAX_DIFF_SUMMARY_BYTES;

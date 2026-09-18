@@ -4,9 +4,6 @@
 //! capture ranges are replaced; the file is never pretty-printed. After apply,
 //! the result is reparsed and rejected when the edit introduces syntax errors
 //! that were not present before.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::collections::BTreeMap;
 use std::path::Path;
 

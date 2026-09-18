@@ -12,9 +12,6 @@
 //! publication only rejects new admissions; every fence must additionally be
 //! retired (and drained via [`GenerationFence::wait_drained`]) before its
 //! Store ownership is reclaimed.
-
-// Rust guideline compliant 2026-09-05.
-
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard};
 

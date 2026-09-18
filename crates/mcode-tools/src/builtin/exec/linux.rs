@@ -9,9 +9,6 @@
 //! writer that already holds the vnode can still rewrite bytes in the
 //! fork-to-`execveat` window; public APIs cannot close that race without
 //! allocating in the child.
-
-// Rust guideline compliant 2026-08-27.
-
 #![cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 
 use std::ffi::{CString, OsString};

@@ -5,9 +5,6 @@
 //! tracking for the call/result ordering check, and the single-use
 //! reservation tables. Every mutation is applied by the actor only after the
 //! matching durable effect succeeded.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::dto::{BranchHead, EventKind, EventsResult, HeadStamp, SessionError, SessionEvent};

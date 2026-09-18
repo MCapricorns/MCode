@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-31.
-
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};

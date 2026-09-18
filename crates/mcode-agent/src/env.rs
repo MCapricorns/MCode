@@ -74,5 +74,3 @@ impl<'a> TurnEnv<'a> {
         self
     }
 }
-
-// Rust guideline compliant 2026-08-26.

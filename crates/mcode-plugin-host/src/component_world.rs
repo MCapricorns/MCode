@@ -1,7 +1,4 @@
 //! Closed selection of sole-current component worlds.
-
-// Rust guideline compliant 2026-09-05.
-
 /// One sole-current plugin component world accepted by static preflight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ComponentWorld {

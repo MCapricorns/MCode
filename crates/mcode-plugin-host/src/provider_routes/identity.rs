@@ -1,7 +1,4 @@
 //! Bounded identities used by the host provider-route ledger.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::fmt::{self, Display, Formatter};
 
 use mcode_config::Sha256Digest;

@@ -1,7 +1,4 @@
 //! Private Wasmtime bindings for the current FeaturePack worlds.
-
-// Rust guideline compliant 2026-09-05.
-
 macro_rules! feature_bindings {
     ($module:ident, $world:literal) => {
         #[allow(missing_docs, reason = "generated Wasmtime bindings")]

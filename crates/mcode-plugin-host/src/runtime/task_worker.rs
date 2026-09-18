@@ -1,7 +1,4 @@
 //! Serialized FeaturePack owner loop and non-blocking operation cleanup.
-
-// Rust guideline compliant 2026-08-31.
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};

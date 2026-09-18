@@ -4,9 +4,6 @@
 //! spelling: a fixed ASCII prefix followed by exactly 32 lowercase hexadecimal
 //! digits. Parsing accepts only that spelling, so an accepted identifier can
 //! never contain a path separator, traversal, or non-portable byte.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::fmt::{self, Display, Formatter};
 
 const RANDOM_BYTES: usize = 16;

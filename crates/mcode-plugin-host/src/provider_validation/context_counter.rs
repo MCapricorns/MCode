@@ -2,9 +2,6 @@
 //!
 //! This module contains no Store, guest callback, credential, network, or
 //! mutable global state. Its sole compiled entry is explicitly a dummy fixture.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::sync::LazyLock;
 
 use sha2::{Digest, Sha256};

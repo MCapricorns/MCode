@@ -1,7 +1,4 @@
 //! Catalog validator and digest tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     AuthInstructions, AuthInteractionRequest, AuthInteractionResponse, CatalogMetadataEntry,
     CatalogMetadataView, CatalogPage, CatalogRequest, CatalogRevision, CatalogSourceView,

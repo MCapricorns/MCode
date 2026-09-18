@@ -4,9 +4,6 @@
 //! T8 typed task runtime, durable work is admitted through the Host
 //! generation fence, and every facade call drives its operation to exactly
 //! one terminal pull under a bounded deadline.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;

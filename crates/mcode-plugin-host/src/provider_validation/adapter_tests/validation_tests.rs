@@ -1,7 +1,4 @@
 //! End-to-end dummy adapter mutation tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     AssistantBlock, AssistantMessage, CapabilitySupport, EnabledReasoning, ImageMediaType,
     ImageMetadata, ImageView, InputModality, Message, ModelSelection, OrdinaryHeader, PrepareInput,

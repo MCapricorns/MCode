@@ -1,7 +1,4 @@
 //! Scalar and text validator tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::scalar::{digest, label, safe, stamp, tracking_id, visible_ascii};
 
 #[test]

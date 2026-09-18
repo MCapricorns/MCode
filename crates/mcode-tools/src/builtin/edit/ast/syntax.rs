@@ -1,7 +1,4 @@
 //! Syntax-error validation for tree-sitter edit results.
-
-// Rust guideline compliant 2026-08-27.
-
 use tokio_util::sync::CancellationToken;
 use tree_sitter::{ParseOptions, Parser};
 

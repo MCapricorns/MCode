@@ -5,9 +5,6 @@
 //! loader/interpreter injection variables are never copied. Dropping those
 //! names is not isolation: a same-account process can still observe the
 //! child.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::cmp::Ordering;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

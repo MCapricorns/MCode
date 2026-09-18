@@ -1,7 +1,4 @@
 //! Domain-separated adapter contract, body, and ordinary-header digests.
-
-// Rust guideline compliant 2026-08-29.
-
 use sha2::{Digest, Sha256};
 
 use crate::provider_validation::charge::checked_u32_len;

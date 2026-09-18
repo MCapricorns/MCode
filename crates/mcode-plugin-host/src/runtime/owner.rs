@@ -1,7 +1,4 @@
 //! Exclusive Store ownership, compilation binding, and safe admission APIs.
-
-// Rust guideline compliant 2026-09-05.
-
 use std::sync::Arc;
 
 use wasmtime::Store;

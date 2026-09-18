@@ -1,7 +1,4 @@
 //! Catalog DTO validation and canonical catalog hashing.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::cmp::Ordering;
 
 use mcode_config::Sha256Digest;

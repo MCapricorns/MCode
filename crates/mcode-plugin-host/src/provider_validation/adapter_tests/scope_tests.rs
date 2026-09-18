@@ -1,7 +1,4 @@
 //! System-message sequence and lexical-scope behavior tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::super::adapter::types::{
     AdapterCollection, AdapterContractV1, AdapterModelSource, AdapterPresence, AdapterScalarSource,
     AdapterTransform, AdapterVariantSource, AdapterWireId, ContractTree, PathSegment,

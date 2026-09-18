@@ -1,7 +1,4 @@
 //! Static semantic regressions for audited contract paths.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::super::adapter::types::{
     AdapterCollection, AdapterContractV1, AdapterModelSource, AdapterPresence,
     AdapterPresenceSource, AdapterScalarSource, AdapterTransform, AdapterVariantSource,

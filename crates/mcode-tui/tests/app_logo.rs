@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-26.
-
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use mcode_render::{Progress, RenderBlock};
 use mcode_tui::render::terminal_color;

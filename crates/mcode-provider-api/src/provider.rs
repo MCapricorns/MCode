@@ -340,5 +340,3 @@ mod tests {
         assert!(rendered.contains("REDACTED"));
     }
 }
-
-// Rust guideline compliant 2026-08-29.

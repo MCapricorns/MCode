@@ -1,7 +1,4 @@
 //! Lexical scalar sources and checked derived adapter transforms.
-
-// Rust guideline compliant 2026-08-29.
-
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 

@@ -5,9 +5,6 @@
 //! exclusively, made private on Unix, and fsynced; on Windows they inherit
 //! the protected DACL of the hardened parent directory. Directory fsync is
 //! applied where the platform supports it.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;

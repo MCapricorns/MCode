@@ -1,7 +1,4 @@
 //! Structural validation for closed adapter contracts.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::collections::BTreeSet;
 
 use super::types::{

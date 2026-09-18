@@ -10,9 +10,6 @@
 //! digest recheck must match. Public APIs cannot prove the mapped/running
 //! image digest, and XNU does not enforce `ETXTBSY`. Identity is guaranteed
 //! only at the suspended verification instant.
-
-// Rust guideline compliant 2026-08-27.
-
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
 use std::ffi::{CString, OsString};

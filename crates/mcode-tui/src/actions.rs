@@ -3,9 +3,6 @@
 //! [`ActionRegistry`] translates crossterm events through ordered bindings and
 //! [`When`] predicates. [`reduce`] is deterministic and performs no I/O.
 //! Effects remain plain data for an embedding event loop to execute.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::fmt;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};

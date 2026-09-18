@@ -8,9 +8,6 @@
 //! code-page switch when that change can be restored exactly and the output
 //! has a non-raster font, or virtual-terminal support when font metadata is
 //! unavailable.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::io::{self, stdout};
 use std::panic;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

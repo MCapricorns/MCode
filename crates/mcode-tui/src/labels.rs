@@ -2,9 +2,6 @@
 //!
 //! Keeping built-in copy in one module makes the language policy testable.
 //! Dynamic model, tool, and session content is not included here.
-
-// Rust guideline compliant 2026-08-27.
-
 /// Tagline shown with every logo variant.
 pub const LOGO_TAGLINE: &str = "TERMINAL CODE AGENT";
 /// Workflow text shown by the wide logo.

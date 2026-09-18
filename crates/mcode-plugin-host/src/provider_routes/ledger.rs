@@ -1,7 +1,4 @@
 //! Atomic provider-route registration and live usage-context transitions.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex, MutexGuard};

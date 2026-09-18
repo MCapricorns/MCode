@@ -9,9 +9,6 @@
 //! environment filtering is not a sandbox. Valid calls run directly with no
 //! Core permission prompt. Use this tool for pipelines, redirection,
 //! expansion, and scripts; filesystem and search tools stay in-process.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::path::Path;
 use std::time::{Duration, Instant};
 

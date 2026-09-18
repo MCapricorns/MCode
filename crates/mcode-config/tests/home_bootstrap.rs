@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-28
-
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;

@@ -1,7 +1,4 @@
 //! Adapter-derived JSON values and exact prepared-body comparison.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_validation::charge::LogicalCharge;
 use crate::provider_validation::scalar::{self, MAX_LOGICAL_CHARGE, MAX_SAFE_TEXT_BYTES};
 use crate::provider_validation::wire_json::{

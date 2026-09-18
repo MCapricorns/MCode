@@ -5,9 +5,6 @@
 //! identity with the 128-bit `FILE_ID_128` plus volume serial. NTSTATUS is
 //! mapped with `RtlNtStatusToDosError`; `GetLastError` is never consulted
 //! after an NT call.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};

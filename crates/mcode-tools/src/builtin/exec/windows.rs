@@ -6,9 +6,6 @@
 //! `CreateProcessW` thread handle. Replacement or rewrite before verification
 //! rejects and reaps. Resume never uses a pid lookup. Same-account writers
 //! that already hold the file remain outside the security boundary.
-
-// Rust guideline compliant 2026-08-27.
-
 #![cfg(all(windows, target_arch = "x86_64"))]
 
 use std::borrow::Cow;

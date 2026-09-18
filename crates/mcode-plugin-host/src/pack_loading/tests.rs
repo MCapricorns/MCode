@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-09-05.
-
 use std::fmt::Write as _;
 use std::fs;
 use std::sync::Arc;

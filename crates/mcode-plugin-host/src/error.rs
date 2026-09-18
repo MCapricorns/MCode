@@ -1,7 +1,4 @@
 //! Stable preflight and caller-binding failures.
-
-// Rust guideline compliant 2026-08-30.
-
 /// Classifies an ambient or non-contract component import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportCategory {

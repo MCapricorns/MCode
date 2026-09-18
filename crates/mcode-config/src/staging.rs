@@ -4,8 +4,6 @@
 //! state and recovers fully validated abandoned transactions. It does not verify
 //! bundle trust, signatures, digests, inventory completeness, or activation.
 
-// Rust guideline compliant 2026-08-29
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{BundlePath, ConfigError, ConfigErrorKind, HomeLayout, TransactionId};

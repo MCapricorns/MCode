@@ -3,9 +3,6 @@
 //! Only PE, ELF, and Mach-O / fat Mach-O images are accepted. Shebang
 //! scripts, batch files, and any implicit interpreter fallback are rejected
 //! here; the platform launch path never calls `cmd.exe` or `ShellExecute`.
-
-// Rust guideline compliant 2026-08-27.
-
 use crate::tool::ToolError;
 
 /// Kind of kernel-loadable image proven from magic bytes.

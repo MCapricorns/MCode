@@ -8,5 +8,3 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     mcode_cli::main()
 }
-
-// Rust guideline compliant 2026-08-28

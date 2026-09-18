@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-27.
-
 use super::*;
 use crate::builtin::fs_search::lexical_normalize;
 use crate::builtin::test_support::ctx_at;

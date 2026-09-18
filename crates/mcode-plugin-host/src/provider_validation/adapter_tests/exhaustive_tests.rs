@@ -1,7 +1,4 @@
 //! Behavior coverage for the nonempty exhaustive adapter fixture.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     AssistantBlock, Message, ReasoningKind, WireJsonNode,
 };

@@ -1,7 +1,4 @@
 //! Generic interpretation of a validated adapter contract.
-
-// Rust guideline compliant 2026-08-29.
-
 use std::collections::BTreeSet;
 
 use crate::provider_validation::prepare::{

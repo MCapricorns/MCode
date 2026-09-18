@@ -1,7 +1,4 @@
 //! Literal Mistral tool-result content chunk fixtures.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     AssistantBlock, AssistantMessage, ImageMediaType, ImageMetadata, ImageView, Message, TextBlock,
     ToolCallBlock, ToolDefinition, ToolResultBlock, ToolResultMessage,

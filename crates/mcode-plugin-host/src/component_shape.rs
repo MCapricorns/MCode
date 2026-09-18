@@ -1,7 +1,4 @@
 //! Exact Store-free comparison against canonical Wasmtime component types.
-
-// Rust guideline compliant 2026-08-30.
-
 use wasmtime::Engine;
 use wasmtime::component::Component;
 use wasmtime::component::types::{

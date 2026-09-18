@@ -1,7 +1,4 @@
 //! Lexical and wire-policy proofs for closed adapter contracts.
-
-// Rust guideline compliant 2026-08-29.
-
 use super::types::{
     AdapterCollection, AdapterContractV1, AdapterEnumSource, AdapterPresence,
     AdapterPresenceSource, AdapterScalarSource, AdapterTransform, AdapterValidationError,

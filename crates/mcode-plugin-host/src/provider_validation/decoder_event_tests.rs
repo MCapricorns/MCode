@@ -1,7 +1,4 @@
 //! Stateful normalized-event reducer tests.
-
-// Rust guideline compliant 2026-08-30.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     CompletionReason, CompletionTerminal, NormalizedEvent, ProviderError, ReasoningDelta,
     ReasoningKind, ReasoningProof, TextDelta, ToolArgumentsDelta, ToolCallEnd, ToolCallStart,

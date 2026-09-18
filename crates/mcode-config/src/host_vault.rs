@@ -4,8 +4,6 @@
 //! reveal only absence or the bounded persisted revision and can create the
 //! exact empty revision-zero document.
 
-// Rust guideline compliant 2026-08-29
-
 mod model;
 mod reducer;
 

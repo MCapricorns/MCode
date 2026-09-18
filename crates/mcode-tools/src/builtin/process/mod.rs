@@ -4,9 +4,6 @@
 //! are enrolled in a kill-on-close Job Object before their initial thread
 //! resumes. Teardown reports real Job or process-group errors; an invalid
 //! Windows Job handle is not treated as evidence that members exited.
-
-// Rust guideline compliant 2026-08-27.
-
 mod output;
 #[cfg(windows)]
 mod windows;

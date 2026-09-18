@@ -1,7 +1,4 @@
 //! Windows native structured-exec tests.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::super::spawn::{SpawnFailure, SpawnFailureKind};

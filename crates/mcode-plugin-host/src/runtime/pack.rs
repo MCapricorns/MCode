@@ -1,7 +1,4 @@
 //! Typed instantiation for the current external Pack worlds.
-
-// Rust guideline compliant 2026-09-05.
-
 use wasmtime::component::{HasSelf, Linker, Resource};
 
 use crate::ComponentWorld;

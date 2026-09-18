@@ -1,7 +1,4 @@
 //! End-to-end system-message sequence behavior tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     Message, TextBlock, UserBlock, UserMessage, WireJsonNode,
 };

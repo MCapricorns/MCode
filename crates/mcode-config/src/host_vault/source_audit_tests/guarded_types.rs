@@ -1,7 +1,5 @@
 //! Audits protected Host-vault reducer types across module boundaries.
 
-// Rust guideline compliant 2026-08-29
-
 use std::collections::BTreeSet;
 
 use syn::visit::Visit;

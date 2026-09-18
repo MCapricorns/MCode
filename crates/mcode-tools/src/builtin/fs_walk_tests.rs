@@ -1,7 +1,4 @@
 //! Ordering and budget regressions for handle-relative directory listings.
-
-// Rust guideline compliant 2026-08-28.
-
 use std::ffi::OsString;
 use tokio_util::sync::CancellationToken;
 

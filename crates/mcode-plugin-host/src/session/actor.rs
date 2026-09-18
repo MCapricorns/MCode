@@ -5,9 +5,6 @@
 //! generation fence with manifest commits taken under the fence's exclusive
 //! commit window. Recovery runs chunked per pull and reports the frozen
 //! `recovering`/`replaying` progress phases before the bound action runs.
-
-// Rust guideline compliant 2026-09-18.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 

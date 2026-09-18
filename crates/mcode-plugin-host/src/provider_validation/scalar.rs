@@ -1,7 +1,4 @@
 //! Provider scalar and bounded text validation.
-
-// Rust guideline compliant 2026-08-29.
-
 use mcode_config::{ProviderId, Sha256Digest};
 
 use crate::provider_routes::{ModelAlias, ModelId, ProviderRouteId, RequestId, TurnId};

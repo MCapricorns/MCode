@@ -14,9 +14,6 @@
 //! assert_eq!(FEATURE_PACK_WIT_PACKAGE, "mcode:feature-pack@0.0.1");
 //! assert_eq!(PROVIDER_WORLD_ID, "mcode:provider-pack/provider@0.0.1");
 //! ```
-
-// Rust guideline compliant 2026-08-30.
-
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![forbid(unsafe_code)]

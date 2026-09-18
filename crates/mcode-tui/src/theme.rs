@@ -4,9 +4,6 @@
 //! Built-in dark and light palettes are designed independently. Selection is
 //! pure: callers provide any detected background and named themes, so this
 //! module never reads environment variables or terminal state.
-
-// Rust guideline compliant 2026-08-26.
-
 use std::fmt;
 
 /// An eight-bit sRGB color.

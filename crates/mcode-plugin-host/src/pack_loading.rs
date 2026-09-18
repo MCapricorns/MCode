@@ -2,9 +2,6 @@
 //!
 //! The loader never discovers Pack IDs, scans directories, accepts caller
 //! paths, or treats the selected bundle digest as the component digest.
-
-// Rust guideline compliant 2026-09-05.
-
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 

@@ -1,7 +1,4 @@
 //! Pure decoder validation, protocol, event, and backpressure reducers.
-
-// Rust guideline compliant 2026-08-30.
-
 mod events;
 pub(crate) mod protocol;
 pub(super) mod tool_json;

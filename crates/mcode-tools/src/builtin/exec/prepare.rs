@@ -3,9 +3,6 @@
 //! One preparation captures cwd, the sorted allowlisted environment (including
 //! reconstructed PATH), argv, and the pinned executable. Every platform spawn
 //! consumes that snapshot; none of them read the process environment.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 

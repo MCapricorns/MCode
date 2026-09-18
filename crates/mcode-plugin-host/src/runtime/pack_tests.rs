@@ -1,7 +1,4 @@
 //! Pack compilation boundary tests.
-
-// Rust guideline compliant 2026-09-05.
-
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;

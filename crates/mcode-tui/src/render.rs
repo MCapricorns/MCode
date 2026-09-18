@@ -4,9 +4,6 @@
 //! fallback. When Unicode is disabled, borders and all visible text degrade to
 //! ASCII. The adapter performs no input, terminal setup, session calls, or
 //! other effects, which keeps `TestBackend` tests deterministic.
-
-// Rust guideline compliant 2026-08-27.
-
 use crossterm::event::{Event, KeyEvent};
 use mcode_render::{
     MAX_PLAIN_WIDTH, RenderBlock, display_width, next_grapheme_boundary, sanitize_terminal_text,

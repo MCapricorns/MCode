@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-27.
-
 use super::{
     EnterStage, EnterTransaction, MockTerminalModes, TerminalGuard, TerminalModes,
     restore_on_abnormal_exit,

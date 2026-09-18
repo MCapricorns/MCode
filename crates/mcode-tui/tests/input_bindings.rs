@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-08-26.
-
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};
 use mcode_tui::{
     Action, ActionBinding, ActionId, ActionRegistry, AppState, AppView, BackgroundClass,

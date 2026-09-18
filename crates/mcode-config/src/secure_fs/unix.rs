@@ -1,7 +1,5 @@
 //! Unix no-follow directory bootstrap with private modes and durability.
 
-// Rust guideline compliant 2026-08-28
-
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;

@@ -421,5 +421,3 @@ mod tests {
         closed.await.expect("closed supervisor must wake");
     }
 }
-
-// Rust guideline compliant 2026-08-29.

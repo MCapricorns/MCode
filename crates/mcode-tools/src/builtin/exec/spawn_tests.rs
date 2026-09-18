@@ -1,7 +1,4 @@
 //! Spawn-gate tests for structured exec.
-
-// Rust guideline compliant 2026-08-27.
-
 use std::sync::mpsc;
 use std::time::Duration;
 

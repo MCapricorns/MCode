@@ -1,7 +1,4 @@
 //! Wire-JSON graph, grammar, charge, and serializer tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     WireJsonArray, WireJsonDocument, WireJsonField, WireJsonNode, WireJsonObject,
 };

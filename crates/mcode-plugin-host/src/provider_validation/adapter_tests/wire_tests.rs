@@ -1,7 +1,4 @@
 //! Ten-wire decoder, status, name, and composite behavior tests.
-
-// Rust guideline compliant 2026-08-29.
-
 use crate::provider_wit::exports::mcode::provider_pack::provider_api::{
     AssistantBlock, AssistantMessage, Message, TextBlock, ToolCallBlock, ToolDefinition,
     ToolResultBlock, ToolResultMessage,

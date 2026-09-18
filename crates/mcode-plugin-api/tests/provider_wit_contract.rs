@@ -643,4 +643,3 @@ fn assert_changed_semantic_rules(rules: &BTreeMap<String, Value>) {
         assert_eq!(actual, Some(&expected), "semantic value {rule}{pointer}");
     }
 }
-// Rust guideline compliant 2026-08-29.

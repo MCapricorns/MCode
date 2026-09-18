@@ -1,7 +1,5 @@
 //! Unix native abandoned staging-transaction recovery.
 
-// Rust guideline compliant 2026-08-29
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;

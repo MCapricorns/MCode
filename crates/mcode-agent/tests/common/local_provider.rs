@@ -181,5 +181,3 @@ impl Provider for LocalProvider {
         Ok(stream)
     }
 }
-
-// Rust guideline compliant 2026-08-29.

@@ -48,5 +48,3 @@ pub fn main() -> ExitCode {
 pub fn run(_cli: Cli) -> Result<()> {
     bail!(SETUP_ERROR)
 }
-
-// Rust guideline compliant 2026-08-28

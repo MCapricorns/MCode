@@ -9,9 +9,6 @@
 //! I/O keeps confirmed results but adds a model-visible incomplete lower-bound
 //! notice. Output uses `/`; no external `fd` executable is used. Cancellation
 //! or future drop is supervised until the worker is interrupted and joined.
-
-// Rust guideline compliant 2026-08-26.
-
 use std::collections::BinaryHeap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};

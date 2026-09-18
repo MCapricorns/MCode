@@ -1,7 +1,4 @@
 //! Private planning and apply engine for [`super::EditTool`].
-
-// Rust guideline compliant 2026-08-27.
-
 use aho_corasick::{AhoCorasick, MatchKind};
 use memchr::memmem::Finder;
 use regex::RegexBuilder;
