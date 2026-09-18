@@ -4,18 +4,25 @@
 //! directly. [`CoreBridge`] owns a dedicated thread with a current-thread
 //! tokio runtime hosting the [`SessionService`]; the UI sends
 //! [`BridgeCommand`]s and awaits [`BridgeReply`]s through tokio oneshot
-//! channels, whose receivers are executor-agnostic futures. Configuration
-//! reads stay synchronous on the same thread.
+//! channels, whose receivers are executor-agnostic futures. Model turns run
+//! as concurrent runtime tasks that stream [`BridgeEvent`]s back through a
+//! bounded channel the UI polls. Configuration reads stay synchronous on the
+//! same thread.
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use mcode_config::{
-    AppSettings, AuthorityRevision, HomeLayout, read_app_settings, replace_app_settings,
+    AppSettings, AuthorityRevision, HomeLayout, read_app_settings, read_provider_secrets,
+    replace_app_settings, replace_provider_secrets,
 };
+use mcode_core::Message;
 use mcode_plugin_host::session::{
     self, BranchId, EventKind, HeadStamp, SessionError, SessionId, SessionService,
 };
+use mcode_provider_api::{Provider as _, StreamEvent as ProviderStreamEvent};
+use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use super::view_model::{
     ActiveConversation, ConversationEntry, EntryKind, SessionSummary, project_entry,
@@ -23,6 +30,8 @@ use super::view_model::{
 
 /// Bound for outstanding bridge commands.
 const COMMAND_QUEUE: usize = 256;
+/// Bound for streaming chat events buffered toward the UI.
+const EVENT_QUEUE: usize = 512;
 
 /// A request from the UI to the core thread.
 #[derive(Debug)]
@@ -44,7 +53,7 @@ pub enum BridgeCommand {
         /// Message text; nonempty and bounded by the view-model.
         text: String,
     },
-    /// Load the settings document with its revision.
+    /// Load the settings document with its revision and stored key ids.
     LoadSettings,
     /// Persist new settings under revision compare-and-swap.
     SaveSettings {
@@ -52,6 +61,63 @@ pub enum BridgeCommand {
         expected_revision: AuthorityRevision,
         /// The complete replacement settings.
         settings: AppSettings,
+    },
+    /// Store or clear one provider API key in the secret store.
+    SaveProviderKey {
+        /// Provider identity from settings.
+        provider_id: String,
+        /// The key; empty clears the stored entry.
+        api_key: String,
+    },
+    /// Run one model turn over stored history and stream the reply.
+    ChatTurn {
+        /// Target session.
+        session: SessionId,
+        /// Target branch.
+        branch: BranchId,
+        /// Head observed after the user message commit.
+        expected_head: HeadStamp,
+        /// Provider identity from settings.
+        provider_id: String,
+        /// Model id offered by that provider.
+        model: String,
+        /// Conversation history including the committed user message.
+        history: Vec<Message>,
+    },
+}
+
+/// A streaming event from an active model turn.
+#[derive(Debug, Clone)]
+pub enum BridgeEvent {
+    /// Incremental assistant text.
+    ChatText {
+        /// Session identity spelling.
+        session_id: String,
+        /// Text fragment.
+        delta: String,
+    },
+    /// Incremental assistant reasoning.
+    ChatThinking {
+        /// Session identity spelling.
+        session_id: String,
+        /// Reasoning fragment.
+        delta: String,
+    },
+    /// The turn finished and its assistant message was committed.
+    ChatDone {
+        /// Session identity spelling.
+        session_id: String,
+        /// New branch head spelling.
+        head: String,
+        /// Committed assistant entry projection.
+        entry: ConversationEntry,
+    },
+    /// The turn failed; nothing was committed.
+    ChatFailed {
+        /// Session identity spelling.
+        session_id: String,
+        /// Rendered failure for the banner.
+        message: String,
     },
 }
 
@@ -66,10 +132,14 @@ pub enum BridgeReply {
     Conversation(Result<ActiveConversation, String>),
     /// Send result (new head plus committed entry).
     Sent(Result<(String, ConversationEntry), String>),
-    /// Settings load result: document plus revision.
-    Settings(Result<(AppSettings, AuthorityRevision), String>),
+    /// Settings load result: document, revision, provider ids with keys.
+    Settings(Result<(AppSettings, AuthorityRevision, Vec<String>), String>),
     /// Settings save result: the new revision.
     SettingsSaved(Result<AuthorityRevision, String>),
+    /// Provider key save result.
+    ProviderKeySaved(Result<(), String>),
+    /// Chat turn acceptance; streaming continues over the event channel.
+    ChatStarted(Result<(), String>),
 }
 
 /// Handle to the core thread.
@@ -80,17 +150,24 @@ pub struct CoreBridge {
 
 impl CoreBridge {
     /// Starts the core thread over one owned home.
+    ///
+    /// Returns the bridge handle together with the receiving end of the
+    /// streaming event channel.
     #[must_use]
-    pub fn start(home: HomeLayout) -> Self {
+    pub fn start(home: HomeLayout) -> (Self, mpsc::Receiver<BridgeEvent>) {
         let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_QUEUE);
+        let (event_tx, event_rx) = mpsc::sync_channel(EVENT_QUEUE);
         let worker = std::thread::Builder::new()
             .name("mcode-core".into())
-            .spawn(move || run_core(home, command_rx))
+            .spawn(move || run_core(home, command_rx, event_tx))
             .expect("core bridge thread");
-        Self {
-            command_tx: Some(command_tx),
-            worker: Some(worker),
-        }
+        (
+            Self {
+                command_tx: Some(command_tx),
+                worker: Some(worker),
+            },
+            event_rx,
+        )
     }
 
     /// Sends one command and returns the reply future.
@@ -144,7 +221,11 @@ struct WithReply {
     reply: oneshot::Sender<BridgeReply>,
 }
 
-fn run_core(home: HomeLayout, commands: mpsc::Receiver<WithReply>) {
+fn run_core(
+    home: HomeLayout,
+    commands: mpsc::Receiver<WithReply>,
+    events: mpsc::SyncSender<BridgeEvent>,
+) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -163,9 +244,35 @@ fn run_core(home: HomeLayout, commands: mpsc::Receiver<WithReply>) {
     runtime.block_on(async move {
         let service = SessionService::new(&home);
         while let Ok(with_reply) = commands.recv() {
-            let outcome = handle(&service, &home, &with_reply.command).await;
-            if with_reply.reply.send(outcome).is_err() {
-                continue;
+            match with_reply.command {
+                BridgeCommand::ChatTurn {
+                    session,
+                    branch,
+                    expected_head,
+                    provider_id,
+                    model,
+                    history,
+                } => {
+                    let task = chat_turn(
+                        service.clone(),
+                        home.clone(),
+                        events.clone(),
+                        session,
+                        branch,
+                        expected_head,
+                        provider_id,
+                        model,
+                        history,
+                    );
+                    tokio::spawn(task);
+                    let _ = with_reply.reply.send(BridgeReply::ChatStarted(Ok(())));
+                }
+                command => {
+                    let outcome = handle(&service, &home, &command).await;
+                    if with_reply.reply.send(outcome).is_err() {
+                        continue;
+                    }
+                }
             }
         }
         service.shutdown().await;
@@ -181,6 +288,8 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::SendMessage { .. } => BridgeReply::Sent(Err(message)),
         BridgeCommand::LoadSettings => BridgeReply::Settings(Err(message)),
         BridgeCommand::SaveSettings { .. } => BridgeReply::SettingsSaved(Err(message)),
+        BridgeCommand::SaveProviderKey { .. } => BridgeReply::ProviderKeySaved(Err(message)),
+        BridgeCommand::ChatTurn { .. } => BridgeReply::ChatStarted(Err(message)),
     }
 }
 
@@ -222,10 +331,19 @@ async fn handle(
             expected_revision,
             settings,
         } => BridgeReply::SettingsSaved(save_settings(home, *expected_revision, settings)),
+        BridgeCommand::SaveProviderKey {
+            provider_id,
+            api_key,
+        } => BridgeReply::ProviderKeySaved(save_provider_key(home, provider_id, api_key)),
+        BridgeCommand::ChatTurn { .. } => {
+            BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
+        }
     }
 }
 
-fn load_settings(home: &HomeLayout) -> Result<(AppSettings, AuthorityRevision), String> {
+fn load_settings(
+    home: &HomeLayout,
+) -> Result<(AppSettings, AuthorityRevision, Vec<String>), String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let revision = mcode_config::read_owned_file(
         home,
@@ -237,7 +355,13 @@ fn load_settings(home: &HomeLayout) -> Result<(AppSettings, AuthorityRevision), 
     .transpose()
     .map_err(|()| "stored settings failed validation".to_owned())?
     .unwrap_or(AuthorityRevision::ABSENT);
-    Ok((settings, revision))
+    let key_ids = read_provider_secrets(home)
+        .map_err(|error| render_config_error(&error))?
+        .provider_ids()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    Ok((settings, revision, key_ids))
 }
 
 fn settings_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
@@ -325,6 +449,7 @@ async fn open_conversation(
         branch_id: branch_id.as_str().to_owned(),
         head: head_spelling(&snapshot_head),
         entries,
+        streaming: None,
     })
 }
 
@@ -384,6 +509,207 @@ fn render_error(error: SessionError) -> String {
     }
 }
 
+/// Stores or clears one provider key under the secret-store CAS.
+fn save_provider_key(home: &HomeLayout, provider_id: &str, api_key: &str) -> Result<(), String> {
+    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
+    let expected = mcode_config::read_owned_file(
+        home,
+        mcode_config::SECRETS_PATH,
+        mcode_config::MAX_SECRETS_BYTES,
+    )
+    .map_err(|error| render_config_error(&error))?
+    .map(|bytes| secrets_revision(bytes.as_slice()))
+    .transpose()
+    .map_err(|()| "stored secrets failed validation".to_owned())?
+    .unwrap_or(AuthorityRevision::ABSENT);
+    let updated = secrets.with_key(provider_id, (!api_key.is_empty()).then_some(api_key));
+    replace_provider_secrets(home, expected, &updated)
+        .map_err(|error| render_config_error(&error))?;
+    Ok(())
+}
+
+fn secrets_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        #[serde(rename = "formatVersion")]
+        format_version: u32,
+        revision: u64,
+    }
+    let header: Header = serde_json::from_slice(bytes).map_err(|_| ())?;
+    if header.format_version != mcode_config::SECRETS_FORMAT_VERSION {
+        return Err(());
+    }
+    AuthorityRevision::new(header.revision).map_err(|_| ())
+}
+
+/// One model turn: resolve the provider, stream the reply into the event
+/// channel, and commit the assistant message to the session ledger.
+#[allow(clippy::too_many_arguments)]
+async fn chat_turn(
+    service: SessionService,
+    home: HomeLayout,
+    events: mpsc::SyncSender<BridgeEvent>,
+    session: SessionId,
+    branch: BranchId,
+    expected_head: HeadStamp,
+    provider_id: String,
+    model: String,
+    history: Vec<Message>,
+) {
+    let session_id = session.as_str().to_owned();
+    if let Err(message) = run_chat_turn(
+        &service,
+        &home,
+        &events,
+        &session_id,
+        session,
+        branch,
+        expected_head,
+        &provider_id,
+        &model,
+        &history,
+    )
+    .await
+    {
+        let _ = events.send(BridgeEvent::ChatFailed {
+            session_id,
+            message,
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_chat_turn(
+    service: &SessionService,
+    home: &HomeLayout,
+    events: &mpsc::SyncSender<BridgeEvent>,
+    session_id: &str,
+    session: SessionId,
+    branch: BranchId,
+    expected_head: HeadStamp,
+    provider_id: &str,
+    model: &str,
+    history: &[Message],
+) -> Result<(), String> {
+    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
+    let provider = settings
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id && provider.enabled)
+        .ok_or_else(|| "provider not found or disabled in settings".to_owned())?;
+    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
+    let api_key = secrets
+        .key(provider_id)
+        .ok_or_else(|| "provider API key is not set".to_owned())?
+        .to_owned();
+    let resolved =
+        ResolvedProvider::resolve(provider, model, &api_key, &settings.effective_user_agent())
+            .map_err(|error| format!("provider setup failed: {error:?}"))?;
+    let transport = ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?;
+    let wire = WireProvider::new(resolved, std::sync::Arc::new(transport));
+
+    let request = mcode_provider_api::Request {
+        system_prompt: Vec::new(),
+        messages: history.to_vec(),
+        tools: Vec::new(),
+    };
+    let cancel = CancellationToken::new();
+    let mut stream = wire
+        .stream(&request, cancel)
+        .await
+        .map_err(|error| format!("provider request failed: {error:?}"))?;
+    while let Some(event) = stream.next().await {
+        match event {
+            ProviderStreamEvent::TextDelta(delta) => {
+                let _ = events.send(BridgeEvent::ChatText {
+                    session_id: session_id.to_owned(),
+                    delta,
+                });
+            }
+            ProviderStreamEvent::ThinkingDelta(delta) => {
+                let _ = events.send(BridgeEvent::ChatThinking {
+                    session_id: session_id.to_owned(),
+                    delta,
+                });
+            }
+            ProviderStreamEvent::ToolCallDelta { .. } => {}
+            ProviderStreamEvent::Done { message } => {
+                let payload = serde_json::to_vec(&message)
+                    .map_err(|_| "assistant message could not be encoded".to_owned())?;
+                let (head, entry) =
+                    append_assistant(service, &session, &branch, expected_head, &payload)
+                        .await
+                        .map_err(render_error)?;
+                let _ = events.send(BridgeEvent::ChatDone {
+                    session_id: session_id.to_owned(),
+                    head,
+                    entry,
+                });
+                return Ok(());
+            }
+            ProviderStreamEvent::Error(error) => {
+                return Err(format!(
+                    "provider stream failed: {}",
+                    error.message().unwrap_or("unknown provider error")
+                ));
+            }
+        }
+    }
+    Err("provider stream ended without a terminal".to_owned())
+}
+
+/// Commits one assistant message payload and projects its entry.
+async fn append_assistant(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    expected_head: HeadStamp,
+    payload: &[u8],
+) -> Result<(String, ConversationEntry), SessionError> {
+    let reservation = service
+        .reserve_event(session, branch, EventKind::Message, None, payload)
+        .await?;
+    let appended = service
+        .append(session, branch, &expected_head, &reservation)
+        .await?;
+    let event_id = appended
+        .head
+        .event()
+        .cloned()
+        .ok_or(SessionError::Corrupt)?;
+    let entry = project_assistant(&event_id, payload);
+    Ok((event_id.as_str().to_owned(), entry))
+}
+
+/// Projects a serialized assistant payload into a display entry.
+fn project_assistant(
+    event_id: &mcode_plugin_host::session::SessionEventId,
+    payload: &[u8],
+) -> ConversationEntry {
+    let mut text = String::new();
+    if let Ok(message) = serde_json::from_slice::<mcode_core::AssistantMessage>(payload) {
+        for block in &message.blocks {
+            match block {
+                mcode_core::ContentBlock::Text(block) => text.push_str(&block.text),
+                mcode_core::ContentBlock::Thinking(_) => {}
+                mcode_core::ContentBlock::ToolCall(call) => {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(&format!("tool call {}", call.name));
+                }
+                mcode_core::ContentBlock::Image(_) => {}
+            }
+        }
+    }
+    ConversationEntry {
+        event_id: event_id.as_str().to_owned(),
+        kind: EntryKind::AssistantMessage,
+        text,
+        call_id: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,7 +741,7 @@ mod tests {
     #[test]
     fn bridge_round_trips_sessions_messages_and_plugins() {
         let (_parent, layout) = home();
-        let mut bridge = CoreBridge::start(layout.clone());
+        let (mut bridge, _events) = CoreBridge::start(layout.clone());
 
         let BridgeReply::Sessions(list) = drive(&bridge, BridgeCommand::ListSessions) else {
             panic!("sessions reply");
@@ -456,7 +782,8 @@ mod tests {
         let BridgeReply::Settings(settings) = drive(&bridge, BridgeCommand::LoadSettings) else {
             panic!("settings reply");
         };
-        let (document, revision) = settings.expect("settings load");
+        let (document, revision, key_ids) = settings.expect("settings load");
+        assert!(key_ids.is_empty());
         assert_eq!(revision, AuthorityRevision::ABSENT);
         assert!(document.providers.is_empty());
         assert!(document.effective_user_agent().starts_with("pi ("));
@@ -475,10 +802,22 @@ mod tests {
         };
         assert_eq!(saved.expect("saved").get(), 1);
 
+        let BridgeReply::ProviderKeySaved(saved) = drive(
+            &bridge,
+            BridgeCommand::SaveProviderKey {
+                provider_id: "openai-main".to_owned(),
+                api_key: "sk-test".to_owned(),
+            },
+        ) else {
+            panic!("key reply");
+        };
+        saved.expect("key saved");
+
         let BridgeReply::Settings(reloaded) = drive(&bridge, BridgeCommand::LoadSettings) else {
             panic!("reloaded reply");
         };
-        let (document, revision) = reloaded.expect("settings reload");
+        let (document, revision, key_ids) = reloaded.expect("settings reload");
+        assert_eq!(key_ids, vec!["openai-main".to_owned()]);
         assert_eq!(document.user_agent, "mcode-desktop-test/1");
         assert_eq!(revision.get(), 1);
 

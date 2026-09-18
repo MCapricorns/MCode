@@ -55,7 +55,21 @@ pub struct ActiveConversation {
     pub head: String,
     /// Entries in ledger order.
     pub entries: Vec<ConversationEntry>,
+    /// Live assistant reply while a model turn streams.
+    pub streaming: Option<StreamingReply>,
 }
+
+/// Buffered streaming reply fragments.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamingReply {
+    /// Visible assistant text so far.
+    pub text: String,
+    /// Reasoning text so far.
+    pub thinking: String,
+}
+
+/// Upper bound kept for one streamed reply before further deltas are dropped.
+pub const MAX_STREAMING_CHARS: usize = 256 * 1024;
 
 /// The editable settings projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +88,8 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mcode_config::McpServerSettings>,
     /// Appearance theme: `light` or `dark`.
     pub theme: String,
+    /// Provider ids that have a stored API key.
+    pub providers_with_keys: Vec<String>,
     /// A save is in flight.
     pub saving: bool,
     /// Unsaved local edits exist.
@@ -81,9 +97,13 @@ pub struct SettingsState {
 }
 
 impl SettingsState {
-    /// Projects one settings document plus revision.
+    /// Projects one settings document plus revision and stored key ids.
     #[must_use]
-    pub fn from_settings(settings: &mcode_config::AppSettings, revision: u64) -> Self {
+    pub fn from_settings(
+        settings: &mcode_config::AppSettings,
+        revision: u64,
+        providers_with_keys: Vec<String>,
+    ) -> Self {
         Self {
             revision,
             user_agent: settings.user_agent.clone(),
@@ -92,6 +112,7 @@ impl SettingsState {
             web_backends: settings.web.backends.clone(),
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.appearance.theme.clone(),
+            providers_with_keys,
             saving: false,
             dirty: false,
         }
@@ -179,6 +200,19 @@ pub enum DesktopAction {
     SettingsProviderRemoved(usize),
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
+    /// One provider's API key was stored or cleared; refreshes key markers.
+    ProviderKeySaved(Vec<String>),
+    /// Incremental assistant text from the active model turn.
+    ChatDelta(String),
+    /// Incremental assistant reasoning from the active model turn.
+    ChatThinkingDelta(String),
+    /// The model turn finished and its entry was committed.
+    ChatDone {
+        head: String,
+        entry: ConversationEntry,
+    },
+    /// The model turn failed without committing anything.
+    ChatFailed(String),
     /// Toggle light/dark theme.
     ToggleTheme,
     /// Clear the surfaced error.
@@ -209,6 +243,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 branch_id: summary.root_branch_id,
                 head: "empty".to_owned(),
                 entries: Vec::new(),
+                streaming: None,
             });
         }
         DesktopAction::ConversationOpened(conversation) => {
@@ -227,6 +262,26 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.entries.push(entry);
             }
             state.composer_draft.clear();
+        }
+        DesktopAction::ChatDelta(delta) => {
+            append_streaming(state, false, delta);
+        }
+        DesktopAction::ChatThinkingDelta(delta) => {
+            append_streaming(state, true, delta);
+        }
+        DesktopAction::ChatDone { head, entry } => {
+            if let Some(conversation) = state.active.as_mut() {
+                conversation.head = head;
+                conversation.entries.push(entry);
+                conversation.streaming = None;
+            }
+            state.sending = false;
+        }
+        DesktopAction::ChatFailed(message) => {
+            if let Some(conversation) = state.active.as_mut() {
+                conversation.streaming = None;
+            }
+            state.error = Some(message);
             state.sending = false;
         }
         DesktopAction::Failed(message) => {
@@ -277,8 +332,38 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.effective_user_agent = settings.to_settings().effective_user_agent();
             }
         }
+        DesktopAction::ProviderKeySaved(keyed_ids) => {
+            if let Some(settings) = state.settings.as_mut() {
+                settings.providers_with_keys = keyed_ids;
+            }
+        }
         DesktopAction::ToggleTheme => state.dark_theme = !state.dark_theme,
         DesktopAction::DismissError => state.error = None,
+    }
+}
+
+/// Buffers one streaming fragment into the active conversation.
+fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta: String) {
+    if delta.is_empty() {
+        return;
+    }
+    if let Some(conversation) = state.active.as_mut() {
+        let streaming = conversation
+            .streaming
+            .get_or_insert_with(StreamingReply::default);
+        let buffer = if thinking {
+            &mut streaming.thinking
+        } else {
+            &mut streaming.text
+        };
+        if buffer.chars().count() < MAX_STREAMING_CHARS {
+            for unit in delta.chars() {
+                if buffer.chars().count() >= MAX_STREAMING_CHARS {
+                    break;
+                }
+                buffer.push(unit);
+            }
+        }
     }
 }
 
@@ -390,7 +475,8 @@ mod tests {
     #[test]
     fn settings_round_trip_marks_dirty_and_saves() {
         let mut state = WorkspaceState::default();
-        let settings = SettingsState::from_settings(&mcode_config::AppSettings::default(), 0);
+        let settings =
+            SettingsState::from_settings(&mcode_config::AppSettings::default(), 0, Vec::new());
         assert!(settings.effective_user_agent.starts_with("pi ("));
         reduce(&mut state, DesktopAction::SettingsLoaded(settings));
 
@@ -446,5 +532,85 @@ mod tests {
         assert!(state.dark_theme);
         reduce(&mut state, DesktopAction::ToggleTheme);
         assert!(!state.dark_theme);
+    }
+
+    fn opened_conversation() -> WorkspaceState {
+        WorkspaceState {
+            active: Some(ActiveConversation {
+                session_id: "ses1-a".to_owned(),
+                branch_id: "br1-a".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                streaming: None,
+            }),
+            sending: true,
+            ..WorkspaceState::default()
+        }
+    }
+    #[test]
+    fn chat_stream_buffers_then_commits() {
+        let mut state = opened_conversation();
+        reduce(&mut state, DesktopAction::ChatDelta("hel".to_owned()));
+        reduce(&mut state, DesktopAction::ChatDelta("lo".to_owned()));
+        reduce(
+            &mut state,
+            DesktopAction::ChatThinkingDelta("why".to_owned()),
+        );
+        let conversation = state.active.as_ref().expect("conversation");
+        assert_eq!(
+            conversation.streaming.as_ref().expect("streaming").text,
+            "hello"
+        );
+        assert_eq!(
+            conversation.streaming.as_ref().expect("streaming").thinking,
+            "why"
+        );
+        assert!(state.sending, "sending until the turn ends");
+
+        reduce(
+            &mut state,
+            DesktopAction::ChatDone {
+                head: "evt1-x".to_owned(),
+                entry: ConversationEntry {
+                    event_id: "evt1-x".to_owned(),
+                    kind: EntryKind::AssistantMessage,
+                    text: "hello".to_owned(),
+                    call_id: None,
+                },
+            },
+        );
+        let conversation = state.active.as_ref().expect("conversation");
+        assert_eq!(conversation.head, "evt1-x");
+        assert!(conversation.streaming.is_none());
+        assert_eq!(conversation.entries.len(), 1);
+        assert!(!state.sending);
+    }
+
+    #[test]
+    fn chat_failure_clears_streaming_and_flags_error() {
+        let mut state = opened_conversation();
+        reduce(&mut state, DesktopAction::ChatDelta("partial".to_owned()));
+        reduce(
+            &mut state,
+            DesktopAction::ChatFailed("provider down".to_owned()),
+        );
+        assert!(
+            state
+                .active
+                .as_ref()
+                .expect("conversation")
+                .streaming
+                .is_none()
+        );
+        assert_eq!(state.error.as_deref(), Some("provider down"));
+        assert!(!state.sending);
+    }
+
+    #[test]
+    fn chat_deltas_are_dropped_without_a_conversation() {
+        let mut state = WorkspaceState::default();
+        reduce(&mut state, DesktopAction::ChatDelta("ignored".to_owned()));
+        assert!(state.active.is_none());
+        assert!(!state.sending);
     }
 }

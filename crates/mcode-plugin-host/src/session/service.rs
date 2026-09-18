@@ -32,6 +32,7 @@ const DEFAULT_DEADLINE: Duration = Duration::from_secs(30);
 /// it retires the publication, closes live operations, and aborts the
 /// worker. Use [`SessionService::shutdown`] to additionally await quiescence
 /// before reclaiming the store.
+#[derive(Clone)]
 pub struct SessionService {
     client: Option<TaskActorClient<SessionActor>>,
     fence: Arc<GenerationFence>,

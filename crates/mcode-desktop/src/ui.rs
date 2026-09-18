@@ -256,7 +256,48 @@ fn render_chat(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl I
                             .child("No messages yet — provider replies arrive with T11"),
                     )
                 })
-                .children(entries.into_iter().map(|entry| render_entry(entry, theme))),
+                .children(entries.into_iter().map(|entry| render_entry(entry, theme)))
+                .when(
+                    workspace
+                        .vm()
+                        .active
+                        .as_ref()
+                        .and_then(|c| c.streaming.as_ref())
+                        .is_some(),
+                    |this| {
+                        this.child(
+                            div()
+                                .id("streaming-entry")
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .id("streaming-thinking")
+                                        .when(!streaming_thinking(workspace).is_empty(), |this| {
+                                            this.px_3().py_1().text_xs().opacity(0.6).child(
+                                                format!(
+                                                    "thinking: {}",
+                                                    streaming_thinking(workspace)
+                                                ),
+                                            )
+                                        })
+                                        .child(div()),
+                                )
+                                .child(
+                                    div()
+                                        .id("streaming-text")
+                                        .max_w(rems(40.))
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .text_sm()
+                                        .bg(theme.secondary)
+                                        .opacity(0.9)
+                                        .child(format!("{}\u{2026}", streaming_text(workspace))),
+                                ),
+                        )
+                    },
+                ),
         )
         .child(
             div()
@@ -290,6 +331,12 @@ fn render_chat(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl I
 
 fn render_entry(entry: ConversationEntry, theme: &gpui_kit::component::Theme) -> impl IntoElement {
     let mine = entry.kind == EntryKind::UserMessage;
+    let label = match entry.kind {
+        EntryKind::ToolCall => format!("\u{1f527} {}", entry.text),
+        EntryKind::ToolResult => format!("\u{2705} {}", entry.text),
+        EntryKind::Usage => format!("\u{1f4ca} {}", entry.text),
+        _ => entry.text.clone(),
+    };
     div()
         .id(format!("entry-{}", entry.event_id))
         .flex()
@@ -306,8 +353,30 @@ fn render_entry(entry: ConversationEntry, theme: &gpui_kit::component::Theme) ->
                     this.bg(theme.primary).text_color(theme.primary_foreground)
                 })
                 .when(!mine, |this| this.bg(theme.secondary))
-                .child(entry.text.clone()),
+                .child(label),
         )
+}
+
+fn streaming_text(workspace: &Workspace) -> String {
+    workspace
+        .vm()
+        .active
+        .as_ref()
+        .and_then(|c| c.streaming.as_ref())
+        .map(|s| s.text.as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn streaming_thinking(workspace: &Workspace) -> String {
+    workspace
+        .vm()
+        .active
+        .as_ref()
+        .and_then(|c| c.streaming.as_ref())
+        .map(|s| s.thinking.as_str())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn render_context_panel(
@@ -488,6 +557,7 @@ fn render_settings(
                     )
                 })
                 .children(provider_rows.iter().enumerate().map(|(index, id)| {
+                    let key_set = settings.providers_with_keys.iter().any(|keyed| keyed == id);
                     div()
                         .id(format!("provider-row-{id}"))
                         .flex()
@@ -496,11 +566,11 @@ fn render_settings(
                         .justify_between()
                         .gap_2()
                         .py_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(format!("{id} · {}", provider_kind_of(workspace, index))),
-                        )
+                        .child(div().text_sm().child(format!(
+                            "{id} · {} · key {}",
+                            provider_kind_of(workspace, index),
+                            if key_set { "\u{2713}" } else { "\u{2717}" }
+                        )))
                         .child(
                             Button::new(format!("provider-remove-{id}"))
                                 .label("Remove")
@@ -578,7 +648,11 @@ fn render_provider_form(
                 .child(form_field("id", form.read(cx).id.clone()))
                 .child(form_field("kind", form.read(cx).kind.clone()))
                 .child(form_field("base URL", form.read(cx).base_url.clone()))
-                .child(form_field("model", form.read(cx).model.clone())),
+                .child(form_field("model", form.read(cx).model.clone()))
+                .child(form_field(
+                    "api key (stored in secrets.json)",
+                    form.read(cx).api_key.clone(),
+                )),
         )
         .child(
             Button::new("provider-add")
@@ -608,12 +682,14 @@ fn short_id(id: &str) -> String {
 pub(crate) struct ProviderForm {
     /// Provider identity input.
     pub id: Entity<InputState>,
-    /// Adapter kind input.
+    /// Wire-protocol kind input.
     pub kind: Entity<InputState>,
     /// Base URL input.
     pub base_url: Entity<InputState>,
     /// Default model input.
     pub model: Entity<InputState>,
+    /// API key input; stored in the secret store, never in settings.
+    pub api_key: Entity<InputState>,
 }
 
 impl ProviderForm {
@@ -625,11 +701,13 @@ impl ProviderForm {
         let kind = make("anthropic-messages | openai-completions | openai-responses");
         let base_url = make("https://api.example.com/v1");
         let model = make("model id");
+        let api_key = make("api key (leave empty to skip)");
         cx.new(|_| Self {
             id,
             kind,
             base_url,
             model,
+            api_key,
         })
     }
 }

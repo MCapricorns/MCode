@@ -4716,11 +4716,15 @@ version = "0.0.1"
 dependencies = [
  "gpui-kit",
  "mcode-config",
+ "mcode-core",
  "mcode-plugin-host",
+ "mcode-provider-api",
+ "mcode-providers",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

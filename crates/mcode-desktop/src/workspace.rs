@@ -7,7 +7,7 @@ use gpui_kit::{px, size};
 use mcode_config::HomeLayout;
 use mcode_plugin_host::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 
-use crate::bridge::{BridgeCommand, BridgeReply, CoreBridge};
+use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 use crate::ui::ProviderForm;
 use crate::view_model::{ContextTab, DesktopAction, SettingsState, WorkspaceState, reduce};
 
@@ -17,6 +17,9 @@ const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
     size: size(px(1280.), px(840.)),
 };
 
+/// Poll cadence for streaming chat events from the core thread.
+const EVENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Opens the main window over one owned home.
 ///
 /// # Panics
@@ -24,7 +27,7 @@ const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
 /// Panics when the window cannot open; the process has no useful headless
 /// fallback by design.
 pub fn open_window(home: HomeLayout, cx: &mut App) {
-    let bridge = CoreBridge::start(home);
+    let (bridge, events) = CoreBridge::start(home);
     let options = gpui_kit::WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(WINDOW_BOUNDS)),
         titlebar: Some(gpui_kit::TitlebarOptions {
@@ -35,7 +38,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
-        let workspace = Workspace::new(bridge, window, cx);
+        let workspace = Workspace::new(bridge, events, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
     })
     .expect("open the MCode window");
@@ -53,7 +56,12 @@ pub struct Workspace {
 
 impl Workspace {
     /// Builds the workspace and issues the initial core loads.
-    pub fn new(bridge: CoreBridge, window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub fn new(
+        bridge: CoreBridge,
+        events: std::sync::mpsc::Receiver<BridgeEvent>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Message MCode…  (Enter to send, Shift+Enter for a new line)")
@@ -73,10 +81,78 @@ impl Workspace {
                 workspace.on_composer_event(event, window, cx);
             })
             .detach();
+            workspace.spawn_event_pump(events, cx);
             workspace.dispatch(BridgeCommand::ListSessions, cx);
             workspace.dispatch(BridgeCommand::LoadSettings, cx);
         });
         workspace
+    }
+
+    /// Polls the core event channel and folds streaming events into state.
+    fn spawn_event_pump(
+        &self,
+        events: std::sync::mpsc::Receiver<BridgeEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(EVENT_POLL_INTERVAL).await;
+                loop {
+                    match events.try_recv() {
+                        Ok(event) => {
+                            if this
+                                .update(cx, |workspace, cx| workspace.apply_event(event, cx))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn apply_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
+        let active_session = self.vm.active.as_ref().map(|c| c.session_id.clone());
+        let matches_active = |session_id: &str| active_session.as_deref() == Some(session_id);
+        let action = match event {
+            BridgeEvent::ChatText { session_id, delta } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ChatDelta(delta)
+            }
+            BridgeEvent::ChatThinking { session_id, delta } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ChatThinkingDelta(delta)
+            }
+            BridgeEvent::ChatDone {
+                session_id,
+                head,
+                entry,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ChatDone { head, entry }
+            }
+            BridgeEvent::ChatFailed {
+                session_id,
+                message,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ChatFailed(message)
+            }
+        };
+        self.apply_action(action, cx);
     }
 
     fn on_composer_event(
@@ -129,24 +205,98 @@ impl Workspace {
             }
             BridgeReply::Sent(Ok((head, entry))) => {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
+                self.begin_chat_turn(cx);
             }
-            BridgeReply::Settings(Ok((settings, revision))) => {
-                let state = SettingsState::from_settings(&settings, revision.get());
+            BridgeReply::Settings(Ok((settings, revision, keyed_ids))) => {
+                let revision = revision.get();
+                let state = SettingsState::from_settings(&settings, revision, keyed_ids);
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
             }
             BridgeReply::SettingsSaved(Ok(revision)) => {
                 self.apply_action(DesktopAction::SettingsSaved(revision.get()), cx);
             }
+            BridgeReply::ProviderKeySaved(Ok(())) => {
+                self.dispatch(BridgeCommand::LoadSettings, cx);
+            }
+            BridgeReply::ChatStarted(Ok(())) => {}
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))
             | BridgeReply::Conversation(Err(message))
             | BridgeReply::Sent(Err(message))
             | BridgeReply::Settings(Err(message))
-            | BridgeReply::SettingsSaved(Err(message)) => {
+            | BridgeReply::SettingsSaved(Err(message))
+            | BridgeReply::ProviderKeySaved(Err(message))
+            | BridgeReply::ChatStarted(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
         }
+    }
+
+    /// Starts one model turn over the active conversation using the first
+    /// enabled configured provider.
+    fn begin_chat_turn(&mut self, cx: &mut Context<Self>) {
+        let Some(conversation) = self.vm.active.clone() else {
+            self.apply_action(DesktopAction::Failed("no open session".to_owned()), cx);
+            return;
+        };
+        let (Some(session), Some(branch)) = (
+            SessionId::parse(&conversation.session_id),
+            BranchId::parse(&conversation.branch_id),
+        ) else {
+            return;
+        };
+        let expected_head = parse_head(&conversation.head);
+        let Some(settings) = self.vm.settings.as_ref() else {
+            self.apply_action(
+                DesktopAction::Failed("settings are still loading".to_owned()),
+                cx,
+            );
+            return;
+        };
+        let Some(provider) = settings.providers.iter().find(|p| p.enabled) else {
+            self.apply_action(
+                DesktopAction::Failed(
+                    "no enabled provider — add one with its API key in Settings".to_owned(),
+                ),
+                cx,
+            );
+            return;
+        };
+        let Some(model) = provider.models.first() else {
+            self.apply_action(
+                DesktopAction::Failed("the provider has no models configured".to_owned()),
+                cx,
+            );
+            return;
+        };
+        let history: Vec<mcode_core::Message> = conversation
+            .entries
+            .iter()
+            .map(|entry| match entry.kind {
+                crate::view_model::EntryKind::UserMessage => {
+                    mcode_core::Message::User(mcode_core::UserMessage::text(entry.text.clone()))
+                }
+                _ => mcode_core::Message::Assistant(mcode_core::AssistantMessage {
+                    blocks: vec![mcode_core::ContentBlock::Text(mcode_core::TextBlock::new(
+                        entry.text.clone(),
+                    ))],
+                    usage: None,
+                    stop_reason: mcode_core::StopReason::Stop,
+                }),
+            })
+            .collect();
+        self.dispatch(
+            BridgeCommand::ChatTurn {
+                session,
+                branch,
+                expected_head,
+                provider_id: provider.id.clone(),
+                model: model.clone(),
+                history,
+            },
+            cx,
+        );
     }
 
     fn send(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -274,6 +424,7 @@ impl Workspace {
         let kind = form.read(cx).kind.read(cx).value().trim().to_string();
         let base_url = form.read(cx).base_url.read(cx).value().trim().to_string();
         let model = form.read(cx).model.read(cx).value().trim().to_string();
+        let api_key = form.read(cx).api_key.read(cx).value().trim().to_string();
         if id.is_empty() || kind.is_empty() || base_url.is_empty() || model.is_empty() {
             self.apply_action(
                 DesktopAction::Failed("fill id, kind, base URL, and model".to_owned()),
@@ -283,7 +434,7 @@ impl Workspace {
         }
         self.apply_action(
             DesktopAction::SettingsProviderAdded(mcode_config::ProviderSettings {
-                id,
+                id: id.clone(),
                 kind,
                 base_url,
                 models: vec![model],
@@ -291,6 +442,15 @@ impl Workspace {
             }),
             cx,
         );
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: id,
+                    api_key,
+                },
+                cx,
+            );
+        }
     }
 
     pub(super) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
