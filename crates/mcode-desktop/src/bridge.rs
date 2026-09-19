@@ -8,13 +8,18 @@
 //! as concurrent runtime tasks that stream [`BridgeEvent`]s back through a
 //! bounded channel the UI polls. Configuration reads stay synchronous on the
 //! same thread.
-use std::sync::{Arc, mpsc};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread::JoinHandle;
 
 use mcode_agent::{Agent, AgentConfig, HookRunner};
+use mcode_catalog::{
+    CachedCatalog, CatalogDocument, DEFAULT_MAX_AGE_SECS, RefreshOutcome, http_client,
+};
 use mcode_config::{
-    AppSettings, AuthorityRevision, HomeLayout, read_app_settings, read_provider_secrets,
-    replace_app_settings, replace_provider_secrets,
+    AppSettings, AuthorityRevision, HomeLayout, UiState, read_app_settings, read_provider_secrets,
+    read_ui_state, replace_app_settings, replace_provider_secrets, replace_ui_state,
 };
 use mcode_core::Message;
 use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
@@ -22,6 +27,7 @@ use mcode_session::session::{
     self, BranchId, EventKind, HeadStamp, SessionCallId, SessionError, SessionId, SessionService,
 };
 use mcode_tools::ToolRegistry;
+use mcode_updates::{PreparedUpdate, UpdateOffer};
 use mcode_web::SearchResult;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -113,6 +119,31 @@ pub enum BridgeCommand {
         /// One answer per asked question, in order; empty string skips.
         answers: Vec<String>,
     },
+    /// Resolve the current provider catalog (cache, else bundled snapshot).
+    GetCatalog,
+    /// Re-download the cloud provider catalog.
+    RefreshCatalog,
+    /// Load the durable UI state document.
+    LoadUiState,
+    /// Persist the durable UI state document.
+    SaveUiState {
+        /// The replacement state.
+        state: UiState,
+    },
+    /// Bind one project directory to a session for tool runs.
+    SetProjectDir {
+        /// Session identity spelling.
+        session_id: String,
+        /// Existing directory; `None` reverts to the default workspace.
+        path: Option<String>,
+    },
+    /// Query GitHub for a newer desktop release.
+    CheckUpdate,
+    /// Download and verify one update offer into a staging directory.
+    DownloadUpdate {
+        /// The offer to download.
+        offer: UpdateOffer,
+    },
 }
 
 /// A streaming event from an active model turn.
@@ -139,6 +170,21 @@ pub enum BridgeEvent {
         /// New branch head spelling.
         head: String,
         /// Committed assistant entry projection.
+        entry: ConversationEntry,
+    },
+    /// A durable usage record was committed.
+    UsageRecorded {
+        /// Session identity spelling.
+        session_id: String,
+        /// Provider identity.
+        provider: String,
+        /// Model id.
+        model: String,
+        /// Input tokens.
+        input: u64,
+        /// Output tokens.
+        output: u64,
+        /// Committed usage entry projection.
         entry: ConversationEntry,
     },
     /// The durable task list changed.
@@ -178,6 +224,18 @@ pub enum BridgeEvent {
         /// Rendered failure for the banner.
         message: String,
     },
+    /// The provider catalog changed after a cloud refresh.
+    CatalogUpdated {
+        /// Provider count in the refreshed catalog.
+        providers: usize,
+        /// Unix seconds of the successful fetch.
+        fetched_at: u64,
+    },
+    /// A newer desktop release is available.
+    UpdateAvailable {
+        /// The resolved release offer.
+        offer: UpdateOffer,
+    },
 }
 
 /// A reply from the core thread, already projected for the view-model.
@@ -209,6 +267,39 @@ pub enum BridgeReply {
     Resources(Result<Vec<(String, String)>, String>),
     /// The user's answers were delivered to the waiting tool.
     AskAnswered(Result<(), String>),
+    /// Provider catalog snapshot with its freshness metadata.
+    Catalog(Result<CatalogInfo, String>),
+    /// Durable UI state load result.
+    UiState(Result<UiState, String>),
+    /// UI state persist result.
+    UiStateSaved(Result<(), String>),
+    /// Project directory bind result.
+    ProjectSet(Result<(), String>),
+    /// Update check result; `Ok(None)` means the app is current.
+    UpdateChecked(Result<Option<UpdateOffer>, String>),
+    /// Download-and-verify result.
+    UpdateDownloaded(Result<PreparedUpdate, String>),
+}
+
+/// The resolved provider catalog shared with the UI.
+#[derive(Clone, Debug)]
+pub struct CatalogInfo {
+    /// The catalog document.
+    pub document: Arc<CatalogDocument>,
+    /// Unix seconds of the successful cloud fetch; 0 for the baseline.
+    pub fetched_at: u64,
+}
+
+impl CatalogInfo {
+    /// Human-readable source description.
+    #[must_use]
+    pub fn source_label(&self) -> &'static str {
+        if self.fetched_at > 0 {
+            "cloud catalog"
+        } else {
+            "bundled snapshot"
+        }
+    }
 }
 
 /// Handle to the core thread.
@@ -350,7 +441,12 @@ fn run_core(
         }
     };
     runtime.block_on(async move {
-        let service = SessionService::new(&home);
+        // The state lives behind one Arc: `SessionService` retires its
+        // publication when a clone is dropped, so clones must share one
+        // instance instead of duplicating it.
+        let state = Arc::new(CoreState::new(home));
+        spawn_catalog_refresh(state.clone(), events.clone());
+        spawn_update_check(state.clone(), events.clone());
         while let Ok(with_reply) = commands.recv() {
             match with_reply.command {
                 BridgeCommand::ChatTurn {
@@ -362,8 +458,7 @@ fn run_core(
                     history,
                 } => {
                     let task = chat_turn(
-                        service.clone(),
-                        home.clone(),
+                        state.clone(),
                         events.clone(),
                         session,
                         branch,
@@ -375,16 +470,156 @@ fn run_core(
                     tokio::spawn(task);
                     let _ = with_reply.reply.send(BridgeReply::ChatStarted(Ok(())));
                 }
+                BridgeCommand::RefreshCatalog => {
+                    let task_state = state.clone();
+                    let task_events = events.clone();
+                    let reply = with_reply.reply;
+                    tokio::spawn(async move {
+                        let outcome = refresh_catalog(&task_state, &task_events, true).await;
+                        let _ = reply.send(outcome);
+                    });
+                }
+                BridgeCommand::CheckUpdate => {
+                    let reply = with_reply.reply;
+                    tokio::spawn(async move {
+                        let client = match http_client(UPDATE_USER_AGENT) {
+                            Ok(client) => client,
+                            Err(message) => {
+                                let _ = reply.send(BridgeReply::UpdateChecked(Err(message)));
+                                return;
+                            }
+                        };
+                        let _ = reply.send(BridgeReply::UpdateChecked(
+                            mcode_updates::latest_release(&client).await,
+                        ));
+                    });
+                }
+                BridgeCommand::DownloadUpdate { offer } => {
+                    let reply = with_reply.reply;
+                    tokio::spawn(async move {
+                        let outcome = match http_client(UPDATE_USER_AGENT) {
+                            Ok(client) => mcode_updates::download_update(&client, &offer).await,
+                            Err(message) => Err(message),
+                        };
+                        let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
+                    });
+                }
                 command => {
-                    let outcome = handle(&service, &home, &command).await;
+                    let outcome = handle(&state, &command).await;
                     if with_reply.reply.send(outcome).is_err() {
                         continue;
                     }
                 }
             }
         }
-        service.shutdown().await;
+        state.service.clone().shutdown().await;
     });
+}
+
+/// Shared per-process core state owned by the bridge thread.
+struct CoreState {
+    service: SessionService,
+    home: HomeLayout,
+    /// Resolved provider catalog; swapped in place by refreshes.
+    catalog: Arc<RwLock<CatalogInfo>>,
+    /// Per-session project directories for tool runs.
+    projects: Arc<Mutex<HashMap<String, PathBuf>>>,
+}
+
+impl CoreState {
+    fn new(home: HomeLayout) -> Self {
+        let cached = mcode_catalog::current(&home);
+        Self {
+            service: SessionService::new(&home),
+            catalog: Arc::new(RwLock::new(CatalogInfo {
+                document: Arc::new(cached.document),
+                fetched_at: cached.fetched_at,
+            })),
+            home,
+            projects: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// The tool working directory for one session.
+    fn project_dir(&self, session_id: &str) -> PathBuf {
+        self.projects
+            .lock()
+            .expect("projects")
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| self.home.root().join("workspace").join(session_id))
+    }
+}
+
+/// Update checks identify the app to GitHub's API.
+const UPDATE_USER_AGENT: &str = concat!("mcode-updates/", env!("CARGO_PKG_VERSION"));
+
+/// Refreshes the provider catalog and reports a successful swap.
+async fn refresh_catalog(
+    state: &CoreState,
+    events: &mpsc::SyncSender<BridgeEvent>,
+    force: bool,
+) -> BridgeReply {
+    let settings = match read_app_settings(&state.home) {
+        Ok(settings) => settings,
+        Err(error) => return BridgeReply::Catalog(Err(render_config_error(&error))),
+    };
+    let client = match http_client(&settings.effective_user_agent()) {
+        Ok(client) => client,
+        Err(message) => return BridgeReply::Catalog(Err(message)),
+    };
+    let outcome = mcode_catalog::refresh(&state.home, &client, force, DEFAULT_MAX_AGE_SECS).await;
+    match outcome {
+        RefreshOutcome::Fresh(cache) | RefreshOutcome::NotModified(cache) => {
+            BridgeReply::Catalog(Ok(catalog_info_from(cache)))
+        }
+        RefreshOutcome::Updated(cache) => {
+            let info = catalog_info_from(cache);
+            let providers = info.document.providers.len();
+            let fetched_at = info.fetched_at;
+            if let Ok(mut guard) = state.catalog.write() {
+                *guard = info.clone();
+            }
+            let _ = events.send(BridgeEvent::CatalogUpdated {
+                providers,
+                fetched_at,
+            });
+            BridgeReply::Catalog(Ok(info))
+        }
+        RefreshOutcome::Unavailable(message) => BridgeReply::Catalog(Err(message)),
+    }
+}
+
+/// One background catalog refresh shortly after startup.
+fn spawn_catalog_refresh(state: Arc<CoreState>, events: mpsc::SyncSender<BridgeEvent>) {
+    tokio::spawn(async move {
+        refresh_catalog(&state, &events, false).await;
+    });
+}
+
+/// One background update check shortly after startup.
+fn spawn_update_check(state: Arc<CoreState>, events: mpsc::SyncSender<BridgeEvent>) {
+    tokio::spawn(async move {
+        let Ok(ui_state) = read_ui_state(&state.home) else {
+            return;
+        };
+        if !ui_state.auto_update {
+            return;
+        }
+        let Ok(client) = http_client(UPDATE_USER_AGENT) else {
+            return;
+        };
+        if let Ok(Some(offer)) = mcode_updates::latest_release(&client).await {
+            let _ = events.send(BridgeEvent::UpdateAvailable { offer });
+        }
+    });
+}
+
+fn catalog_info_from(cache: CachedCatalog) -> CatalogInfo {
+    CatalogInfo {
+        document: Arc::new(cache.document),
+        fetched_at: cache.fetched_at,
+    }
 }
 
 fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
@@ -403,19 +638,23 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
         BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
         BridgeCommand::AskAnswer { .. } => BridgeReply::AskAnswered(Err(message)),
+        BridgeCommand::GetCatalog | BridgeCommand::RefreshCatalog => {
+            BridgeReply::Catalog(Err(message))
+        }
+        BridgeCommand::LoadUiState => BridgeReply::UiState(Err(message)),
+        BridgeCommand::SaveUiState { .. } => BridgeReply::UiStateSaved(Err(message)),
+        BridgeCommand::SetProjectDir { .. } => BridgeReply::ProjectSet(Err(message)),
+        BridgeCommand::CheckUpdate => BridgeReply::UpdateChecked(Err(message)),
+        BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
     }
 }
 
-async fn handle(
-    service: &SessionService,
-    home: &HomeLayout,
-    command: &BridgeCommand,
-) -> BridgeReply {
+async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
     match command {
         BridgeCommand::ListSessions => {
-            BridgeReply::Sessions(inspect_summaries(home).map_err(render_error))
+            BridgeReply::Sessions(inspect_summaries(&state.home).map_err(render_error))
         }
-        BridgeCommand::CreateSession => match service.create().await {
+        BridgeCommand::CreateSession => match state.service.create().await {
             Ok(created) => BridgeReply::Created(Ok(SessionSummary {
                 session_id: created.session_id.as_str().to_owned(),
                 root_branch_id: created.branch_id.as_str().to_owned(),
@@ -425,7 +664,7 @@ async fn handle(
             Err(error) => BridgeReply::Created(Err(render_error(error))),
         },
         BridgeCommand::OpenSession(session) => BridgeReply::Conversation(
-            open_conversation(service, session)
+            open_conversation(&state.service, session)
                 .await
                 .map_err(render_error),
         ),
@@ -435,44 +674,87 @@ async fn handle(
             expected_head,
             text,
         } => BridgeReply::Sent(
-            send_message(service, session, branch, expected_head, text)
+            send_message(&state.service, session, branch, expected_head, text)
                 .await
                 .map_err(render_error),
         ),
-        BridgeCommand::LoadSettings => BridgeReply::Settings(load_settings(home)),
+        BridgeCommand::LoadSettings => BridgeReply::Settings(load_settings(&state.home)),
         BridgeCommand::SaveSettings {
             expected_revision,
             settings,
-        } => BridgeReply::SettingsSaved(save_settings(home, *expected_revision, settings)),
+        } => BridgeReply::SettingsSaved(save_settings(&state.home, *expected_revision, settings)),
         BridgeCommand::SaveProviderKey {
             provider_id,
             api_key,
-        } => BridgeReply::ProviderKeySaved(save_provider_key(home, provider_id, api_key)),
+        } => BridgeReply::ProviderKeySaved(save_provider_key(&state.home, provider_id, api_key)),
         BridgeCommand::ChatTurn { .. } => {
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
         }
-        BridgeCommand::WebSearch { query } => BridgeReply::WebSearched(web_search(home, query)),
+        BridgeCommand::WebSearch { query } => {
+            BridgeReply::WebSearched(web_search(&state.home, query))
+        }
         BridgeCommand::McpListTools { server_id } => {
-            BridgeReply::McpTools(mcp_list_tools(home, server_id))
+            BridgeReply::McpTools(mcp_list_tools(&state.home, server_id))
         }
         BridgeCommand::RollbackWorkspace { session_id } => BridgeReply::RolledBack(
-            mcode_config::rollback_session(home, session_id)
+            mcode_config::rollback_session(&state.home, session_id)
                 .map_err(|error| render_config_error(&error)),
         ),
         BridgeCommand::ListResources { session_id } => {
-            BridgeReply::Resources(list_resources(home, session_id))
+            BridgeReply::Resources(list_resources(state, session_id))
         }
         BridgeCommand::AskAnswer {
             session_id,
             answers,
         } => BridgeReply::AskAnswered(deliver_ask_answer(session_id, answers.clone())),
+        BridgeCommand::GetCatalog => BridgeReply::Catalog(Ok(state
+            .catalog
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| CatalogInfo {
+                document: Arc::new(mcode_catalog::bundled().clone()),
+                fetched_at: 0,
+            }))),
+        BridgeCommand::LoadUiState => BridgeReply::UiState(
+            read_ui_state(&state.home).map_err(|error| render_config_error(&error)),
+        ),
+        BridgeCommand::SaveUiState { state: ui_state } => BridgeReply::UiStateSaved(
+            replace_ui_state(&state.home, ui_state).map_err(|error| render_config_error(&error)),
+        ),
+        BridgeCommand::SetProjectDir { session_id, path } => {
+            BridgeReply::ProjectSet(set_project_dir(state, session_id, path.as_deref()))
+        }
+        BridgeCommand::RefreshCatalog | BridgeCommand::CheckUpdate => {
+            BridgeReply::UpdateChecked(Err("this request runs as a concurrent task".to_owned()))
+        }
+        BridgeCommand::DownloadUpdate { .. } => {
+            BridgeReply::UpdateDownloaded(Err("downloads run as concurrent tasks".to_owned()))
+        }
     }
 }
 
+/// Validates and binds one project directory to a session.
+fn set_project_dir(state: &CoreState, session_id: &str, path: Option<&str>) -> Result<(), String> {
+    let Some(path) = path else {
+        state.projects.lock().expect("projects").remove(session_id);
+        return Ok(());
+    };
+    let directory = PathBuf::from(path);
+    if !directory.is_absolute() || !directory.is_dir() {
+        return Err("choose an existing directory".to_owned());
+    }
+    state
+        .projects
+        .lock()
+        .expect("projects")
+        .insert(session_id.to_owned(), directory);
+    Ok(())
+}
+
 /// Discovers prompt resources for one session workspace.
-fn list_resources(home: &HomeLayout, session_id: &str) -> Result<Vec<(String, String)>, String> {
-    let workspace = home.root().join("workspace").join(session_id);
-    let files = mcode_config::discover_resources(home, &workspace);
+fn list_resources(state: &CoreState, session_id: &str) -> Result<Vec<(String, String)>, String> {
+    let workspace = state.project_dir(session_id);
+    let files = mcode_config::discover_resources(&state.home, &workspace);
     Ok(files
         .iter()
         .map(|file| {
@@ -783,8 +1065,7 @@ fn secrets_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
 /// channel, and commit the assistant message to the session ledger.
 #[allow(clippy::too_many_arguments)]
 async fn chat_turn(
-    service: SessionService,
-    home: HomeLayout,
+    state: Arc<CoreState>,
     events: mpsc::SyncSender<BridgeEvent>,
     session: SessionId,
     branch: BranchId,
@@ -794,9 +1075,9 @@ async fn chat_turn(
     history: Vec<Message>,
 ) {
     let session_id = session.as_str().to_owned();
+    let cwd = state.project_dir(&session_id);
     if let Err(message) = run_chat_turn(
-        &service,
-        &home,
+        &state,
         &events,
         &session_id,
         session,
@@ -804,6 +1085,7 @@ async fn chat_turn(
         expected_head,
         &provider_id,
         &model,
+        cwd,
         &history,
     )
     .await
@@ -817,8 +1099,7 @@ async fn chat_turn(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_turn(
-    service: &SessionService,
-    home: &HomeLayout,
+    state: &CoreState,
     events: &mpsc::SyncSender<BridgeEvent>,
     session_id: &str,
     session: SessionId,
@@ -826,8 +1107,10 @@ async fn run_chat_turn(
     expected_head: HeadStamp,
     provider_id: &str,
     model: &str,
+    cwd: PathBuf,
     history: &[Message],
 ) -> Result<(), String> {
+    let home = &state.home;
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let provider = settings
         .providers
@@ -845,11 +1128,13 @@ async fn run_chat_turn(
     let transport = ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?;
     let wire = WireProvider::new(resolved, Arc::new(transport));
 
-    // Per-session tool working directory.
-    let cwd = home.root().join("workspace").join(session_id);
+    // The tool working directory is the bound project (created on demand).
     std::fs::create_dir_all(&cwd).map_err(|error| format!("workspace dir: {error}"))?;
+    let usage_enabled = settings.usage.enabled;
+    let usage_provider = provider_id.to_owned();
+    let usage_model = model.to_owned();
     let writer = HeadWriter::new(
-        service.clone(),
+        state.service.clone(),
         session.clone(),
         branch.clone(),
         expected_head,
@@ -1027,6 +1312,27 @@ async fn run_chat_turn(
                                         head: event_id,
                                         entry,
                                     });
+                                    if usage_enabled && let Some(usage) = message.usage {
+                                        let usage_payload = serde_json::json!({
+                                            "provider": usage_provider,
+                                            "model": usage_model,
+                                            "input": usage.input_tokens,
+                                            "output": usage.output_tokens,
+                                        });
+                                        if let Ok(bytes) = serde_json::to_vec(&usage_payload)
+                                            && let Ok(usage_event) =
+                                                writer.write(EventKind::Usage, None, &bytes).await
+                                        {
+                                            let _ = pump_events.send(BridgeEvent::UsageRecorded {
+                                                session_id: pump_session_id.clone(),
+                                                provider: usage_provider.clone(),
+                                                model: usage_model.clone(),
+                                                input: usage.input_tokens,
+                                                output: usage.output_tokens,
+                                                entry: project_usage(&usage_event, &bytes),
+                                            });
+                                        }
+                                    }
                                 }
                                 Err(error) => {
                                     let _ = pump_events.send(BridgeEvent::ChatFailed {
@@ -1256,6 +1562,20 @@ impl mcode_tools::builtin::TodoStore for BridgeTodoStore {
             "stored {} tasks ({completed} done, {in_progress} in progress)",
             document.tasks.len()
         ))
+    }
+}
+
+/// Projects a committed usage payload into a display entry.
+fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry {
+    let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
+    let model = value["model"].as_str().unwrap_or("unknown");
+    let input = value["input"].as_u64().unwrap_or_default();
+    let output = value["output"].as_u64().unwrap_or_default();
+    ConversationEntry {
+        event_id: event_id.to_owned(),
+        kind: EntryKind::Usage,
+        text: format!("{model}: {input} in / {output} out"),
+        call_id: None,
     }
 }
 

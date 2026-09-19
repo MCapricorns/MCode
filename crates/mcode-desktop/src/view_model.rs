@@ -3,6 +3,10 @@
 //! This module has no GPUI dependency. The render layer turns
 //! [`WorkspaceState`] into elements and feeds [`DesktopAction`]s back, so the
 //! product behavior stays testable without a GPU or window.
+use std::sync::Arc;
+
+use mcode_updates::PreparedUpdate;
+
 /// One sidebar session row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSummary {
@@ -92,6 +96,8 @@ pub struct SettingsState {
     pub providers_with_keys: Vec<String>,
     /// MCP key ids (form `mcp-<server>`) that have a stored key.
     pub mcp_with_keys: Vec<String>,
+    /// Whether durable usage records are written.
+    pub usage_enabled: bool,
     /// A save is in flight.
     pub saving: bool,
     /// Unsaved local edits exist.
@@ -117,6 +123,7 @@ impl SettingsState {
             theme: settings.appearance.theme.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
+            usage_enabled: settings.usage.enabled,
             saving: false,
             dirty: false,
         }
@@ -131,7 +138,9 @@ impl SettingsState {
             web: mcode_config::WebSettings {
                 backends: self.web_backends.clone(),
             },
-            usage: mcode_config::UsageSettings { enabled: true },
+            usage: mcode_config::UsageSettings {
+                enabled: self.usage_enabled,
+            },
             mcp_servers: self.mcp_servers.clone(),
             appearance: mcode_config::AppearanceSettings {
                 theme: self.theme.clone(),
@@ -150,8 +159,47 @@ pub enum ContextTab {
     Web,
     /// Changed files and diffs from tool activity.
     Changes,
-    /// Visual settings.
+}
+
+/// The main area view: chat or full-page settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MainView {
+    /// Conversation with the agent.
+    #[default]
+    Chat,
+    /// Full-page visual settings.
     Settings,
+}
+
+/// Self-update progress shown in settings and banners.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum UpdateState {
+    /// No check has run yet.
+    #[default]
+    Idle,
+    /// A check is in flight.
+    Checking,
+    /// The running version is the latest.
+    UpToDate,
+    /// A newer release is published.
+    Available {
+        /// New version (no `v` prefix).
+        version: String,
+        /// Release page URL.
+        notes_url: String,
+    },
+    /// The update is downloading and verifying.
+    Downloading {
+        /// New version (no `v` prefix).
+        version: String,
+    },
+    /// The staged update is ready; a restart installs it.
+    Ready {
+        /// New version (no `v` prefix).
+        version: String,
+    },
+    /// The last check or download failed.
+    Failed(String),
 }
 
 /// Whole-window state.
@@ -177,12 +225,46 @@ pub struct WorkspaceState {
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Durable task list rows: (content, status).
     pub todo_rows: Vec<(String, String)>,
+    /// Cumulative usage per provider/model: (key, input, output, requests).
+    pub usage_totals: Vec<(String, u64, u64, u64)>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
     pub dark_theme: bool,
     /// Last terminal error surfaced to the user.
     pub error: Option<String>,
+    /// Chat or settings main view.
+    pub view: MainView,
+    /// The resolved provider catalog.
+    pub catalog: Option<Arc<mcode_catalog::CatalogDocument>>,
+    /// Unix seconds of the catalog's last successful cloud fetch.
+    pub catalog_fetched_at: u64,
+    /// Project directory bound to the open session.
+    pub project_dir: Option<String>,
+    /// Recent project directories, most recent first.
+    pub recents: Vec<String>,
+    /// Whether update checks run automatically.
+    pub auto_update: bool,
+    /// Self-update progress.
+    pub update: UpdateState,
+    /// The staged update waiting for a restart, when any.
+    pub prepared_update: Option<PreparedUpdate>,
+    /// The newest release offer, when one is available.
+    pub last_offer: Option<mcode_updates::UpdateOffer>,
+    /// Selected provider id in the model picker.
+    pub selected_provider: Option<String>,
+    /// Selected model id for the selected provider.
+    pub selected_model: Option<String>,
+    /// Whether the model picker dropdown is open.
+    pub model_menu_open: bool,
+    /// Filter text for the provider preset picker.
+    pub preset_search: String,
+    /// The catalog provider currently being added, when any.
+    pub active_preset: Option<String>,
+    /// Model chosen in the active preset form.
+    pub preset_model: Option<String>,
+    /// Whether the preset form's model dropdown is open.
+    pub preset_model_menu_open: bool,
 }
 /// Everything the UI can do to the state.
 #[derive(Clone, Debug, PartialEq)]
@@ -222,6 +304,8 @@ pub enum DesktopAction {
     SettingsBackendRemoved(usize),
     /// The settings editor toggled a web backend.
     SettingsBackendToggled(usize, bool),
+    /// The settings editor toggled durable usage records.
+    SettingsUsageToggled(bool),
     /// The settings editor added an MCP server.
     SettingsMcpAdded(mcode_config::McpServerSettings),
     /// The settings editor removed an MCP server.
@@ -239,6 +323,14 @@ pub enum DesktopAction {
     ToolResultAppended(ConversationEntry),
     /// Prompt resources discovered for the open session.
     ResourcesLoaded(Vec<(String, String)>),
+    /// A durable usage record arrived.
+    UsageRecorded {
+        provider: String,
+        model: String,
+        input: u64,
+        output: u64,
+        entry: ConversationEntry,
+    },
     /// The durable task list changed.
     TodoUpdated(Vec<(String, String)>),
     /// The agent asked the user structured questions.
@@ -266,6 +358,52 @@ pub enum DesktopAction {
     ToggleTheme,
     /// Clear the surfaced error.
     DismissError,
+    /// Switch the main area between chat and settings.
+    ShowMainView(MainView),
+    /// The provider catalog resolved (bundled or cloud).
+    CatalogLoaded {
+        /// The catalog document.
+        document: Arc<mcode_catalog::CatalogDocument>,
+        /// Unix seconds of the last cloud fetch.
+        fetched_at: u64,
+    },
+    /// The durable UI state loaded.
+    UiStateLoaded {
+        /// Recent project directories.
+        recents: Vec<String>,
+        /// Last opened project directory.
+        last_project: Option<String>,
+        /// Whether update checks run automatically.
+        auto_update: bool,
+        /// Last selected provider id.
+        selected_provider: Option<String>,
+        /// Last selected model id.
+        selected_model: Option<String>,
+    },
+    /// A project directory was bound to the open session.
+    ProjectOpened(String),
+    /// The model picker selected a provider.
+    ProviderSelected(String),
+    /// The model picker selected a model.
+    ModelSelected(String),
+    /// The model picker dropdown opened or closed.
+    ModelMenuToggled(bool),
+    /// The preset picker filter changed.
+    PresetSearchChanged(String),
+    /// A preset form opened or closed.
+    ActivePresetChanged(Option<String>),
+    /// The active preset form selected a model.
+    PresetModelChanged(String),
+    /// The preset form's model dropdown opened or closed.
+    PresetModelMenuToggled(bool),
+    /// Self-update progress changed.
+    UpdateStateChanged(UpdateState),
+    /// A release offer was resolved for the available update.
+    UpdateOfferFound(mcode_updates::UpdateOffer),
+    /// The auto-update preference changed.
+    AutoUpdateToggled(bool),
+    /// A verified update is staged and waiting for a restart.
+    UpdateStaged(PreparedUpdate),
 }
 
 /// Maximum composer text before the send is rejected locally.
@@ -273,6 +411,14 @@ pub const MAX_COMPOSER_CHARS: usize = 64 * 1024;
 
 /// Applies one action to the state.
 pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
+    let touches_providers = matches!(
+        action,
+        DesktopAction::SettingsLoaded(_)
+            | DesktopAction::SettingsProviderAdded(_)
+            | DesktopAction::SettingsProviderRemoved(_)
+            | DesktopAction::SettingsSaved(_)
+            | DesktopAction::UiStateLoaded { .. }
+    );
     match action {
         DesktopAction::SessionsLoaded(mut sessions) => {
             let active_id = state.active.as_ref().map(|c| c.session_id.as_str());
@@ -331,6 +477,29 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ResourcesLoaded(files) => state.resources = files,
+        DesktopAction::UsageRecorded {
+            provider,
+            model,
+            input,
+            output,
+            entry,
+        } => {
+            if let Some(conversation) = state.active.as_mut() {
+                conversation.entries.push(entry);
+            }
+            let key = format!("{provider}/{model}");
+            if let Some(row) = state
+                .usage_totals
+                .iter_mut()
+                .find(|(existing, _, _, _)| *existing == key)
+            {
+                row.1 += input;
+                row.2 += output;
+                row.3 += 1;
+            } else {
+                state.usage_totals.push((key, input, output, 1));
+            }
+        }
         DesktopAction::TodoUpdated(tasks) => state.todo_rows = tasks,
         DesktopAction::AskRequested(rows) => state.pending_ask = Some(rows),
         DesktopAction::AskAnswered => state.pending_ask = None,
@@ -408,6 +577,12 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.dirty = true;
             }
         }
+        DesktopAction::SettingsUsageToggled(enabled) => {
+            if let Some(settings) = state.settings.as_mut() {
+                settings.usage_enabled = enabled;
+                settings.dirty = true;
+            }
+        }
         DesktopAction::SettingsBackendToggled(index, enabled) => {
             if let Some(settings) = state.settings.as_mut()
                 && let Some(backend) = settings.web_backends.get_mut(index)
@@ -463,7 +638,118 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ToggleTheme => state.dark_theme = !state.dark_theme,
         DesktopAction::DismissError => state.error = None,
+        DesktopAction::ShowMainView(view) => state.view = view,
+        DesktopAction::CatalogLoaded {
+            document,
+            fetched_at,
+        } => {
+            state.catalog = Some(document);
+            state.catalog_fetched_at = fetched_at;
+        }
+        DesktopAction::UiStateLoaded {
+            recents,
+            last_project,
+            auto_update,
+            selected_provider,
+            selected_model,
+        } => {
+            state.recents = recents;
+            state.project_dir = last_project;
+            state.auto_update = auto_update;
+            if selected_provider.is_some() {
+                state.selected_provider = selected_provider;
+                state.selected_model = selected_model;
+            }
+            ensure_model_selection(state);
+        }
+        DesktopAction::ProjectOpened(project) => {
+            state.project_dir = Some(project.clone());
+            state.recents.retain(|existing| existing != &project);
+            state.recents.insert(0, project);
+            state.recents.truncate(mcode_config::MAX_RECENT_PROJECTS);
+        }
+        DesktopAction::ProviderSelected(provider) => {
+            state.selected_provider = Some(provider.clone());
+            state.selected_model = state
+                .catalog
+                .as_ref()
+                .and_then(|catalog| catalog.provider(&provider))
+                .and_then(|provider| provider.models.first())
+                .map(|model| model.id.clone())
+                .or_else(|| {
+                    state
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| settings.providers.iter().find(|p| p.id == provider))
+                        .and_then(|provider| provider.models.first().cloned())
+                });
+            state.model_menu_open = false;
+        }
+        DesktopAction::ModelSelected(model) => {
+            state.selected_model = Some(model);
+            state.model_menu_open = false;
+        }
+        DesktopAction::ModelMenuToggled(open) => state.model_menu_open = open,
+        DesktopAction::PresetSearchChanged(text) => state.preset_search = text,
+        DesktopAction::ActivePresetChanged(preset) => {
+            state.active_preset = preset.clone();
+            state.preset_model_menu_open = false;
+            state.preset_model = preset.and_then(|id| {
+                state
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.provider(&id))
+                    .and_then(|provider| provider.models.first())
+                    .map(|model| model.id.clone())
+            });
+        }
+        DesktopAction::PresetModelChanged(model) => state.preset_model = Some(model),
+        DesktopAction::PresetModelMenuToggled(open) => state.preset_model_menu_open = open,
+        DesktopAction::UpdateStateChanged(update) => state.update = update,
+        DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
+        DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
+        DesktopAction::UpdateStaged(prepared) => {
+            state.prepared_update = Some(prepared);
+            state.update = UpdateState::Ready {
+                version: mcode_updates::current_version().to_owned(),
+            };
+        }
     }
+    if touches_providers {
+        ensure_model_selection(state);
+    }
+}
+
+/// Keeps the model picker on a provider/model that actually exists.
+fn ensure_model_selection(state: &mut WorkspaceState) {
+    let Some(settings) = state.settings.as_ref() else {
+        return;
+    };
+    let selected_valid = state
+        .selected_provider
+        .as_ref()
+        .and_then(|provider_id| {
+            settings
+                .providers
+                .iter()
+                .find(|provider| &provider.id == provider_id)
+        })
+        .is_some_and(|provider| {
+            provider.enabled
+                && state
+                    .selected_model
+                    .as_ref()
+                    .is_some_and(|model| provider.models.contains(model))
+        });
+    if selected_valid {
+        return;
+    }
+    let fallback = settings
+        .providers
+        .iter()
+        .find(|provider| provider.enabled && !provider.models.is_empty());
+    state.selected_provider = fallback.map(|provider| provider.id.clone());
+    state.selected_model = fallback.and_then(|provider| provider.models.first().cloned());
 }
 
 /// Buffers one streaming fragment into the active conversation.
@@ -647,15 +933,37 @@ mod tests {
         reduce(&mut state, DesktopAction::DismissError);
         assert_eq!(state.error, None);
 
-        reduce(
-            &mut state,
-            DesktopAction::ShowContextTab(ContextTab::Settings),
-        );
-        assert_eq!(state.context_tab, ContextTab::Settings);
+        reduce(&mut state, DesktopAction::ShowMainView(MainView::Settings));
+        assert_eq!(state.view, MainView::Settings);
         reduce(&mut state, DesktopAction::ToggleTheme);
         assert!(state.dark_theme);
         reduce(&mut state, DesktopAction::ToggleTheme);
         assert!(!state.dark_theme);
+    }
+
+    #[test]
+    fn model_selection_falls_back_to_an_enabled_provider() {
+        let mut state = WorkspaceState::default();
+        let mut settings =
+            SettingsState::from_settings(&mcode_config::AppSettings::default(), 0, Vec::new());
+        settings.providers.push(mcode_config::ProviderSettings {
+            id: "acme".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://api.acme.dev/v1".to_owned(),
+            models: vec!["m1".to_owned(), "m2".to_owned()],
+            enabled: true,
+        });
+        reduce(&mut state, DesktopAction::SettingsLoaded(settings));
+        assert_eq!(state.selected_provider.as_deref(), Some("acme"));
+        assert_eq!(state.selected_model.as_deref(), Some("m1"));
+
+        reduce(&mut state, DesktopAction::ModelSelected("m2".to_owned()));
+        assert_eq!(state.selected_model.as_deref(), Some("m2"));
+
+        // Removing the provider clears the selection back to the fallback.
+        reduce(&mut state, DesktopAction::SettingsProviderRemoved(0));
+        assert_eq!(state.selected_provider, None);
+        assert_eq!(state.selected_model, None);
     }
 
     fn opened_conversation() -> WorkspaceState {

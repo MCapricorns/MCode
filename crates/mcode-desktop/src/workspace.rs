@@ -1,4 +1,5 @@
-//! The workspace window view: fixed Cursor-style three-column layout.
+//! The workspace window view: activity bar, sessions sidebar, chat, and a
+//! full-page settings view.
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
@@ -9,7 +10,9 @@ use mcode_session::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 
 use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 use crate::ui::{BackendForm, McpForm, ProviderForm};
-use crate::view_model::{ContextTab, DesktopAction, SettingsState, WorkspaceState, reduce};
+use crate::view_model::{
+    ContextTab, DesktopAction, MainView, SettingsState, UpdateState, WorkspaceState, reduce,
+};
 
 /// Window chrome bounds for the first window.
 const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
@@ -19,6 +22,9 @@ const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
 
 /// Poll cadence for streaming chat events from the core thread.
 const EVENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Re-run the automatic update check after one day of runtime.
+const UPDATE_RECHECK_TICKS: u64 = 24 * 60 * 60 * 1000 / EVENT_POLL_INTERVAL.as_millis() as u64;
 
 /// Opens the main window over one owned home.
 ///
@@ -55,8 +61,13 @@ pub struct Workspace {
     backend_form: Option<Entity<BackendForm>>,
     mcp_form: Option<Entity<McpForm>>,
     mcp_key_input: Option<Entity<InputState>>,
+    preset_key_input: Option<Entity<InputState>>,
+    preset_search_input: Option<Entity<InputState>>,
     web_query_input: Option<Entity<InputState>>,
     ask_input: Option<Entity<InputState>>,
+    pending_project: Option<String>,
+    pending_catalog_refresh: bool,
+    runtime_ticks: u64,
 }
 
 impl Workspace {
@@ -82,8 +93,13 @@ impl Workspace {
             backend_form: None,
             mcp_form: None,
             mcp_key_input: None,
+            preset_key_input: None,
+            preset_search_input: None,
             web_query_input: None,
             ask_input: None,
+            pending_project: None,
+            pending_catalog_refresh: false,
+            runtime_ticks: 0,
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -94,6 +110,8 @@ impl Workspace {
             workspace.spawn_event_pump(events, cx);
             workspace.dispatch(BridgeCommand::ListSessions, cx);
             workspace.dispatch(BridgeCommand::LoadSettings, cx);
+            workspace.dispatch(BridgeCommand::LoadUiState, cx);
+            workspace.dispatch(BridgeCommand::GetCatalog, cx);
         });
         workspace
     }
@@ -121,9 +139,18 @@ impl Workspace {
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                     }
                 }
+                let _ = this.update(cx, |workspace, cx| workspace.on_runtime_tick(cx));
             }
         })
         .detach();
+    }
+
+    /// Periodic background work: the daily update re-check.
+    fn on_runtime_tick(&mut self, cx: &mut Context<Self>) {
+        self.runtime_ticks += 1;
+        if self.runtime_ticks.is_multiple_of(UPDATE_RECHECK_TICKS) && self.vm.auto_update {
+            self.on_check_update(cx);
+        }
     }
 
     fn apply_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
@@ -161,6 +188,25 @@ impl Workspace {
                 }
                 DesktopAction::ChatFailed(message)
             }
+            BridgeEvent::UsageRecorded {
+                session_id,
+                provider,
+                model,
+                input,
+                output,
+                entry,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::UsageRecorded {
+                    provider,
+                    model,
+                    input,
+                    output,
+                    entry,
+                }
+            }
             BridgeEvent::TodoUpdated { session_id, tasks } => {
                 if !matches_active(&session_id) {
                     return;
@@ -191,6 +237,16 @@ impl Workspace {
                     return;
                 }
                 DesktopAction::ToolResultAppended(entry)
+            }
+            BridgeEvent::CatalogUpdated { .. } => {
+                self.dispatch(BridgeCommand::GetCatalog, cx);
+                return;
+            }
+            BridgeEvent::UpdateAvailable { offer } => {
+                let version = offer.version.clone();
+                let notes_url = offer.notes_url.clone();
+                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
+                DesktopAction::UpdateStateChanged(UpdateState::Available { version, notes_url })
             }
         };
         self.apply_action(action, cx);
@@ -240,6 +296,9 @@ impl Workspace {
                 let session_id = SessionId::parse(&summary.session_id).expect("core session id");
                 self.apply_action(DesktopAction::SessionCreated(summary), cx);
                 self.dispatch(BridgeCommand::OpenSession(session_id), cx);
+                if let Some(project) = self.pending_project.take() {
+                    self.bind_project(&project, cx);
+                }
             }
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
@@ -282,6 +341,70 @@ impl Workspace {
                 };
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
+            BridgeReply::Catalog(Ok(info)) => {
+                self.pending_catalog_refresh = false;
+                self.apply_action(
+                    DesktopAction::CatalogLoaded {
+                        document: info.document,
+                        fetched_at: info.fetched_at,
+                    },
+                    cx,
+                );
+            }
+            BridgeReply::Catalog(Err(message)) => {
+                if self.pending_catalog_refresh {
+                    self.pending_catalog_refresh = false;
+                    self.apply_action(DesktopAction::Failed(message), cx);
+                }
+            }
+            BridgeReply::UiState(Ok(ui_state)) => {
+                self.apply_action(
+                    DesktopAction::UiStateLoaded {
+                        recents: ui_state.recent_projects,
+                        last_project: ui_state.last_project,
+                        auto_update: ui_state.auto_update,
+                        selected_provider: ui_state.selected_provider,
+                        selected_model: ui_state.selected_model,
+                    },
+                    cx,
+                );
+            }
+            BridgeReply::UiState(Err(_)) => {}
+            BridgeReply::UiStateSaved(Ok(())) => {}
+            BridgeReply::UiStateSaved(Err(message)) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+            BridgeReply::ProjectSet(Ok(())) => {}
+            BridgeReply::ProjectSet(Err(message)) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+            BridgeReply::UpdateChecked(Ok(None)) => {
+                self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::UpToDate), cx);
+            }
+            BridgeReply::UpdateChecked(Ok(Some(offer))) => {
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Available {
+                        version: offer.version,
+                        notes_url: offer.notes_url,
+                    }),
+                    cx,
+                );
+            }
+            BridgeReply::UpdateChecked(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message)),
+                    cx,
+                );
+            }
+            BridgeReply::UpdateDownloaded(Ok(prepared)) => {
+                self.apply_action(DesktopAction::UpdateStaged(prepared), cx);
+            }
+            BridgeReply::UpdateDownloaded(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message)),
+                    cx,
+                );
+            }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))
             | BridgeReply::Conversation(Err(message))
@@ -300,8 +423,8 @@ impl Workspace {
         }
     }
 
-    /// Starts one model turn over the active conversation using the first
-    /// enabled configured provider.
+    /// Starts one model turn over the active conversation using the picked
+    /// provider/model, falling back to the first enabled provider.
     fn begin_chat_turn(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.clone() else {
             self.apply_action(DesktopAction::Failed("no open session".to_owned()), cx);
@@ -321,7 +444,14 @@ impl Workspace {
             );
             return;
         };
-        let Some(provider) = settings.providers.iter().find(|p| p.enabled) else {
+        let selected_provider = self.vm.selected_provider.clone();
+        let selected_model = self.vm.selected_model.clone();
+        let provider = settings
+            .providers
+            .iter()
+            .find(|provider| provider.enabled && Some(&provider.id) == selected_provider.as_ref())
+            .or_else(|| settings.providers.iter().find(|provider| provider.enabled));
+        let Some(provider) = provider else {
             self.apply_action(
                 DesktopAction::Failed(
                     "no enabled provider — add one with its API key in Settings".to_owned(),
@@ -330,7 +460,10 @@ impl Workspace {
             );
             return;
         };
-        let Some(model) = provider.models.first() else {
+        let model = selected_model
+            .filter(|model| provider.models.contains(model))
+            .or_else(|| provider.models.first().cloned());
+        let Some(model) = model else {
             self.apply_action(
                 DesktopAction::Failed("the provider has no models configured".to_owned()),
                 cx,
@@ -359,7 +492,7 @@ impl Workspace {
                 branch,
                 expected_head,
                 provider_id: provider.id.clone(),
-                model: model.clone(),
+                model,
                 history,
             },
             cx,
@@ -423,6 +556,141 @@ impl Workspace {
     pub(super) fn on_show_tab(&mut self, tab: ContextTab, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ShowContextTab(tab), cx);
     }
+
+    /// Switches the main area between chat and settings.
+    pub(super) fn on_show_main_view(&mut self, view: MainView, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ShowMainView(view), cx);
+    }
+
+    pub(super) fn on_toggle_model_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
+    }
+
+    pub(super) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ProviderSelected(provider_id.to_owned()), cx);
+        self.persist_ui_state(cx);
+    }
+
+    pub(super) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ModelSelected(model_id.to_owned()), cx);
+        self.persist_ui_state(cx);
+    }
+
+    // ---- project selection ----
+
+    /// Opens the native folder picker and binds the chosen directory.
+    pub(super) fn on_open_project_dialog(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose a project folder for the agent".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(directory) = paths.first() else {
+                return;
+            };
+            let project = directory.to_string_lossy().into_owned();
+            let _ = this.update(cx, |workspace, cx| workspace.bind_project(&project, cx));
+        })
+        .detach();
+    }
+
+    /// Opens one of the remembered recent projects.
+    pub(super) fn on_open_recent(&mut self, project: &str, cx: &mut Context<Self>) {
+        self.bind_project(project, cx);
+    }
+
+    /// Binds the project to the active session, creating one when needed.
+    fn bind_project(&mut self, project: &str, cx: &mut Context<Self>) {
+        if self.vm.active.is_none() {
+            self.pending_project = Some(project.to_owned());
+            self.dispatch(BridgeCommand::CreateSession, cx);
+            return;
+        }
+        let session_id = self
+            .vm
+            .active
+            .as_ref()
+            .map(|conversation| conversation.session_id.clone())
+            .expect("active session");
+        self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        self.dispatch(
+            BridgeCommand::SetProjectDir {
+                session_id: session_id.clone(),
+                path: Some(project.to_owned()),
+            },
+            cx,
+        );
+        self.dispatch(
+            BridgeCommand::ListResources {
+                session_id: session_id.clone(),
+            },
+            cx,
+        );
+        self.persist_ui_state(cx);
+    }
+
+    /// Persists the durable UI state projection.
+    fn persist_ui_state(&self, cx: &mut Context<Self>) {
+        let state = mcode_config::UiState {
+            recent_projects: self.vm.recents.clone(),
+            last_project: self.vm.project_dir.clone(),
+            auto_update: self.vm.auto_update,
+            selected_provider: self.vm.selected_provider.clone(),
+            selected_model: self.vm.selected_model.clone(),
+        };
+        self.dispatch(BridgeCommand::SaveUiState { state }, cx);
+    }
+
+    // ---- catalog ----
+
+    pub(super) fn on_refresh_catalog(&mut self, cx: &mut Context<Self>) {
+        self.pending_catalog_refresh = true;
+        self.dispatch(BridgeCommand::RefreshCatalog, cx);
+    }
+
+    // ---- updates ----
+
+    pub(super) fn on_check_update(&mut self, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::Checking), cx);
+        self.dispatch(BridgeCommand::CheckUpdate, cx);
+    }
+
+    pub(super) fn on_download_update(&mut self, cx: &mut Context<Self>) {
+        let Some(offer) = self.vm.last_offer.clone() else {
+            return;
+        };
+        self.apply_action(
+            DesktopAction::UpdateStateChanged(UpdateState::Downloading {
+                version: offer.version.clone(),
+            }),
+            cx,
+        );
+        self.dispatch(BridgeCommand::DownloadUpdate { offer }, cx);
+    }
+
+    /// Installs the staged update: arm the detached swap, then exit.
+    pub(super) fn on_install_update(&mut self, cx: &mut Context<Self>) {
+        let Some(prepared) = self.vm.prepared_update.clone() else {
+            return;
+        };
+        if let Err(message) = mcode_updates::apply_and_restart(&prepared) {
+            self.apply_action(DesktopAction::Failed(message), cx);
+            return;
+        }
+        cx.quit();
+    }
+
+    pub(super) fn on_toggle_auto_update(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::AutoUpdateToggled(enabled), cx);
+        self.persist_ui_state(cx);
+    }
+
+    // ---- ask / tools ----
 
     pub(super) fn on_list_mcp_tools(&mut self, server_id: &str, cx: &mut Context<Workspace>) {
         self.dispatch(
@@ -534,10 +802,6 @@ impl Workspace {
         &self.composer
     }
 
-    pub(super) fn refresh_sessions(&mut self, cx: &mut Context<Self>) {
-        self.dispatch(BridgeCommand::ListSessions, cx);
-    }
-
     pub(super) fn settings_ua_input(
         &mut self,
         window: &mut Window,
@@ -643,6 +907,117 @@ impl Workspace {
 
     pub(super) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::SettingsProviderRemoved(index), cx);
+    }
+
+    // ---- provider presets from the catalog ----
+
+    /// The filter input for the provider preset picker.
+    pub(super) fn preset_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<InputState> {
+        if self.preset_search_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter providers…"));
+            cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    workspace.apply_action(DesktopAction::PresetSearchChanged(text), cx);
+                }
+            })
+            .detach();
+            self.preset_search_input = Some(input);
+        }
+        self.preset_search_input
+            .clone()
+            .expect("preset search input")
+    }
+
+    pub(super) fn on_open_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        self.preset_key_input = None;
+        self.apply_action(
+            DesktopAction::ActivePresetChanged(Some(provider_id.to_owned())),
+            cx,
+        );
+    }
+
+    pub(super) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
+        self.preset_key_input = None;
+        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+    }
+
+    pub(super) fn preset_key_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<InputState> {
+        self.preset_key_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+            })
+            .clone()
+    }
+
+    /// Adds one catalog preset: provider entry plus stored key, then saves.
+    pub(super) fn on_add_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        let Some(catalog) = self.vm.catalog.clone() else {
+            return;
+        };
+        let Some(preset) = catalog.provider(provider_id) else {
+            return;
+        };
+        let Some(model) = self
+            .vm
+            .preset_model
+            .clone()
+            .filter(|model| preset.models.iter().any(|entry| entry.id == *model))
+            .or_else(|| preset.models.first().map(|entry| entry.id.clone()))
+        else {
+            return;
+        };
+        // Unique id: the catalog spelling, suffixed when already configured.
+        let mut id = preset.id.clone();
+        let mut suffix = 2;
+        while self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
+        {
+            id = format!("{}-{suffix}", preset.id);
+            suffix += 1;
+        }
+        let api_key = self
+            .preset_key_input
+            .clone()
+            .map(|input| input.read(cx).value().trim().to_owned())
+            .unwrap_or_default();
+        // Drop the input entity so the pasted key never lingers on screen.
+        self.preset_key_input = None;
+        self.apply_action(
+            DesktopAction::SettingsProviderAdded(mcode_config::ProviderSettings {
+                id: id.clone(),
+                kind: preset.kind.clone(),
+                base_url: preset.base_url.clone(),
+                models: vec![model.clone()],
+                enabled: true,
+            }),
+            cx,
+        );
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: id.clone(),
+                    api_key,
+                },
+                cx,
+            );
+        }
+        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        self.apply_action(DesktopAction::ProviderSelected(id.clone()), cx);
+        self.apply_action(DesktopAction::ModelSelected(model), cx);
+        self.on_save_settings(cx);
+        self.persist_ui_state(cx);
     }
 
     pub(super) fn backend_form(

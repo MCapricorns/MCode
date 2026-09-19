@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 gpui-kit = "0.6"
+mcode-catalog = { path = "../mcode-catalog" }
 mcode-config = { path = "../mcode-config" }
 mcode-core = { path = "../mcode-core" }
 mcode-providers = { path = "../mcode-providers" }
@@ -16,6 +17,7 @@ mcode-web = { path = "../mcode-web" }
 mcode-mcp = { path = "../mcode-mcp" }
 mcode-agent = { path = "../mcode-agent" }
 mcode-tools = { path = "../mcode-tools" }
+mcode-updates = { path = "../mcode-updates" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
