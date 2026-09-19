@@ -134,7 +134,7 @@ pub fn sanitize_remote_text(value: &str) -> String {
                 match chars.get(index + 1).copied() {
                     Some('[') => index = skip_csi(&chars, index + 2),
                     Some(']') => index = skip_osc(&chars, index + 2),
-                    Some(next) if matches!(next, 'P' | 'X' | '^' | '_') => {
+                    Some('P' | 'X' | '^' | '_') => {
                         index = skip_control_string(&chars, index + 2);
                     }
                     Some(_) => index += 2,
