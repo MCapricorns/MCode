@@ -5,6 +5,7 @@ mod chat;
 mod context;
 mod settings;
 mod sidebar;
+mod skin;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -29,6 +30,7 @@ pub fn render_root(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let ambient = skin::ambient(theme);
     div()
         .id("workspace")
         .relative()
@@ -51,6 +53,7 @@ pub fn render_root(
                 .min_h_0()
                 .flex()
                 .flex_row()
+                .bg(ambient)
                 .when(
                     workspace.vm().view == crate::view_model::MainView::Chat,
                     |this| this.child(sidebar::render_sidebar(workspace, cx)),

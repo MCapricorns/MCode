@@ -11,7 +11,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::{ellipsis, icon_button, project_label, short_id};
+use super::{ellipsis, icon_button, project_label, short_id, skin};
 use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
@@ -62,9 +62,9 @@ pub(super) fn render_sidebar(
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .bg(theme.sidebar)
+        .bg(skin::glass_sidebar(theme))
         .border_r_1()
-        .border_color(theme.sidebar_border)
+        .border_color(skin::glass_border(theme))
         .child(
             div()
                 .id("sidebar-header")
@@ -406,6 +406,7 @@ pub(super) fn render_project_menu_layer(
                 .id("project-menu-backdrop")
                 .absolute()
                 .size_full()
+                .bg(skin::scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_toggle_project_menu(false, cx);
                 })),
@@ -419,10 +420,10 @@ pub(super) fn render_project_menu_layer(
                 .w(px(244.))
                 .max_h(px(430.))
                 .overflow_y_scroll()
-                .rounded_lg()
+                .rounded(px(14.))
                 .border_1()
-                .border_color(theme.border)
-                .bg(theme.popover)
+                .border_color(skin::glass_border(theme))
+                .bg(skin::popover(theme))
                 .text_color(theme.popover_foreground)
                 .shadow_lg()
                 .p_1()

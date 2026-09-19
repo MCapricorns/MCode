@@ -12,7 +12,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px, rems,
 };
 
-use super::{ellipsis, project_label};
+use super::{ellipsis, project_label, skin};
 use crate::view_model::{ConversationEntry, EntryKind};
 use crate::workspace::Workspace;
 
@@ -131,8 +131,9 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                 .id("welcome-logo")
                 .size(px(52.))
                 .rounded(px(14.))
-                .bg(theme.primary)
+                .bg(skin::accent(theme, 135.))
                 .text_color(theme.primary_foreground)
+                .shadow_lg()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -270,14 +271,15 @@ fn render_entry(entry: ConversationEntry, theme: &Theme) -> impl IntoElement {
             .items_end()
             .child(
                 div()
-                    .max_w(rems(40.))
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
+                    .max_w(rems(28.))
+                    .px(px(10.))
+                    .py(px(5.))
+                    .rounded(px(12.))
                     .rounded_tr(px(4.))
                     .text_sm()
-                    .bg(theme.primary)
+                    .bg(skin::accent(theme, 135.))
                     .text_color(theme.primary_foreground)
+                    .shadow_sm()
                     .child(entry.text),
             ),
         EntryKind::AssistantMessage => div()
@@ -353,6 +355,7 @@ fn render_composer(
     }
     let theme = cx.theme();
     let model_label: SharedString = model_picker_label(workspace.vm()).into();
+    let reasoning_label: SharedString = reasoning_chip_label(workspace.vm()).into();
     let has_session = workspace.vm().active.is_some();
     let sending = workspace.vm().sending;
     let session_project = workspace
@@ -385,11 +388,11 @@ fn render_composer(
             .mx_auto()
             .w_full()
             .max_w(rems(46.))
-            .rounded_xl()
+            .rounded(px(16.))
             .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .shadow_sm()
+            .border_color(skin::glass_border(theme))
+            .bg(skin::glass(theme))
+            .shadow_lg()
             .child(
                 div()
                     .id("composer-input")
@@ -453,6 +456,38 @@ fn render_composer(
                             .child(Icon::new(IconName::Bot).xsmall())
                             .child(model_label),
                     )
+                    .child(
+                        div()
+                            .id("composer-reasoning-chip")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .h(px(24.))
+                            .rounded(px(12.))
+                            .text_xs()
+                            .cursor_pointer()
+                            .text_color(theme.muted_foreground)
+                            .hover(|this| this.bg(theme.secondary))
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                let current = workspace
+                                    .vm()
+                                    .settings
+                                    .as_ref()
+                                    .and_then(|settings| settings.reasoning.clone())
+                                    .unwrap_or_else(|| "default".to_owned());
+                                let levels = ["default", "low", "medium", "high"];
+                                let index = levels
+                                    .iter()
+                                    .position(|level| *level == current)
+                                    .unwrap_or(0);
+                                let next = levels[(index + 1) % levels.len()];
+                                workspace.on_select_reasoning(next, cx);
+                            }))
+                            .child(Icon::new(IconName::Sparkles).xsmall())
+                            .child(reasoning_label),
+                    )
                     .child(div().flex_1())
                     .child(
                         Button::new("send")
@@ -488,14 +523,15 @@ fn render_user_entry(
         .group("user-entry")
         .child(
             div()
-                .max_w(rems(40.))
-                .px_3()
-                .py_2()
-                .rounded_lg()
+                .max_w(rems(28.))
+                .px(px(10.))
+                .py(px(5.))
+                .rounded(px(12.))
                 .rounded_tr(px(4.))
                 .text_sm()
-                .bg(theme.primary)
+                .bg(skin::accent(theme, 135.))
                 .text_color(theme.primary_foreground)
+                .shadow_sm()
                 .child(entry.text),
         );
     if can_rewind {
@@ -550,6 +586,20 @@ fn render_user_entry(
         );
     }
     bubble.into_any_element()
+}
+
+/// Composer chip label for the thinking-effort cycle button.
+fn reasoning_chip_label(vm: &crate::view_model::WorkspaceState) -> String {
+    match vm
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.reasoning.as_deref())
+    {
+        Some("low") => "Thinking \u{b7} low".to_owned(),
+        Some("medium") => "Thinking \u{b7} med".to_owned(),
+        Some("high") => "Thinking \u{b7} high".to_owned(),
+        _ => "Thinking \u{b7} auto".to_owned(),
+    }
 }
 
 fn model_picker_label(vm: &crate::view_model::WorkspaceState) -> String {
@@ -632,6 +682,7 @@ pub(super) fn render_model_menu_layer(
                 .id("model-menu-backdrop")
                 .absolute()
                 .size_full()
+                .bg(skin::scrim(theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_toggle_model_menu(false, cx);
                 })),
@@ -645,10 +696,10 @@ pub(super) fn render_model_menu_layer(
                 .w(px(330.))
                 .max_h(px(420.))
                 .overflow_y_scroll()
-                .rounded_lg()
+                .rounded(px(14.))
                 .border_1()
-                .border_color(theme.border)
-                .bg(theme.popover)
+                .border_color(skin::glass_border(theme))
+                .bg(skin::popover(theme))
                 .text_color(theme.popover_foreground)
                 .shadow_lg()
                 .p_2()
@@ -815,10 +866,10 @@ pub(super) fn render_mention_layer(
                 .w(px(420.))
                 .max_h(px(300.))
                 .overflow_y_scroll()
-                .rounded_lg()
+                .rounded(px(14.))
                 .border_1()
-                .border_color(theme.border)
-                .bg(theme.popover)
+                .border_color(skin::glass_border(theme))
+                .bg(skin::popover(theme))
                 .text_color(theme.popover_foreground)
                 .shadow_lg()
                 .p_2()

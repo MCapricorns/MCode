@@ -8,7 +8,7 @@ use gpui_kit::{
     Window, div,
 };
 
-use super::{ellipsis, short_id};
+use super::{ellipsis, short_id, skin};
 use crate::workspace::Workspace;
 
 pub(super) fn render_context_panel(
@@ -25,8 +25,8 @@ pub(super) fn render_context_panel(
         .flex_col()
         .flex_shrink_0()
         .border_l_1()
-        .border_color(theme.border)
-        .bg(theme.sidebar)
+        .border_color(skin::glass_border(theme))
+        .bg(skin::glass_sidebar(theme))
         .child(
             div()
                 .id("context-body")
@@ -221,7 +221,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                         .flex_col()
                         .p_2()
                         .rounded_md()
-                        .bg(theme.background)
+                        .bg(theme.secondary.opacity(0.4))
                         .child(div().text_sm().child(name.clone()))
                         .child(div().text_xs().opacity(0.6).child(ellipsis(path, 60)))
                 })),
