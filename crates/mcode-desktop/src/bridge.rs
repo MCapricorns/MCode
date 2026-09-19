@@ -40,9 +40,7 @@ use mcode_web::SearchResult;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::view_model::{
-    ActiveConversation, ConversationEntry, EntryKind, SessionSummary, project_entry,
-};
+use super::view_model::{ActiveConversation, ConversationEntry, EntryKind, SessionSummary};
 
 /// Bound for streaming chat events buffered toward the UI.
 const EVENT_QUEUE: usize = 512;
@@ -1050,7 +1048,7 @@ async fn open_conversation(
             let loaded = service
                 .load_event(session, &branch_id, &event.event_id)
                 .await?;
-            entries.push(project_entry(event, decode_text(&loaded.payload)));
+            entries.push(project_replayed_entry(event, &loaded.payload));
         }
         match page.next {
             Some(cursor) => after = Some(cursor),
@@ -1432,11 +1430,6 @@ async fn run_chat_turn(
                             match writer.write(EventKind::Message, None, &payload).await {
                                 Ok(event_id) => {
                                     let entry = project_assistant_from(&event_id, &payload);
-                                    let _ = pump_events.send(BridgeEvent::ChatDone {
-                                        session_id: pump_session_id.clone(),
-                                        head: event_id,
-                                        entry,
-                                    });
                                     if usage_enabled && let Some(usage) = message.usage {
                                         let usage_payload = serde_json::json!({
                                             "provider": usage_provider,
@@ -1458,6 +1451,15 @@ async fn run_chat_turn(
                                             });
                                         }
                                     }
+                                    // Sent after the trailing usage write so the
+                                    // head the UI receives is the ledger's final
+                                    // head; a stale head fails the next append's
+                                    // compare-and-swap as "session unavailable".
+                                    let _ = pump_events.send(BridgeEvent::ChatDone {
+                                        session_id: pump_session_id.clone(),
+                                        head: writer.head().await,
+                                        entry,
+                                    });
                                 }
                                 Err(error) => {
                                     let _ = pump_events.send(BridgeEvent::ChatFailed {
@@ -1520,6 +1522,13 @@ impl HeadWriter {
             branch,
             head: Arc::new(tokio::sync::Mutex::new(head)),
         }
+    }
+
+    /// The current committed head spelling, for UI refresh after any
+    /// trailing writes.
+    async fn head(&self) -> String {
+        let guard = self.head.lock().await;
+        head_spelling(&guard)
     }
 
     /// Commits one payload of `kind` and returns (event id spelling, bytes).
@@ -1691,6 +1700,52 @@ impl mcode_tools::builtin::TodoStore for BridgeTodoStore {
 }
 
 /// Projects a committed usage payload into a display entry.
+/// Projects one replayed ledger event with the same projections the live
+/// stream uses: assistant messages and tool results parse their typed
+/// payloads instead of surfacing raw JSON, user messages stay plain text.
+fn project_replayed_entry(
+    event: &mcode_session::session::SessionEvent,
+    payload: &[u8],
+) -> ConversationEntry {
+    match event.kind {
+        EventKind::Message => {
+            // Assistant messages are typed JSON; a parse miss means the
+            // payload is the user's plain-text message.
+            if serde_json::from_slice::<mcode_core::AssistantMessage>(payload).is_ok() {
+                project_assistant_from(event.event_id.as_str(), payload)
+            } else {
+                ConversationEntry {
+                    event_id: event.event_id.as_str().to_owned(),
+                    kind: EntryKind::UserMessage,
+                    text: decode_text(payload),
+                    call_id: None,
+                }
+            }
+        }
+        EventKind::ToolResult => project_tool_result(event.event_id.as_str(), payload),
+        EventKind::ToolCall => {
+            let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
+            let name = value["name"]
+                .as_str()
+                .or_else(|| value["toolCall"]["name"].as_str())
+                .unwrap_or("tool");
+            ConversationEntry {
+                event_id: event.event_id.as_str().to_owned(),
+                kind: EntryKind::ToolCall,
+                text: name.to_owned(),
+                call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
+            }
+        }
+        EventKind::Usage => project_usage(event.event_id.as_str(), payload),
+        EventKind::Task => ConversationEntry {
+            event_id: event.event_id.as_str().to_owned(),
+            kind: EntryKind::Usage,
+            text: String::new(),
+            call_id: None,
+        },
+    }
+}
+
 fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry {
     let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
     let model = value["model"].as_str().unwrap_or("unknown");

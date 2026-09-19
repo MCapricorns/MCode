@@ -9,7 +9,7 @@
 //! environment filtering is not a sandbox. Valid calls run directly with no
 //! Core permission prompt. Use this tool for pipelines, redirection,
 //! expansion, and scripts; filesystem and search tools stay in-process.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -307,6 +307,86 @@ async fn prepare_shell(
     }
 }
 
+/// Adaptively locates a PowerShell interpreter: any installed PowerShell 7
+/// (well-known install roots beyond PATH), then the inbox Windows
+/// PowerShell 5.1. Returns `None` only when nothing usable exists locally,
+/// leaving the pinned network provision as the last resort.
+#[cfg(windows)]
+fn discover_windows_powershell() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        candidates.push(
+            PathBuf::from(&program_files)
+                .join("PowerShell")
+                .join("7")
+                .join("pwsh.exe"),
+        );
+        // Store (MSIX) installs live in versioned directories such as
+        // `Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe`; the directory
+        // name changes per release, so scan for the prefix. Listing
+        // WindowsApps can be ACL-denied; that just skips this source.
+        candidates.extend(fuzzy_windows_apps_pwsh(&PathBuf::from(&program_files)));
+    }
+    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        candidates.push(
+            PathBuf::from(program_files_x86)
+                .join("PowerShell")
+                .join("7")
+                .join("pwsh.exe"),
+        );
+    }
+    if let Some(local_app_data) = std::env::var_os("LocalAppData") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("Microsoft")
+                .join("WindowsApps")
+                .join("pwsh.exe"),
+        );
+    }
+    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+        candidates.push(
+            PathBuf::from(user_profile)
+                .join("scoop")
+                .join("shims")
+                .join("pwsh.exe"),
+        );
+    }
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        candidates.push(
+            PathBuf::from(system_root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+        );
+    }
+    // `exists()` (not `is_file()`): the Store execution alias is an
+    // appexec reparse point whose metadata is not a regular file.
+    candidates.into_iter().find(|path| path.exists())
+}
+
+/// Finds `pwsh.exe` inside versioned `Microsoft.PowerShell_*` package
+/// directories under a WindowsApps root, newest version first.
+#[cfg(windows)]
+fn fuzzy_windows_apps_pwsh(windows_apps: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(windows_apps) else {
+        return Vec::new();
+    };
+    let mut packages: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("Microsoft.PowerShell_"))
+        })
+        .collect();
+    // Descending lexical order puts the highest version first for the
+    // stable `Major.Minor.Patch.Build` naming scheme.
+    packages.sort_unstable_by(|a, b| b.cmp(a));
+    packages
+        .into_iter()
+        .map(|package| package.join("pwsh.exe"))
+        .filter(|pwsh| pwsh.exists())
+        .collect()
+}
+
 #[cfg(windows)]
 async fn prepare_windows_shell(
     command: &str,
@@ -354,11 +434,18 @@ async fn prepare_windows_shell(
             lease,
         })),
         None => {
-            let managed = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Err(command_cancelled_error(None)),
-                _ = deadline.as_mut() => return Ok(None),
-                managed = crate::builtin::powershell::ensure_pwsh() => managed?,
+            // Prefer the inbox Windows PowerShell over a network provision:
+            // a large pinned download inside a tool call reads as a hang.
+            let managed = match discover_windows_powershell() {
+                Some(path) => path,
+                None => {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return Err(command_cancelled_error(None)),
+                        _ = deadline.as_mut() => return Ok(None),
+                        managed = crate::builtin::powershell::ensure_pwsh() => managed?,
+                    }
+                }
             };
             let encoded = encode_powershell_command(powershell_script(command), &managed)?;
             let args = powershell_args(encoded);

@@ -325,7 +325,12 @@ fn render_sidebar_footer(
                 })
                 .hover(|this| this.text_color(theme.foreground))
                 .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_show_main_view(MainView::Chat, cx);
+                    let next = if workspace.vm().view == MainView::Settings {
+                        MainView::Chat
+                    } else {
+                        MainView::Settings
+                    };
+                    workspace.on_show_main_view(next, cx);
                 }))
                 .child(Icon::new(IconName::Settings).small())
                 .child(div().text_xs().child(if view == MainView::Settings {
