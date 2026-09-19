@@ -66,6 +66,8 @@ pub struct Workspace {
     pending_project: Option<String>,
     /// Draft restored by 撤回修改, applied on the next render (needs a window).
     pending_composer_prefill: Option<String>,
+    /// Last `@` fragment already searched, to dedupe bridge dispatches.
+    mention_query: Option<String>,
     pending_catalog_refresh: bool,
     runtime_ticks: u64,
 }
@@ -98,6 +100,7 @@ impl Workspace {
             ask_input: None,
             pending_project: None,
             pending_composer_prefill: None,
+            mention_query: None,
             pending_catalog_refresh: false,
             runtime_ticks: 0,
         });
@@ -268,6 +271,7 @@ impl Workspace {
             InputEvent::Change => {
                 let text = self.composer.read(cx).value().to_string();
                 self.apply_action(DesktopAction::ComposerChanged(text), cx);
+                self.refresh_mention_search(cx);
             }
             InputEvent::PressEnter { shift: false, .. } => {
                 let draft = self.vm.composer_draft.clone();
@@ -315,6 +319,11 @@ impl Workspace {
             BridgeReply::Resources(Ok(files)) => {
                 self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
             }
+            BridgeReply::ProjectFiles(Ok(files)) => {
+                self.apply_action(DesktopAction::MentionFiles(files), cx);
+            }
+            // A failed mention search just leaves the menu empty.
+            BridgeReply::ProjectFiles(Err(_)) => {}
             BridgeReply::AskAnswered(Ok(())) => {}
             BridgeReply::Sent(Ok((head, entry))) => {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
@@ -568,6 +577,64 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    /// Fires a project-file search when the active `@` fragment changed.
+    fn refresh_mention_search(&mut self, cx: &mut Context<Self>) {
+        let (kind, fragment) = match self.vm.mention.as_ref() {
+            Some(mention) => (mention.kind, mention.fragment.clone()),
+            None => {
+                self.mention_query = None;
+                return;
+            }
+        };
+        if kind != crate::view_model::MentionKind::File
+            || self.mention_query.as_deref() == Some(fragment.as_str())
+        {
+            return;
+        }
+        self.mention_query = Some(fragment.clone());
+        let Some(conversation) = self.vm.active.clone() else {
+            return;
+        };
+        self.dispatch(
+            BridgeCommand::SearchProjectFiles {
+                session_id: conversation.session_id,
+                query: fragment,
+            },
+            cx,
+        );
+    }
+
+    /// Accepts one mention row: rewrites the draft (files) or runs the
+    /// command (commands), then closes the menu.
+    pub(super) fn on_accept_mention(
+        &mut self,
+        insert: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mention) = self.vm.mention.take() else {
+            return;
+        };
+        self.mention_query = None;
+        match mention.kind {
+            crate::view_model::MentionKind::File => {
+                let mut text = self.vm.composer_draft.clone();
+                if let Some(position) = text.rfind('@') {
+                    text.replace_range(position.., &format!("@{insert} "));
+                }
+                self.pending_composer_prefill = Some(text);
+                cx.notify();
+            }
+            crate::view_model::MentionKind::Command => {
+                if insert == "/new" {
+                    self.on_new_session(cx);
+                } else if insert == "/settings" {
+                    self.on_show_main_view(crate::view_model::MainView::Settings, cx);
+                }
+            }
+        }
     }
 
     /// Rewinds to just before the user message at `index` and prefills the

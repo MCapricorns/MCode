@@ -99,6 +99,13 @@ pub enum BridgeCommand {
         /// The search query.
         query: String,
     },
+    /// List project files matching the composer's `@` fragment.
+    SearchProjectFiles {
+        /// Session whose bound project is searched.
+        session_id: String,
+        /// Case-insensitive substring filter; empty lists the first files.
+        query: String,
+    },
     /// List tools exposed by one enabled MCP server.
     McpListTools {
         /// Server identity from settings.
@@ -299,6 +306,8 @@ pub enum BridgeReply {
     ChatStarted(Result<(), String>),
     /// Web search result list.
     WebSearched(Result<Vec<SearchResult>, String>),
+    /// File matches for the composer's `@` mention.
+    ProjectFiles(Result<Vec<String>, String>),
     /// MCP tools listing for one server.
     McpTools(Result<(String, Vec<String>), String>),
     /// Rollback outcome: restored absolute paths.
@@ -695,6 +704,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::SaveProviderKey { .. } => BridgeReply::ProviderKeySaved(Err(message)),
         BridgeCommand::ChatTurn { .. } => BridgeReply::ChatStarted(Err(message)),
         BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
+        BridgeCommand::SearchProjectFiles { .. } => BridgeReply::ProjectFiles(Err(message)),
         BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
         BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
         BridgeCommand::RecallMessage { .. } => BridgeReply::Recalled(Err(message)),
@@ -762,6 +772,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::WebSearch { query } => {
             BridgeReply::WebSearched(web_search(&state.home, query).await)
         }
+        BridgeCommand::SearchProjectFiles { session_id, query } => BridgeReply::ProjectFiles(Ok(
+            search_project_files(&state.project_dir(session_id), query),
+        )),
         BridgeCommand::McpListTools { server_id } => {
             BridgeReply::McpTools(mcp_list_tools(&state.home, server_id).await)
         }
@@ -1284,6 +1297,74 @@ async fn recall_message(
     read_branch(service, session, &branched.branch_id, &branched.head)
         .await
         .map_err(render_error)
+}
+
+/// Bounded file index for the composer's `@` mention: a case-insensitive
+/// substring match over the session project, skipping dependency and VCS
+/// directories, shortest paths first.
+fn search_project_files(root: &std::path::Path, query: &str) -> Vec<String> {
+    const MAX_VISIT: usize = 8_192;
+    const MAX_COLLECT: usize = 64;
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        "out",
+        ".next",
+        ".venv",
+        "__pycache__",
+        ".mcode",
+        "checkpoints",
+    ];
+    let needle = query.to_ascii_lowercase();
+    let mut matches: Vec<String> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_VISIT {
+                return finish_mention_matches(matches);
+            }
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                    && (SKIP_DIRS.contains(&name) || name.starts_with('.'))
+                {
+                    continue;
+                }
+                stack.push(path);
+            } else if meta.is_file() {
+                let Ok(rel) = path.strip_prefix(root) else {
+                    continue;
+                };
+                let spelling = rel.to_string_lossy().replace('\\', "/");
+                if needle.is_empty() || spelling.to_ascii_lowercase().contains(&needle) {
+                    matches.push(spelling);
+                    if matches.len() >= MAX_COLLECT {
+                        return finish_mention_matches(matches);
+                    }
+                }
+            }
+        }
+    }
+    finish_mention_matches(matches)
+}
+
+/// Shortest-first truncation shared by the walk's exit points.
+fn finish_mention_matches(mut matches: Vec<String>) -> Vec<String> {
+    const MAX_MATCHES: usize = 8;
+    matches.sort_by_key(|path| (path.len(), path.clone()));
+    matches.truncate(MAX_MATCHES);
+    matches
 }
 
 /// Deletes one session's durable footprint: ledger, todos, compaction
@@ -2980,6 +3061,39 @@ mod tests {
                 std::task::Poll::Pending => std::thread::yield_now(),
             }
         }
+    }
+
+    #[test]
+    fn project_file_search_skips_noise_and_sorts_shortest_first() {
+        let parent = tempfile::tempdir().expect("parent");
+        let root = parent.path().join("proj");
+        for path in [
+            "src/main.rs",
+            "src/lib.rs",
+            "src/deep/nested/mod.rs",
+            "node_modules/skip.js",
+            ".git/config",
+            "README.md",
+        ] {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().expect("parent")).expect("dirs");
+            std::fs::write(&full, "x").expect("seed");
+        }
+
+        let hits = search_project_files(&root, "");
+        assert_eq!(
+            hits,
+            vec![
+                "README.md".to_owned(),
+                "src/lib.rs".to_owned(),
+                "src/main.rs".to_owned(),
+                "src/deep/nested/mod.rs".to_owned(),
+            ]
+        );
+        let hits = search_project_files(&root, "MAIN");
+        assert_eq!(hits, vec!["src/main.rs".to_owned()]);
+        let hits = search_project_files(&root, "mod");
+        assert_eq!(hits, vec!["src/deep/nested/mod.rs".to_owned()]);
     }
 
     #[test]

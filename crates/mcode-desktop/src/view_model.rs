@@ -50,6 +50,65 @@ pub struct ConversationEntry {
     pub call_id: Option<String>,
 }
 
+/// Composer mention autocomplete: `@` files or `/` commands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerMention {
+    /// Trigger kind active in the draft.
+    pub kind: MentionKind,
+    /// Typed text after the trigger character.
+    pub fragment: String,
+    /// (insert, display) rows, bounded.
+    pub items: Vec<(String, String)>,
+}
+
+/// The mention trigger parsed from the composer draft.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MentionKind {
+    /// `@` file reference against the session project.
+    File,
+    /// `/` command at the very start of the draft.
+    Command,
+}
+
+/// Built-in slash commands offered by the composer menu.
+pub const COMPOSER_COMMANDS: &[(&str, &str)] = &[("/new", "new chat"), ("/settings", "settings")];
+
+/// Parses the composer draft into an active mention, if any: a trailing
+/// `@fragment` token selects files; a leading `/name` (still the whole
+/// draft) selects commands.
+fn parse_mention(text: &str) -> Option<ComposerMention> {
+    if text.ends_with(char::is_whitespace) || text.is_empty() {
+        return None;
+    }
+    let token = text.split_whitespace().last().unwrap_or_default();
+    if let Some(fragment) = token.strip_prefix('@')
+        && !fragment.is_empty()
+        && !fragment.contains('@')
+    {
+        return Some(ComposerMention {
+            kind: MentionKind::File,
+            fragment: fragment.to_owned(),
+            items: Vec::new(),
+        });
+    }
+    if let Some(fragment) = text.strip_prefix('/')
+        && !fragment.is_empty()
+        && !fragment.contains(char::is_whitespace)
+    {
+        let items = COMPOSER_COMMANDS
+            .iter()
+            .filter(|(name, _)| name[1..].starts_with(fragment))
+            .map(|(name, label)| ((*name).to_owned(), format!("{name} \u{b7} {label}")))
+            .collect();
+        return Some(ComposerMention {
+            kind: MentionKind::Command,
+            fragment: fragment.to_owned(),
+            items,
+        });
+    }
+    None
+}
+
 /// Metrics for one completed model turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TurnStats {
@@ -306,6 +365,8 @@ pub struct WorkspaceState {
     pub usage_totals: Vec<(String, u64, u64, u64)>,
     /// Most recent turn's timing and token metrics, when usage is enabled.
     pub last_turn: Option<TurnStats>,
+    /// Active composer mention autocomplete, when a trigger is typed.
+    pub mention: Option<ComposerMention>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -411,6 +472,8 @@ pub enum DesktopAction {
     ToolResultAppended(ConversationEntry),
     /// Prompt resources discovered for the open session.
     ResourcesLoaded(Vec<(String, String)>),
+    /// File matches for the active `@` mention arrived from the bridge.
+    MentionFiles(Vec<String>),
     /// A durable usage record arrived.
     UsageRecorded {
         provider: String,
@@ -559,7 +622,22 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::ComposerChanged(text) => {
-            state.composer_draft = text.chars().take(MAX_COMPOSER_CHARS).collect();
+            let bounded: String = text.chars().take(MAX_COMPOSER_CHARS).collect();
+            state.mention = parse_mention(&bounded);
+            state.composer_draft = bounded;
+        }
+        DesktopAction::MentionFiles(files) => {
+            if let Some(mention) = state.mention.as_mut()
+                && mention.kind == MentionKind::File
+            {
+                mention.items = files
+                    .into_iter()
+                    .map(|path| {
+                        let display = path.clone();
+                        (path, display)
+                    })
+                    .collect();
+            }
         }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {

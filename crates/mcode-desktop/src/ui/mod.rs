@@ -72,6 +72,14 @@ pub fn render_root(
         .when(workspace.vm().model_menu_open, |this| {
             this.child(chat::render_model_menu_layer(workspace, cx))
         })
+        .when(
+            workspace
+                .vm()
+                .mention
+                .as_ref()
+                .is_some_and(|mention| !mention.items.is_empty()),
+            |this| this.child(chat::render_mention_layer(workspace, cx)),
+        )
 }
 
 fn render_title_bar(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {

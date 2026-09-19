@@ -787,6 +787,69 @@ fn menu_row(
         })
 }
 
+/// The `@` file and `/` command autocomplete popover above the composer.
+pub(super) fn render_mention_layer(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let mention = workspace
+        .vm()
+        .mention
+        .clone()
+        .expect("caller checks the menu is open");
+    let heading = match mention.kind {
+        crate::view_model::MentionKind::File => "FILES",
+        crate::view_model::MentionKind::Command => "COMMANDS",
+    };
+    div()
+        .id("mention-layer")
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .id("mention-menu")
+                .absolute()
+                .bottom(px(120.))
+                .left(px(16.))
+                .w(px(420.))
+                .max_h(px(300.))
+                .overflow_y_scroll()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .text_color(theme.popover_foreground)
+                .shadow_lg()
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .opacity(0.6)
+                        .px_2()
+                        .pt_1()
+                        .child(heading),
+                )
+                .children(mention.items.into_iter().map(|(insert, display)| {
+                    let row_id = format!("mention-{insert}");
+                    menu_row(
+                        row_id,
+                        display,
+                        false,
+                        cx.listener(move |workspace, _, window, cx| {
+                            workspace.on_accept_mention(insert.clone(), window, cx);
+                        }),
+                        cx,
+                    )
+                })),
+        )
+        .into_any_element()
+}
+
 /// Renders the pending ask panel: one answer row per question.
 pub(super) fn render_ask_panel(
     workspace: &mut Workspace,
