@@ -258,66 +258,115 @@ impl AppSettings {
     /// Returns [`ConfigErrorKind::AuthorityValidation`] for any bound,
     /// grammar, or cross-field violation.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let invalid = || ConfigError::authority_rejection();
-        bounded_text(&self.user_agent, MAX_FIELD_BYTES)?;
+        let invalid =
+            |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
+        bounded_text(&self.user_agent, MAX_FIELD_BYTES)
+            .map_err(|_| invalid("userAgent: too long or contains control characters"))?;
         if self.providers.len() > MAX_PROVIDERS {
-            return Err(invalid());
+            return Err(invalid("providers: too many entries"));
         }
         for (index, provider) in self.providers.iter().enumerate() {
-            if !is_portable_id(&provider.id)
-                || !VALID_PROVIDER_KINDS.contains(&provider.kind.as_str())
-                || !is_https_url(&provider.base_url)
-                || provider.models.is_empty()
-                || provider.models.len() > MAX_MODELS_PER_PROVIDER
-            {
-                return Err(invalid());
+            let field = format!("providers[{index}]");
+            if !is_portable_id(&provider.id) {
+                return Err(invalid(&format!(
+                    "{field}.id: must be letters, digits, dash, dot, or underscore"
+                )));
+            }
+            if !VALID_PROVIDER_KINDS.contains(&provider.kind.as_str()) {
+                return Err(invalid(&format!(
+                    "{field}.kind: must be one of anthropic-messages, openai-completions, openai-responses"
+                )));
+            }
+            if !is_https_url(&provider.base_url) {
+                return Err(invalid(&format!(
+                    "{field}.baseUrl: must be an https:// URL"
+                )));
+            }
+            if provider.models.is_empty() || provider.models.len() > MAX_MODELS_PER_PROVIDER {
+                return Err(invalid(&format!(
+                    "{field}.models: list at least one model id (at most {MAX_MODELS_PER_PROVIDER})"
+                )));
             }
             if self.providers[..index].iter().any(|p| p.id == provider.id) {
-                return Err(invalid());
+                return Err(invalid(&format!(
+                    "{field}.id: duplicates an earlier provider id"
+                )));
             }
-            for model in &provider.models {
-                bounded_text(model, MAX_FIELD_BYTES)?;
+            for (model_index, model) in provider.models.iter().enumerate() {
+                bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {
+                    invalid(&format!(
+                        "{field}.models[{model_index}]: too long or contains control characters"
+                    ))
+                })?;
             }
         }
         if self.web.backends.len() > MAX_WEB_BACKENDS {
-            return Err(invalid());
+            return Err(invalid("web.backends: too many entries"));
         }
         for (index, backend) in self.web.backends.iter().enumerate() {
-            if !is_portable_id(&backend.id)
-                || !matches!(backend.kind.as_str(), "querit" | "custom")
-                || !is_https_url(&backend.endpoint)
-                || self.web.backends[..index]
-                    .iter()
-                    .any(|b| b.id == backend.id)
+            let field = format!("web.backends[{index}]");
+            if !is_portable_id(&backend.id) {
+                return Err(invalid(&format!(
+                    "{field}.id: must be letters, digits, dash, dot, or underscore"
+                )));
+            }
+            if !matches!(backend.kind.as_str(), "querit" | "custom") {
+                return Err(invalid(&format!("{field}.kind: must be querit or custom")));
+            }
+            if !is_https_url(&backend.endpoint) {
+                return Err(invalid(&format!(
+                    "{field}.endpoint: must be an https:// URL"
+                )));
+            }
+            if self.web.backends[..index]
+                .iter()
+                .any(|b| b.id == backend.id)
             {
-                return Err(invalid());
+                return Err(invalid(&format!(
+                    "{field}.id: duplicates an earlier backend id"
+                )));
             }
         }
         if self.web.backends.iter().filter(|b| b.enabled).count() > 1 {
-            return Err(invalid());
+            return Err(invalid("web.backends: at most one backend may be enabled"));
         }
         if self.mcp_servers.len() > MAX_MCP_SERVERS {
-            return Err(invalid());
+            return Err(invalid("mcpServers: too many entries"));
         }
         for (index, server) in self.mcp_servers.iter().enumerate() {
-            if !is_portable_id(&server.id) || server.args.len() > 64 {
-                return Err(invalid());
+            let field = format!("mcpServers[{index}]");
+            if !is_portable_id(&server.id) {
+                return Err(invalid(&format!(
+                    "{field}.id: must be letters, digits, dash, dot, or underscore"
+                )));
             }
-            for arg in &server.args {
-                bounded_text(arg, MAX_FIELD_BYTES)?;
+            if server.args.len() > 64 {
+                return Err(invalid(&format!("{field}.args: too many entries")));
+            }
+            for (arg_index, arg) in server.args.iter().enumerate() {
+                bounded_text(arg, MAX_FIELD_BYTES).map_err(|_| {
+                    invalid(&format!(
+                        "{field}.args[{arg_index}]: too long or contains control characters"
+                    ))
+                })?;
             }
             match server.transport.as_str() {
                 "stdio" => {
-                    if server.command.is_none()
-                        || server.endpoint.is_some()
-                        || server.key_header.is_some()
-                    {
-                        return Err(invalid());
+                    if server.command.is_none() {
+                        return Err(invalid(&format!(
+                            "{field}: stdio transport requires a command"
+                        )));
+                    }
+                    if server.endpoint.is_some() || server.key_header.is_some() {
+                        return Err(invalid(&format!(
+                            "{field}: stdio transport must not set endpoint or keyHeader"
+                        )));
                     }
                     bounded_text(
                         server.command.as_deref().unwrap_or_default(),
                         MAX_FIELD_BYTES,
-                    )?;
+                    )
+                    .map_err(|_| invalid(&format!("{field}.command: too long")))?;
                 }
                 "http" => {
                     let endpoint_ok = server
@@ -326,26 +375,39 @@ impl AppSettings {
                         .map(is_https_url)
                         .unwrap_or(false);
                     if !endpoint_ok {
-                        return Err(invalid());
+                        return Err(invalid(&format!(
+                            "{field}.endpoint: must be an https:// URL"
+                        )));
                     }
-                    if server.command.is_some()
-                        || !server.args.is_empty()
-                        || server
-                            .key_header
-                            .as_deref()
-                            .is_some_and(|header| !matches!(header, "bearer" | "x-api-key"))
+                    if server.command.is_some() || !server.args.is_empty() {
+                        return Err(invalid(&format!(
+                            "{field}: http transport must not set command or args"
+                        )));
+                    }
+                    if server
+                        .key_header
+                        .as_deref()
+                        .is_some_and(|header| !matches!(header, "bearer" | "x-api-key"))
                     {
-                        return Err(invalid());
+                        return Err(invalid(&format!(
+                            "{field}.keyHeader: must be exactly \"bearer\" or \"x-api-key\" — keep the API key in the app key vault, not in this field"
+                        )));
                     }
                 }
-                _ => return Err(invalid()),
+                _ => {
+                    return Err(invalid(&format!(
+                        "{field}.transport: must be stdio or http"
+                    )));
+                }
             }
             if self.mcp_servers[..index].iter().any(|s| s.id == server.id) {
-                return Err(invalid());
+                return Err(invalid(&format!(
+                    "{field}.id: duplicates an earlier server id"
+                )));
             }
         }
         if self.appearance.theme != "light" && self.appearance.theme != "dark" {
-            return Err(invalid());
+            return Err(invalid("appearance.theme: must be light or dark"));
         }
         Ok(())
     }
@@ -456,8 +518,11 @@ fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError>
 }
 
 fn parse_settings(bytes: &[u8]) -> Result<AppSettings, ConfigError> {
-    let document: DeserializedSettings =
-        serde_json::from_slice(bytes).map_err(|_| ConfigError::authority_rejection())?;
+    let document: DeserializedSettings = serde_json::from_slice(bytes).map_err(|_| {
+        ConfigError::authority_rejection().with_detail(
+            "settings.json: unknown field or wrong value type (check providers, web, mcpServers, usage, appearance)",
+        )
+    })?;
     if document.format_version != SETTINGS_FORMAT_VERSION || document.kind != SETTINGS_KIND {
         return Err(ConfigError::authority_rejection());
     }

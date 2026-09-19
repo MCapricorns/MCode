@@ -57,6 +57,7 @@ struct ConfigErrorInner {
     path: Option<PathBuf>,
     io_kind: Option<io::ErrorKind>,
     backtrace: Backtrace,
+    detail: Option<String>,
 }
 
 /// Describes a configuration failure without retaining offending values.
@@ -78,8 +79,17 @@ impl ConfigError {
                 path: None,
                 io_kind: None,
                 backtrace: Backtrace::capture(),
+                detail: None,
             }),
         }
+    }
+
+    /// Attaches a field-path hint. Details must name fields and rules only —
+    /// never values, which may carry secrets pasted into the wrong field.
+    #[must_use]
+    pub(crate) fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.inner.detail = Some(detail.into());
+        self
     }
 
     /// Builds one authority-validation rejection for a Host-side storage
@@ -171,6 +181,9 @@ impl Display for ConfigError {
             ConfigErrorKind::RecoveryIndeterminate => "staging recovery outcome is indeterminate",
         };
         formatter.write_str(summary)?;
+        if let Some(detail) = &self.inner.detail {
+            write!(formatter, ": {detail}")?;
+        }
         if self.inner.backtrace.status() == BacktraceStatus::Captured {
             write!(formatter, "\n{}", self.inner.backtrace)?;
         }
