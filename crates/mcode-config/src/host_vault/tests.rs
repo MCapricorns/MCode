@@ -614,7 +614,7 @@ fn target_and_lock_are_private_owned_files() {
 #[cfg(unix)]
 #[test]
 fn host_links_fail_closed() {
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     let temp = TempDir::new().expect("temp");
     let layout = layout(&temp);
@@ -631,6 +631,11 @@ fn host_links_fail_closed() {
 
     fs::remove_file(layout.host_dir()).expect("remove link");
     fs::create_dir(layout.host_dir()).expect("host");
+    // The rewritten `.host` is a real directory now, so it must carry the
+    // private mode the owned-path walk requires; the fixture is about the
+    // final-component symlink, not about a widened ancestor.
+    fs::set_permissions(layout.host_dir(), std::fs::Permissions::from_mode(0o700))
+        .expect("host mode");
     symlink(temp.path().join("target"), layout.host_auth_json()).expect("target symlink");
     assert_eq!(
         read_host_vault_state(&layout).expect_err("link").kind(),

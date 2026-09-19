@@ -1,21 +1,23 @@
 //! macOS spawn: public `posix_spawn` with `POSIX_SPAWN_START_SUSPENDED`.
 //!
-//! The image is launched as `/dev/fd/3` (`HOLD_FD`), the dup2 target that
-//! survives `POSIX_SPAWN_CLOEXEC_DEFAULT`. Darwin treats every pre-existing
-//! descriptor as close-on-exec under that flag; only file-action targets
-//! remain in the child, so `/dev/fd/<O_EXEC-source>` is gone at exec. The
-//! original readable pin is kept for digest rechecks. Before `SIGCONT`, the
-//! child must be stopped with this process as parent; `proc_pidpath`, retained-fd
-//! identity, inherited hold-fd `proc_pidfdinfo`, loaded architecture, and a
+//! The child executes the pinned canonical pathname: Darwin cannot execute an
+//! open descriptor (`execve` of `/dev/fd/<n>` fails with `EACCES` even for an
+//! `O_EXEC` descriptor), so `posix_spawn` is the only launch primitive. The
+//! retained readable pin keeps the digest recheck. Before `SIGCONT`, the child
+//! must be stopped with this process as parent, `proc_pidpath` must equal the
+//! retained canonical path, that path must still resolve to the pinned vnode
+//! identity, the loaded architecture must be native or translated, and the
 //! digest recheck must match. Public APIs cannot prove the mapped/running
 //! image digest, and XNU does not enforce `ETXTBSY`. Identity is guaranteed
-//! only at the suspended verification instant.
+//! only at the suspended verification instant, and a same-account writer
+//! remains outside the boundary.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
 use std::ffi::{CString, OsString};
 use std::io;
 use std::mem::size_of;
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
 use std::pin::Pin;
@@ -36,24 +38,17 @@ use super::spawn::{
 use crate::builtin::process::{ExecutionLease, ProcessTree};
 use crate::tool::ToolError;
 
-#[path = "macos_launch.rs"]
-mod launch;
+/// First descriptor outside the child-side stdio `dup2` targets 0 through 2.
+const MIN_SPAWN_SOURCE_FD: RawFd = 3;
 
-/// Inherited fd: a dup of the O_EXEC launch descriptor for vnode identity proof.
-const HOLD_FD: RawFd = 3;
-/// First descriptor outside every child-side `dup2` target.
-const MIN_SPAWN_SOURCE_FD: RawFd = HOLD_FD + 1;
-
-/// Launch pathname after file actions: the inherited `HOLD_FD` dup2 target.
+/// The pinned canonical pathname the child executes.
 ///
-/// Darwin `posix_spawn_file_actions_addclose(3)`: `POSIX_SPAWN_CLOEXEC_DEFAULT`
-/// treats every pre-existing descriptor as close-on-exec; only descriptors
-/// manipulated by file actions remain in the child. POSIX spawn then executes
-/// `path`. The O_EXEC source is only a dup2 source (`>= MIN_SPAWN_SOURCE_FD`),
-/// so `/dev/fd/<source>` is not an inherited target. `HOLD_FD` is that target,
-/// the `proc_pidfdinfo` identity fd, and the sole launch pathname.
-fn spawn_launch_path() -> CString {
-    CString::new(format!("/dev/fd/{HOLD_FD}")).expect("HOLD_FD launch path has no interior NUL")
+/// The post-spawn verification re-proves that this pathname still names the
+/// retained vnode before the child is continued.
+fn spawn_launch_path(pinned: &PinnedImage) -> Result<CString, ToolError> {
+    CString::new(pinned.canonical_path.as_os_str().as_bytes()).map_err(|_| {
+        ToolError::Execution("canonical executable path contains an interior NUL".into())
+    })
 }
 
 /// CPU types from `<mach/machine.h>` (`CPU_ARCH_ABI64 | CPU_TYPE_*`).
@@ -62,22 +57,6 @@ const CPU_TYPE_ARM64: i32 = 0x0100_000c;
 
 /// Flavors from `<sys/proc_info.h>` that libc 0.2.189 does not export.
 const PROC_PIDARCHINFO: libc::c_int = 19;
-const PROC_PIDFDVNODEPATHINFO: libc::c_int = 2;
-
-#[repr(C)]
-struct ProcFileInfo {
-    fi_openflags: u32,
-    fi_status: u32,
-    fi_offset: libc::off_t,
-    fi_type: i32,
-    fi_guardflags: u32,
-}
-
-#[repr(C)]
-struct VnodeFdInfoWithPath {
-    pfi: ProcFileInfo,
-    pvip: libc::vnode_info_path,
-}
 
 #[repr(C)]
 struct ProcArchInfo {
@@ -384,7 +363,6 @@ pub(super) fn spawn_macos(
     ),
     SpawnFailure,
 > {
-    let exec_fd = launch::bind_exec_launch_fd(&pinned)?;
     let digest = rehash_image_cancellable(&mut pinned.file, || gate.check_pending())?;
     if digest != pinned.digest {
         return Err(ToolError::Execution(
@@ -402,12 +380,7 @@ pub(super) fn spawn_macos(
     let (stderr_read, stderr_write) = cloexec_pipe()?;
     let stderr_write = normalize_spawn_source(stderr_write, "stderr pipe")?;
     let stdin = normalize_spawn_source(open_dev_null()?, "stdin")?;
-    let exec_raw_fd = exec_fd.as_raw_fd();
-    debug_assert!(
-        exec_raw_fd >= MIN_SPAWN_SOURCE_FD,
-        "O_EXEC source must stay outside child dup2 targets"
-    );
-    let path = spawn_launch_path();
+    let path = spawn_launch_path(&pinned)?;
     let argv = build_cstring_vec(argv0, args)?;
     let env = build_env_cstrings(env)?;
     let mut argv_ptrs = pointers(&argv);
@@ -478,16 +451,6 @@ pub(super) fn spawn_macos(
     )?;
     check_posix(
         unsafe {
-            libc::posix_spawn_file_actions_adddup2(
-                actions_ptr(&mut attr_guard),
-                exec_raw_fd,
-                HOLD_FD,
-            )
-        },
-        "adddup2 hold fd",
-    )?;
-    check_posix(
-        unsafe {
             posix_spawn_file_actions_addfchdir_np(actions_ptr(&mut attr_guard), cwd_fd.as_raw_fd())
         },
         "posix_spawn_file_actions_addfchdir_np",
@@ -495,9 +458,8 @@ pub(super) fn spawn_macos(
 
     gate.begin_spawn()?;
     let mut pid: libc::pid_t = 0;
-    // SAFETY: path/argv/envp/attr/actions are initialized. `/dev/fd/3` is the
-    // inherited HOLD_FD O_EXEC descriptor and the only launch path; there is
-    // no ordinary-path fallback.
+    // SAFETY: path/argv/envp/attr/actions are initialized. The pinned canonical
+    // path is the only launch pathname; there is no descriptor launch.
     let rc = unsafe {
         libc::posix_spawn(
             &raw mut pid,
@@ -679,13 +641,6 @@ fn verify_stopped_child(
     }
     verify_current_path_identity(pinned)?;
 
-    let hold = fd_vnode(pid, HOLD_FD)?;
-    if u64::from(hold.vst_dev) != pinned.identity.device || hold.vst_ino != pinned.identity.inode {
-        return Err(ToolError::Execution(
-            "child hold-fd vnode identity does not match the retained executable".into(),
-        ));
-    }
-
     let mut arch = ProcArchInfo {
         p_cputype: 0,
         p_cpusubtype: 0,
@@ -791,27 +746,6 @@ fn bsd_shortinfo(pid: libc::pid_t) -> Result<libc::proc_bsdshortinfo, ToolError>
     Ok(info)
 }
 
-fn fd_vnode(pid: libc::pid_t, fd: RawFd) -> Result<libc::vinfo_stat, ToolError> {
-    // SAFETY: `VnodeFdInfoWithPath` is a C POD filled by proc_pidfdinfo.
-    let mut info = unsafe { std::mem::zeroed::<VnodeFdInfoWithPath>() };
-    // SAFETY: `info` matches vnode_fdinfowithpath from <sys/proc_info.h>.
-    let len = unsafe {
-        libc::proc_pidfdinfo(
-            pid,
-            fd,
-            PROC_PIDFDVNODEPATHINFO,
-            (&raw mut info).cast(),
-            i32::try_from(size_of::<VnodeFdInfoWithPath>()).expect("fits"),
-        )
-    };
-    if len < i32::try_from(size_of::<VnodeFdInfoWithPath>()).expect("fits") {
-        return Err(ToolError::Execution(
-            "proc_pidfdinfo(PROC_PIDFDVNODEPATHINFO) is unavailable for the hold fd".into(),
-        ));
-    }
-    Ok(info.pvip.vip_vi.vi_stat)
-}
-
 fn kill_leader_and_reap(pid: libc::pid_t) -> io::Result<()> {
     let _ = send_signal(pid, libc::SIGKILL);
     reap_pid(pid)
@@ -857,7 +791,7 @@ fn wait_exit_shared(state: &Mutex<MacProcessState>) -> io::Result<ExitStatus> {
 
 fn duplicate_spawn_source(fd: RawFd, what: &str) -> Result<OwnedFd, ToolError> {
     // SAFETY: `fd` is live. F_DUPFD_CLOEXEC duplicates it to the first
-    // available descriptor outside the child-side targets 0 through 3.
+    // available descriptor outside the child-side targets 0 through 2.
     let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, MIN_SPAWN_SOURCE_FD) };
     if duplicated == -1 {
         return Err(ToolError::Execution(format!(

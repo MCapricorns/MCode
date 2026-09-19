@@ -15,7 +15,7 @@ use super as unix;
 use crate::{ConfigError, ConfigErrorKind};
 
 const FILE_MODE: rfs::RawMode = 0o600;
-const MAX_TEMPORARY_ATTEMPTS: usize = 16;
+const MAX_CREATE_ATTEMPTS: usize = 16;
 
 pub(in crate::secure_fs) fn ensure_directory(
     root: &Path,
@@ -47,6 +47,8 @@ pub(in crate::secure_fs) struct Transaction {
     parent: File,
     name: OsString,
     _lock: File,
+    /// Whether the persistent lock was already the private file when opened.
+    lock_was_private: bool,
 }
 
 impl Transaction {
@@ -66,7 +68,7 @@ impl Transaction {
         reject_wrong_case(&parent, &name)?;
         let lock_name = lock_name(&name);
         reject_wrong_case(&parent, &lock_name)?;
-        let lock = open_lock(&parent, &lock_name)?;
+        let (lock, lock_was_private) = open_lock(&parent, &lock_name)?;
         reject_wrong_case(&parent, &lock_name)?;
         File::lock(&lock)
             .map_err(|error| ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()))?;
@@ -74,7 +76,21 @@ impl Transaction {
             parent,
             name,
             _lock: lock,
+            lock_was_private,
         })
+    }
+
+    /// Rejects a transaction whose persistent lock was widened before opening.
+    ///
+    /// A read-modify-write publishes content derived from what it just read,
+    /// so a lock file that another principal could hold or rewrite is an
+    /// access-control failure rather than something to tighten and continue.
+    pub(in crate::secure_fs) fn require_private_lock(&self) -> Result<(), ConfigError> {
+        if self.lock_was_private {
+            Ok(())
+        } else {
+            Err(ConfigError::new(ConfigErrorKind::AccessControl))
+        }
     }
 
     pub(in crate::secure_fs) fn read(
@@ -234,18 +250,58 @@ fn validate_replace_target(parent: &File, name: &OsStr) -> Result<(), ConfigErro
     Ok(())
 }
 
-fn open_lock(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
-    reject_non_regular_existing(parent, name)?;
-    let flags = OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW;
-    let file = File::from(
-        unix::open_component(parent, name, flags)
-            .map_err(|error| remap(error, ConfigErrorKind::Lock))?,
-    );
-    verify_regular_owner(&file).map_err(|error| remap(error, ConfigErrorKind::Lock))?;
-    rfs::fchmod(file.as_fd(), Mode::from_raw_mode(FILE_MODE))
-        .map_err(|error| unix::map_errno(error, ConfigErrorKind::Lock))?;
-    verify_private_regular(&file).map_err(|error| remap(error, ConfigErrorKind::Lock))?;
-    Ok(file)
+fn open_lock(parent: &File, name: &OsStr) -> Result<(File, bool), ConfigError> {
+    let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    let create_flags = open_flags | OFlags::CREATE | OFlags::EXCL;
+    for _ in 0..MAX_CREATE_ATTEMPTS {
+        reject_non_regular_existing(parent, name)?;
+        match unix::open_component(parent, name, open_flags) {
+            Ok(descriptor) => {
+                let file = File::from(descriptor);
+                let stat = verify_regular_owner(&file).map_err(as_lock_error)?;
+                // A widened existing lock is tightened here, and the
+                // pre-tightening evidence is reported to callers that must
+                // fail closed instead.
+                let was_private = stat.st_mode & 0o777 == FILE_MODE;
+                rfs::fchmod(file.as_fd(), Mode::from_raw_mode(FILE_MODE))
+                    .map_err(|error| unix::map_errno(error, ConfigErrorKind::Lock))?;
+                verify_private_regular(&file).map_err(as_lock_error)?;
+                return Ok((file, was_private));
+            }
+            Err(error) if error.io_kind() == Some(io::ErrorKind::NotFound) => {}
+            Err(error) => return Err(remap(error, ConfigErrorKind::Lock)),
+        }
+        // `O_CREAT|O_EXCL` is the only Darwin create form that stays atomic
+        // under contention; the mode travels with the call so no racer can
+        // observe a zero-mode lock file. A lost race surfaces as `EEXIST` and
+        // retries through the existing-file branch above.
+        match unix::create_component(parent, name, create_flags, Mode::from_raw_mode(FILE_MODE)) {
+            Ok(descriptor) => {
+                let file = File::from(descriptor);
+                // A restrictive umask can still narrow the mode carried by the
+                // creating call, so the fresh lock is pinned to the exact mode.
+                rfs::fchmod(file.as_fd(), Mode::from_raw_mode(FILE_MODE))
+                    .map_err(|error| unix::map_errno(error, ConfigErrorKind::Lock))?;
+                verify_private_regular(&file).map_err(as_lock_error)?;
+                return Ok((file, true));
+            }
+            Err(error) if error.io_kind() == Some(io::ErrorKind::AlreadyExists) => {}
+            Err(error) => return Err(remap(error, ConfigErrorKind::Lock)),
+        }
+    }
+    Err(ConfigError::new(ConfigErrorKind::Lock).with_io_kind(io::ErrorKind::AlreadyExists))
+}
+
+/// Reports a lock-file failure, keeping access-control evidence intact.
+///
+/// A foreign owner or a widened mode is an access-control finding, not a
+/// transient lock error, so callers keep the fail-closed classification.
+fn as_lock_error(error: ConfigError) -> ConfigError {
+    if error.kind() == ConfigErrorKind::AccessControl {
+        error
+    } else {
+        remap(error, ConfigErrorKind::Lock)
+    }
 }
 
 fn reject_non_regular_existing(parent: &File, name: &OsStr) -> Result<(), ConfigError> {
@@ -263,7 +319,7 @@ fn reject_non_regular_existing(parent: &File, name: &OsStr) -> Result<(), Config
 }
 
 fn create_temporary(parent: &File, destination: &OsStr) -> Result<(File, OsString), ConfigError> {
-    for _ in 0..MAX_TEMPORARY_ATTEMPTS {
+    for _ in 0..MAX_CREATE_ATTEMPTS {
         let name = temporary_name(destination);
         let flags =
             OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW;

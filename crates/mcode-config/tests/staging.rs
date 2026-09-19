@@ -266,7 +266,16 @@ fn hard_linked_payload_is_rejected_as_authority_mismatch() {
 
 #[cfg(unix)]
 fn replace_known_payload_with_special(create: impl FnOnce(&std::path::Path, &std::path::Path)) {
-    let (parent, layout) = layout();
+    replace_known_payload_with_special_in(tempfile::tempdir().expect("parent"), create);
+}
+
+#[cfg(unix)]
+fn replace_known_payload_with_special_in(
+    parent: tempfile::TempDir,
+    create: impl FnOnce(&std::path::Path, &std::path::Path),
+) {
+    let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
+    ensure_home_layout(&layout).expect("bootstrap");
     let mut writing = begin_staging(&layout).expect("begin");
     let transaction = layout.transaction_staging_dir(writing.id());
     writing
@@ -280,6 +289,18 @@ fn replace_known_payload_with_special(create: impl FnOnce(&std::path::Path, &std
         ConfigErrorKind::AuthorityValidation
     );
     assert_writing(&transaction);
+}
+
+/// A parent directory short enough to hold a `sun_path` fixture.
+///
+/// Darwin caps `sun_path` at 104 bytes, and the per-user macOS temporary
+/// directory already exceeds that before the staging path suffix.
+#[cfg(unix)]
+fn short_socket_parent() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("mcode-sock-")
+        .tempdir_in("/tmp")
+        .expect("short socket parent")
 }
 
 #[cfg(unix)]
@@ -331,7 +352,7 @@ fn known_payload_symlink_is_rejected_without_following_it() {
 #[cfg(unix)]
 #[test]
 fn known_payload_socket_is_rejected_without_opening_it() {
-    replace_known_payload_with_special(|file, _outside| {
+    replace_known_payload_with_special_in(short_socket_parent(), |file, _outside| {
         std::os::unix::net::UnixListener::bind(file).expect("known socket");
     });
 }

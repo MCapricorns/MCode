@@ -111,7 +111,7 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
             if models.len() >= crate::MAX_MODELS_PER_PROVIDER {
                 break;
             }
-            if !valid_model_id(&model_id) || !clean_text(&model.status).is_none() {
+            if !valid_model_id(&model_id) || clean_text(&model.status).is_some() {
                 continue;
             }
             models.push(CatalogModel {

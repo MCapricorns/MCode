@@ -42,6 +42,10 @@ mod fallback {
             Err(unavailable())
         }
 
+        pub(super) fn require_private_lock(&self) -> Result<(), ConfigError> {
+            Err(unavailable())
+        }
+
         pub(super) fn read(
             &mut self,
             _maximum_bytes: usize,
@@ -150,6 +154,7 @@ where
     let path = OwnedPath::new(home, relative.as_ref())?;
     require_file_name(&path)?;
     let mut transaction = platform::Transaction::begin(&path.root, &path.components)?;
+    transaction.require_private_lock()?;
     let current = transaction.read(maximum_bytes)?;
     let replacement = update(current.as_ref().map(|bytes| bytes.as_slice()))?;
     if replacement.as_ref().len() > maximum_bytes {

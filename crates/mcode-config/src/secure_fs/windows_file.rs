@@ -59,6 +59,9 @@ pub(in crate::secure_fs) struct Transaction {
     parent: File,
     name: OsString,
     _lock: File,
+    /// Whether the persistent lock already carried the exact fixed descriptor
+    /// when it was opened.
+    lock_was_private: bool,
 }
 
 impl Transaction {
@@ -76,7 +79,7 @@ impl Transaction {
         reject_wrong_case(&parent, name)?;
         let lock_name = lock_name(name);
         reject_wrong_case(&parent, &lock_name)?;
-        let lock = open_lock(&parent, &lock_name)?;
+        let (lock, lock_was_private) = open_lock(&parent, &lock_name)?;
         reject_wrong_case(&parent, &lock_name)?;
         File::lock(&lock)
             .map_err(|error| ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()))?;
@@ -84,7 +87,21 @@ impl Transaction {
             parent,
             name: name.clone(),
             _lock: lock,
+            lock_was_private,
         })
+    }
+
+    /// Rejects a transaction whose persistent lock was widened before opening.
+    ///
+    /// A read-modify-write publishes content derived from what it just read,
+    /// so a lock file that another principal could hold or rewrite is an
+    /// access-control failure rather than something to tighten and continue.
+    pub(in crate::secure_fs) fn require_private_lock(&self) -> Result<(), ConfigError> {
+        if self.lock_was_private {
+            Ok(())
+        } else {
+            Err(ConfigError::new(ConfigErrorKind::AccessControl))
+        }
     }
 
     pub(in crate::secure_fs) fn read(
@@ -253,7 +270,7 @@ fn validate_replace_target(parent: &File, name: &OsStr) -> Result<(), ConfigErro
     Ok(())
 }
 
-fn open_lock(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
+fn open_lock(parent: &File, name: &OsStr) -> Result<(File, bool), ConfigError> {
     let descriptor = windows_acl::protected_descriptor()?;
     let opened = windows_open::open_relative_file(
         parent,
@@ -264,9 +281,12 @@ fn open_lock(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
     )?
     .ok_or_else(|| ConfigError::new(ConfigErrorKind::Lock))?;
     windows_acl::require_current_owner(&opened.file)?;
+    // A widened existing lock is tightened here, and the pre-tightening
+    // evidence is reported to callers that must fail closed instead.
+    let was_private = windows_acl::verify_fixed_descriptor(&opened.file).is_ok();
     windows_acl::secure_existing_object(&opened.file)?;
     windows_acl::verify_fixed_descriptor(&opened.file)?;
-    Ok(opened.file)
+    Ok((opened.file, was_private))
 }
 
 fn create_temporary(parent: &File, destination: &OsStr) -> Result<TemporaryFile, ConfigError> {

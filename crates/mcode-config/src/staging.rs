@@ -623,8 +623,12 @@ mod tests {
         super::platform::fail_next_recovery_staging_barrier_for_test();
 
         let error = super::recover_abandoned_staging(&layout).expect_err("barrier failure");
-        assert_eq!(error.kind(), ConfigErrorKind::RecoveryIndeterminate);
-        assert!(!transaction.exists());
+        assert_eq!(
+            error.kind(),
+            ConfigErrorKind::RecoveryIndeterminate,
+            "{error}"
+        );
+        assert!(!transaction.exists(), "{error}");
     }
 
     #[cfg(unix)]

@@ -66,9 +66,7 @@ pub(crate) enum GenerationDomain {
 
 pub(crate) struct GenerationFence {
     publication_state: Arc<AtomicU64>,
-    #[expect(dead_code, reason = "T16+ multi-domain fences distinguish authorities")]
     domain: GenerationDomain,
-    #[expect(dead_code, reason = "T16+ multi-domain fences distinguish authorities")]
     generation: HostGeneration,
     state: AtomicUsize,
     drained: Notify,

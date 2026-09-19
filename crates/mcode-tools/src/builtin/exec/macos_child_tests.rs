@@ -61,16 +61,14 @@ async fn dropping_pending_pipe_read_closes_the_descriptor() {
 }
 
 #[test]
-fn spawn_launch_path_is_hold_fd_not_the_cloexec_source() {
-    let path = spawn_launch_path();
-    let hold = format!("/dev/fd/{HOLD_FD}");
-    let source = format!("/dev/fd/{MIN_SPAWN_SOURCE_FD}");
-    assert_eq!(path.as_bytes(), hold.as_bytes());
-    assert_eq!(HOLD_FD, 3);
-    const { assert!(MIN_SPAWN_SOURCE_FD > HOLD_FD) };
-    assert_ne!(
-        path.as_bytes(),
-        source.as_bytes(),
-        "launch path must not name the CLOEXEC O_EXEC source"
+fn cloexec_pipe_descriptors_stay_outside_the_dup2_targets() {
+    let (read, write) = cloexec_pipe().unwrap();
+    for fd in [read.as_raw_fd(), write.as_raw_fd()] {
+        assert!(fd >= MIN_SPAWN_SOURCE_FD, "stdio source fd {fd}");
+    }
+    // SAFETY: F_GETFD only probes whether the numeric descriptor is live.
+    assert_eq!(
+        unsafe { libc::fcntl(read.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+        libc::FD_CLOEXEC
     );
 }

@@ -903,18 +903,33 @@ struct UnlinkFault {
 #[cfg(all(test, unix))]
 static UNLINK_FAULT: Mutex<Option<UnlinkFault>> = Mutex::new(None);
 
+/// Serializes unlink-fault fixtures: the injected fault is process-global, so
+/// a second concurrent install would trip the misuse assert instead of
+/// testing its own cleanup path.
+#[cfg(all(test, unix))]
+static UNLINK_FAULT_SERIAL: Mutex<()> = Mutex::new(());
+
 /// Clears the installed unlink fault when its fixture leaves scope.
 #[cfg(all(test, unix))]
-#[derive(Debug)]
-pub(crate) struct UnlinkFaultGuard;
+pub(crate) struct UnlinkFaultGuard {
+    _serial: std::sync::MutexGuard<'static, ()>,
+}
 
 #[cfg(all(test, unix))]
 impl Drop for UnlinkFaultGuard {
     fn drop(&mut self) {
-        if let Ok(mut fault) = UNLINK_FAULT.lock() {
-            *fault = None;
-        }
+        *lock_unlink_fault() = None;
     }
+}
+
+/// Locks the injected-fault slot, recovering from a poisoned mutex: the slot
+/// holds one `Option`, so a panic that left it poisoned must not turn every
+/// later unlink into a second panic.
+#[cfg(all(test, unix))]
+fn lock_unlink_fault() -> std::sync::MutexGuard<'static, Option<UnlinkFault>> {
+    UNLINK_FAULT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Installs a test fault that fails unlinks under `dir` (all names, or one
@@ -929,25 +944,25 @@ pub(crate) fn install_unlink_fault_under(
     dir: &Path,
     name: Option<&OsStr>,
 ) -> io::Result<UnlinkFaultGuard> {
+    let serial = UNLINK_FAULT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = sys::open_allowed_root(dir)?;
     let meta = sys::current_meta(&root)?;
-    let mut fault = UNLINK_FAULT
-        .lock()
-        .expect("unlink fault lock must not be poisoned");
+    let mut fault = lock_unlink_fault();
     assert!(fault.is_none(), "an unlink fault is already installed");
     *fault = Some(UnlinkFault {
         dir: meta.identity,
         name: name.map(OsStr::to_os_string),
     });
-    Ok(UnlinkFaultGuard)
+    drop(fault);
+    Ok(UnlinkFaultGuard { _serial: serial })
 }
 
 /// Returns the injected failure when `parent`/`name` match the fault.
 #[cfg(all(test, unix))]
 fn unlink_fault(parent: &File, name: &OsStr) -> Option<io::Error> {
-    let fault = UNLINK_FAULT
-        .lock()
-        .expect("unlink fault lock must not be poisoned");
+    let fault = lock_unlink_fault();
     let fault = fault.as_ref()?;
     if fault.name.as_ref().is_some_and(|want| want != name) {
         return None;

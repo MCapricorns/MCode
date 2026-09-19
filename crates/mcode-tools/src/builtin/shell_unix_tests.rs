@@ -147,20 +147,24 @@ async fn timeout_kills_grandchildren_not_just_the_shell() {
     let log = dir.path().join("beat.log");
     let log_arg = shell_quote(&log);
 
+    // The call deadline starts at the tool call and covers the process-wide
+    // execution lease wait, so the window must stay wide enough to start the
+    // shell under a fully parallel suite; the timeout must still land while
+    // the grandchild loop is running.
     let result = run_dyn(
         &ShellTool::new(),
         json!({
             "command": format!(
                 "echo go; while true; do echo x >> {log_arg}; sleep 0.2; done & sleep 30"
             ),
-            "timeout_secs": 1,
+            "timeout_secs": 5,
         }),
         &ctx,
     )
     .await
     .unwrap();
     assert!(result.is_error);
-    assert!(text_of(&result).contains("timed out after 1s"));
+    assert!(text_of(&result).contains("timed out after 5s"));
 
     tokio::time::sleep(Duration::from_millis(800)).await;
     let first = std::fs::read_to_string(&log)

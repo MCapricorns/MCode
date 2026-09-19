@@ -191,7 +191,22 @@ pub(super) fn open_component(
     name: &OsStr,
     flags: OFlags,
 ) -> Result<std::os::fd::OwnedFd, ConfigError> {
-    open_component_with_mounts(parent, name, flags, true)
+    open_component_with_mounts(parent, name, flags, Mode::empty(), true)
+}
+
+/// Creates one component with the private mode in the creating call itself.
+///
+/// Darwin resolves a contested `O_CREAT` without `O_EXCL` into `EACCES` (after
+/// another thread created a zero-mode entry) or a spurious `ENOENT`, so a
+/// caller that must create passes the final mode up front and treats an
+/// `EEXIST` from its `O_EXCL` attempt as a lost race to retry as an opener.
+pub(super) fn create_component(
+    parent: &File,
+    name: &OsStr,
+    flags: OFlags,
+    mode: Mode,
+) -> Result<std::os::fd::OwnedFd, ConfigError> {
+    open_component_with_mounts(parent, name, flags, mode, true)
 }
 
 pub(super) fn open_staging_component(
@@ -199,7 +214,7 @@ pub(super) fn open_staging_component(
     name: &OsStr,
     flags: OFlags,
 ) -> Result<std::os::fd::OwnedFd, ConfigError> {
-    open_component_with_mounts(parent, name, flags, false)
+    open_component_with_mounts(parent, name, flags, Mode::empty(), false)
 }
 
 pub(super) fn open_staging_directory(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
@@ -220,6 +235,7 @@ fn open_component_with_mounts(
     parent: &File,
     name: &OsStr,
     flags: OFlags,
+    mode: Mode,
     allow_mounts: bool,
 ) -> Result<std::os::fd::OwnedFd, ConfigError> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -228,7 +244,7 @@ fn open_component_with_mounts(
         if !allow_mounts {
             resolve |= rfs::ResolveFlags::NO_XDEV;
         }
-        rfs::openat2(parent.as_fd(), name, flags, Mode::empty(), resolve).map_err(|error| {
+        rfs::openat2(parent.as_fd(), name, flags, mode, resolve).map_err(|error| {
             if error == Errno::NOSYS {
                 ConfigError::new(ConfigErrorKind::AccessControl)
                     .with_io_kind(io::ErrorKind::Unsupported)
@@ -241,7 +257,7 @@ fn open_component_with_mounts(
     {
         // O_NOFOLLOW anchors the one-component open; fstatfs then identifies
         // the mount instance rather than merely the underlying volume.
-        let opened = rfs::openat(parent.as_fd(), name, flags, Mode::empty())
+        let opened = rfs::openat(parent.as_fd(), name, flags, mode)
             .map_err(|error| map_errno(error, ConfigErrorKind::Io))?;
         if !allow_mounts {
             verify_same_apple_mount(parent, &opened)?;
@@ -256,7 +272,7 @@ fn open_component_with_mounts(
         }
         // The caller supplies one validated component and O_NOFOLLOW, so the
         // portable openat fallback remains anchored to `parent`.
-        rfs::openat(parent.as_fd(), name, flags, Mode::empty())
+        rfs::openat(parent.as_fd(), name, flags, mode)
             .map_err(|error| map_errno(error, ConfigErrorKind::Io))
     }
 }

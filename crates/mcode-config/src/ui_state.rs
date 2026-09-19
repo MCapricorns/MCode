@@ -185,29 +185,47 @@ mod tests {
         assert!(state.auto_update);
     }
 
+    /// One absolute project path with a platform-native root.
+    fn project_path(index: usize) -> String {
+        #[cfg(windows)]
+        {
+            format!("C:\\proj\\p{index}")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("/proj/p{index}")
+        }
+    }
+
     #[test]
     fn touch_project_dedupes_and_bounds_recents() {
         let mut state = UiState::default();
         for index in 0..(MAX_RECENT_PROJECTS + 4) {
-            state.touch_project(&format!("C:\\proj\\p{index}"));
+            state.touch_project(&project_path(index));
         }
         assert_eq!(state.recent_projects.len(), MAX_RECENT_PROJECTS);
         assert_eq!(
             state.recent_projects[0],
-            format!("C:\\proj\\p{}", MAX_RECENT_PROJECTS + 3)
+            project_path(MAX_RECENT_PROJECTS + 3)
         );
-        state.touch_project("C:\\proj\\p2");
-        assert_eq!(state.recent_projects[0], "C:\\proj\\p2");
-        assert_eq!(state.last_project.as_deref(), Some("C:\\proj\\p2"));
+        state.touch_project(&project_path(2));
+        assert_eq!(state.recent_projects[0], project_path(2));
+        assert_eq!(
+            state.last_project.as_deref(),
+            Some(project_path(2).as_str())
+        );
         state.touch_project("relative/path");
-        assert_eq!(state.last_project.as_deref(), Some("C:\\proj\\p2"));
+        assert_eq!(
+            state.last_project.as_deref(),
+            Some(project_path(2).as_str())
+        );
     }
 
     #[test]
     fn replace_then_read_round_trips_and_rejects_tamper() {
         let (_parent, home) = layout();
         let mut state = UiState::default();
-        state.touch_project("D:\\work\\MCode");
+        state.touch_project(&project_path(0));
         state.auto_update = false;
         state.selected_provider = Some("openai".to_owned());
         state.selected_model = Some("gpt-x".to_owned());

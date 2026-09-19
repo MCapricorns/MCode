@@ -59,8 +59,11 @@ fn completed_listing_allocates_one_rendered_key_per_name() {
         ..Limits::default()
     };
     let limiter = WalkLimiter::new(&limits);
+    // The no-follow component walk rejects symlinked components, and the
+    // macOS temporary directory lives behind the `/var` symlink.
+    let root = directory.path().canonicalize().unwrap();
     let listing = collect_listing(
-        &open_directory_nofollow(directory.path()).unwrap(),
+        &open_directory_nofollow(&root).unwrap(),
         &limiter,
         &CancellationToken::new(),
     )
@@ -133,7 +136,10 @@ fn exact_and_over_entry_limits_stop_before_an_unreserved_access() {
         };
         let limiter = WalkLimiter::new(&limits);
         let cancel = CancellationToken::new();
-        let directory_file = open_directory_nofollow(directory.path()).unwrap();
+        // The no-follow component walk rejects symlinked components, and the
+        // macOS temporary directory lives behind the `/var` symlink.
+        let root = directory.path().canonicalize().unwrap();
+        let directory_file = open_directory_nofollow(&root).unwrap();
 
         let error = match collect_listing(&directory_file, &limiter, &cancel) {
             Ok(_) => panic!("entry_count={entry_count}: listing unexpectedly completed"),

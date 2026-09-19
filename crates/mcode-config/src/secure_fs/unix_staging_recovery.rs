@@ -635,11 +635,21 @@ fn prove_unlinked(retained: &File, expected: Identity, directory: bool) -> Resul
     };
     if current != expected
         || rfs::FileType::from_raw_mode(stat.st_mode) != expected_type
-        || stat.st_nlink != 0
+        || !is_proven_unlinked(&stat, directory)
     {
         return Err(indeterminate(validation()));
     }
     Ok(())
+}
+
+/// Whether the retained descriptor proves its directory entry is gone.
+///
+/// Linux reports `st_nlink == 0` for every unlinked vnode. Darwin keeps a
+/// removed directory at two links while its descriptor stays open, so only a
+/// regular file's link count carries that proof there; the caller's
+/// `prove_absent` covers the removed directory's name.
+fn is_proven_unlinked(stat: &rfs::Stat, directory: bool) -> bool {
+    stat.st_nlink == 0 || (directory && cfg!(target_vendor = "apple"))
 }
 
 fn prove_absent(parent: &File, name: &OsStr, mutation_started: bool) -> Result<(), ConfigError> {
