@@ -206,7 +206,6 @@ impl Tool for FetchContentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::Tool as _;
     use mcode_core::message::ContentBlock;
 
     struct FixedHost;
