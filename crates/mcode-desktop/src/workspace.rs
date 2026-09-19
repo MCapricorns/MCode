@@ -728,6 +728,23 @@ impl Workspace {
         self.persist_ui_state(cx);
     }
 
+    /// Persists the requested reasoning effort through the settings doc.
+    pub(super) fn on_select_reasoning(&mut self, level: &str, cx: &mut Context<Self>) {
+        let Some(settings) = self.vm.settings.as_mut() else {
+            return;
+        };
+        if settings.saving {
+            return;
+        }
+        settings.reasoning = match level {
+            "low" | "medium" | "high" => Some(level.to_owned()),
+            _ => None,
+        };
+        settings.dirty = true;
+        cx.notify();
+        self.on_save_settings(cx);
+    }
+
     // ---- project selection ----
 
     /// Opens the native folder picker and binds the chosen directory.

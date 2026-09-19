@@ -49,6 +49,7 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
     };
     push("AGENTS.md", workspace_root.join("AGENTS.md"), false);
     push("MCODE.md", workspace_root.join("MCODE.md"), false);
+    push("AGENTS.md", workspace_root.join(".mcode").join("agents.md"), false);
     push("AGENTS.md", home.root().join("AGENTS.md"), true);
     files
 }
@@ -116,6 +117,24 @@ mod tests {
         assert_eq!(files[0].name, "AGENTS.md");
         assert!(!files[0].global);
         assert!(files[1].global);
+    }
+
+    #[test]
+    fn discovers_dot_mcode_agents_md() {
+        let (parent, home) = layout();
+        let workspace = parent.path().join("proj");
+        std::fs::create_dir_all(workspace.join(".mcode")).expect("workspace");
+        std::fs::create_dir_all(home.root()).expect("home");
+        std::fs::write(
+            workspace.join(".mcode").join("agents.md"),
+            "dot-folder rules",
+        )
+        .expect("seed");
+
+        let files = discover_resources(&home, &workspace);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "AGENTS.md");
+        assert!(files[0].path.ends_with(r".mcodegents.md") || files[0].path.ends_with(".mcode/agents.md"));
     }
 
     #[test]

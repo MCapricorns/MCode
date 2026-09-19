@@ -67,6 +67,8 @@ pub enum QueueMode {
 pub struct AgentConfig {
     /// System prompt parts, emitted in order ahead of the history.
     pub system_prompt: Vec<String>,
+    /// Requested reasoning effort for providers that support it.
+    pub reasoning: Option<mcode_provider_api::ReasoningLevel>,
 }
 
 impl AgentConfig {
@@ -80,6 +82,16 @@ impl AgentConfig {
     #[must_use]
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt.push(prompt.into());
+        self
+    }
+
+    /// Requests a reasoning effort level.
+    #[must_use]
+    pub fn with_reasoning(
+        mut self,
+        level: impl Into<Option<mcode_provider_api::ReasoningLevel>>,
+    ) -> Self {
+        self.reasoning = level.into();
         self
     }
 }

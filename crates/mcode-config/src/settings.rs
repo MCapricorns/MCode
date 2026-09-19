@@ -209,6 +209,10 @@ pub struct AppSettings {
     pub mcp_servers: Vec<McpServerSettings>,
     /// Appearance.
     pub appearance: AppearanceSettings,
+    /// Requested reasoning effort: `low`, `medium`, or `high`; absent keeps
+    /// the provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -224,6 +228,7 @@ impl Default for AppSettings {
             appearance: AppearanceSettings {
                 theme: "dark".to_owned(),
             },
+            reasoning_effort: None,
         }
     }
 }
@@ -262,6 +267,11 @@ impl AppSettings {
             |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
         bounded_text(&self.user_agent, MAX_FIELD_BYTES)
             .map_err(|_| invalid("userAgent: too long or contains control characters"))?;
+        if let Some(level) = self.reasoning_effort.as_deref()
+            && !matches!(level, "low" | "medium" | "high")
+        {
+            return Err(invalid("reasoningEffort: must be low, medium, or high"));
+        }
         if self.providers.len() > MAX_PROVIDERS {
             return Err(invalid("providers: too many entries"));
         }

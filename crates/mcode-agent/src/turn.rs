@@ -70,6 +70,7 @@ pub(crate) async fn stream_assistant(
         system_prompt,
         messages: state.messages.clone(),
         tools: env.tools.specs(),
+        reasoning: config.reasoning,
     };
     let request = env
         .hooks

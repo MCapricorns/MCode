@@ -12,6 +12,6 @@ mod stream;
 #[doc(inline)]
 pub use error::{ProviderError, ProviderErrorKind};
 #[doc(inline)]
-pub use provider::{MAX_REQUEST_ENCODED_BYTES, Provider, Request, StreamEvent};
+pub use provider::{MAX_REQUEST_ENCODED_BYTES, Provider, ReasoningLevel, Request, StreamEvent};
 #[doc(inline)]
 pub use stream::{EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES};

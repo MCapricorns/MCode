@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 use mcode_core::{ContentBlock, Message, StopReason, ToolSpec, Usage};
-use mcode_provider_api::{Request, StreamEvent};
+use mcode_provider_api::{ReasoningLevel, Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 
@@ -36,6 +36,13 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
     });
     if !tools.is_empty() {
         body["tools"] = json!(tools);
+    }
+    if let Some(level) = request.reasoning {
+        body["reasoning_effort"] = json!(match level {
+            ReasoningLevel::Low => "low",
+            ReasoningLevel::Medium => "medium",
+            ReasoningLevel::High => "high",
+        });
     }
     body
 }

@@ -13,6 +13,19 @@ use crate::{EventStream, ProviderError, ProviderErrorKind};
 /// hook transformation and before invoking a provider.
 pub const MAX_REQUEST_ENCODED_BYTES: usize = 8 * 1_024 * 1_024;
 
+/// Requested reasoning effort for models that support it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningLevel {
+    /// Brief reasoning; fastest.
+    #[default]
+    Low,
+    /// Balanced reasoning.
+    Medium,
+    /// Deep reasoning; slowest.
+    High,
+}
+
 /// A provider-neutral completion request.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +36,9 @@ pub struct Request {
     pub messages: Vec<Message>,
     /// Tools available for the response.
     pub tools: Vec<ToolSpec>,
+    /// Reasoning effort; `None` leaves the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningLevel>,
 }
 
 impl Request {
@@ -50,6 +66,13 @@ impl Request {
     #[must_use]
     pub fn with_tool(mut self, tool: ToolSpec) -> Self {
         self.tools.push(tool);
+        self
+    }
+
+    /// Sets the requested reasoning effort.
+    #[must_use]
+    pub fn with_reasoning(mut self, level: ReasoningLevel) -> Self {
+        self.reasoning = Some(level);
         self
     }
 

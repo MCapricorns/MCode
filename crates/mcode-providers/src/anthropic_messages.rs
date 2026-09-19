@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use mcode_core::{
     AssistantMessage, ContentBlock, Message, StopReason, ThinkingBlock, ToolSpec, Usage,
 };
-use mcode_provider_api::{ProviderError, ProviderErrorKind, Request, StreamEvent};
+use mcode_provider_api::{ProviderError, ProviderErrorKind, ReasoningLevel, Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 
@@ -37,6 +37,20 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
     }
     if !tools.is_empty() {
         body["tools"] = json!(tools);
+    }
+    if let Some(level) = request.reasoning {
+        // Thinking budget must stay below max_tokens; raise the cap so the
+        // budget always fits.
+        let budget = match level {
+            ReasoningLevel::Low => 1_024,
+            ReasoningLevel::Medium => 4_096,
+            ReasoningLevel::High => 16_384,
+        };
+        let max_tokens = body["max_tokens"].as_u64().unwrap_or(MAX_TOKENS_DEFAULT);
+        if max_tokens <= budget {
+            body["max_tokens"] = json!(budget + MAX_TOKENS_DEFAULT);
+        }
+        body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
     }
     body
 }

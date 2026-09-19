@@ -615,6 +615,12 @@ pub(super) fn render_model_menu_layer(
                 .map(|provider| provider.models.iter().take(64).cloned().collect::<Vec<_>>())
         })
         .unwrap_or_default();
+    let selected_reasoning = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.reasoning.clone())
+        .unwrap_or_else(|| "default".to_owned());
     let providers_empty = providers.is_empty();
     let models_empty = models.is_empty();
     div()
@@ -709,7 +715,42 @@ pub(super) fn render_model_menu_layer(
                             cx,
                         )
                     }))
-                }),
+                })
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .mt_1()
+                        .pt_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .opacity(0.6)
+                                .px_2()
+                                .pb_1()
+                                .child("THINKING"),
+                        ),
+                )
+                .children(["default", "low", "medium", "high"].map(|level| {
+                    let selected = level == selected_reasoning;
+                    let label = match level {
+                        "low" => "Low \u{b7} brief".to_owned(),
+                        "medium" => "Medium \u{b7} balanced".to_owned(),
+                        "high" => "High \u{b7} deep".to_owned(),
+                        other => format!("{other} \u{b7} provider default"),
+                    };
+                    let level = level.to_owned();
+                    menu_row(
+                        format!("reasoning-{level}"),
+                        label,
+                        selected,
+                        cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_select_reasoning(&level, cx);
+                        }),
+                        cx,
+                    )
+                })),
         )
         .into_any_element()
 }

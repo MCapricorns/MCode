@@ -1595,7 +1595,17 @@ package installs) — never to search, read, or write files.",
         let _ = mcode_config::checkpoint_file(&checkpoint_home, &checkpoint_session, &path);
     });
     let cancel = CancellationToken::new();
-    let mut agent = Agent::new(AgentConfig::new().with_system_prompt(system_prompt));
+    let mut config = AgentConfig::new().with_system_prompt(system_prompt);
+    if let Some(level) = settings.reasoning_effort.as_deref() {
+        let level = match level {
+            "low" => mcode_provider_api::ReasoningLevel::Low,
+            "medium" => mcode_provider_api::ReasoningLevel::Medium,
+            "high" => mcode_provider_api::ReasoningLevel::High,
+            _ => return Err("settings reasoningEffort must be low, medium, or high".to_owned()),
+        };
+        config = config.with_reasoning(level);
+    }
+    let mut agent = Agent::new(config);
 
     // The ledger pump owns the branch head: tool results commit as they
     // complete, the final assistant message commits at turn end.

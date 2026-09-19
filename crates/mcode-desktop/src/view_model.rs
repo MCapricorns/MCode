@@ -94,6 +94,9 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mcode_config::McpServerSettings>,
     /// Appearance theme: `light` or `dark`.
     pub theme: String,
+    /// Requested reasoning effort: `low`, `medium`, `high`; `None` keeps the
+    /// provider default.
+    pub reasoning: Option<String>,
     /// Provider ids that have a stored API key.
     pub providers_with_keys: Vec<String>,
     /// MCP key ids (form `mcp-<server>`) that have a stored key.
@@ -123,6 +126,7 @@ impl SettingsState {
             web_backends: settings.web.backends.clone(),
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.appearance.theme.clone(),
+            reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
             usage_enabled: settings.usage.enabled,
@@ -147,6 +151,7 @@ impl SettingsState {
             appearance: mcode_config::AppearanceSettings {
                 theme: self.theme.clone(),
             },
+            reasoning_effort: self.reasoning.clone(),
         }
     }
 }
