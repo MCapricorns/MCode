@@ -34,15 +34,14 @@ const UPDATE_RECHECK_TICKS: u64 = 24 * 60 * 60 * 1000 / EVENT_POLL_INTERVAL.as_m
 /// fallback by design.
 pub fn open_window(home: HomeLayout, cx: &mut App) {
     let (bridge, events) = CoreBridge::start(home);
-    let options = gpui_kit::WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(WINDOW_BOUNDS)),
-        titlebar: Some(gpui_kit::TitlebarOptions {
-            title: Some("MCode".into()),
-            ..Default::default()
-        }),
-        window_min_size: Some(size(px(960.), px(560.))),
-        ..Default::default()
-    };
+    // The custom titlebar owns dragging and window controls, so the system
+    // titlebar is hidden (`appears_transparent`).
+    let mut options = gpui_kit::component::TitleBar::window_options();
+    options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
+    options.window_min_size = Some(size(px(960.), px(560.)));
+    if let Some(titlebar) = options.titlebar.as_mut() {
+        titlebar.title = Some("MCode".into());
+    }
     cx.open_window(options, |window, cx| {
         let workspace = Workspace::new(bridge, events, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
