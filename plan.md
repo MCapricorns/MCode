@@ -85,6 +85,8 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - [x] feat:思考强度 —— settings `reasoningEffort`(low/medium/high)→ 模型菜单 THINKING 区 → anthropic thinking budget / openai reasoning_effort;.mcode/agents.md 纳入资源发现(69bf39e)。
 - [x] feat:回合分析 —— Usage 增 cache_read_tokens(anthropic/openai 解析)+ 回合 elapsed;Overview 显示 context window 占比、cache%、tok/s(c907f38)。
 - [x] feat:composer `@` 文件索引(bridge 有界项目内搜索,跳 VCS/依赖目录,最短路径优先)与 `/` 命令菜单(/new、/settings)(e255740)。
+- [x] fix:CI tools-contract 挂 —— rustfmt 版本漂移钉 toolchain 1.98.1(5eddf97);非中文代码页 runner 上 pwsh 管道输出把 CJK 折叠成 `??`,用户脚本序言(using/param)后插一行 `[Console]::OutputEncoding=UTF8`,输出恒为 UTF-8(18fb31c)。
+- [x] feat:皮肤升级 —— skin.rs 统一环境渐变/磨砂玻璃面板/菜单 scrim/品牌渐变气泡,用户气泡框收窄;composer 露出 Thinking 循环切换 chip(9b2cc5c)。
 
 依赖主线:`T9 -> T10 -> T11 -> T12`;T13–T15 依赖 T11;T16+ 依赖 T12。
 
