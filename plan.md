@@ -56,18 +56,21 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - [x] T19:内置 Todo(stable ID、blockedBy 图校验、revision CAS、durable Task 事件、Overview 展示)。
 - [x] T25:删除旧路径的识别、读取、兼容代码和 dead code(旧 crate 全删、mcode-plugin-api 收口、孤儿依赖清理)。
 - [x] T26:最终文档(README 重写、design 文档收口为 00/01/02/09 + plan.md)。
+- [x] T15:Usage 内置统计(durable Usage 事件、Overview token 面板、设置页开关)。(v0.1.0)
+- [x] T27:Provider 目录云控同步(`mcode-catalog`:models.dev 归一化快照内嵌 + ETag 条件请求后台刷新 + 本地缓存;设置页目录预设,选厂商粘 key 即用;模型选择器按目录/配置发现)。(v0.1.0)
+- [x] T28:桌面打磨(zcode 式布局:活动栏 + 齿轮图标进整页设置、欢迎页项目选择器 + 系统目录对话框 + 最近项目持久化 `ui.json`、顶栏 project/model chip、会话流气泡/工具行重绘)。(v0.1.0)
+- [x] T23:自动更新(`mcode-updates`:GitHub Releases 最新版检查 + semver 比较 + SHA-256 校验下载 + 暂存换装脚本重启;Windows release 关闭控制台)。CI 发布 Windows x64 与 macOS arm64/x64 可执行文件到 Release。(v0.1.0)
 
-### Backlog(v0.0.1 后)
+### Backlog(v0.1.0 后)
 
 - [ ] T20:内置 Subagents async fan-out、bounded queue、steer/follow-up/cancel、worktree lease 与 crash recovery。
 - [ ] T21:内置 Compaction adaptive scheduling、Provider child completion 与 atomic checkpoint。
 - [ ] T22:产品 export/import。
-- [ ] T23:Core 自动更新。
-- [ ] T24:设置页收口(usage 面板、导入导出预设)与桌面打磨。
+- [ ] T29:目录预设的 provider 行内多模型勾选(当前默认单模型;更多模型经自定义 endpoint 或重改名预设添加)。
 
-### v0.0.1 收口
+### v0.1.0 收口
 
-- [ ] final:workspace 全量 audit、Windows CI 复核、发布 `v0.0.1` tag + GitHub Release(Windows-only;macOS 按用户指示不做)。
+- [x] final:workspace 全量 audit(含目录下载/更新下载的安全边界)、发布 `v0.1.0` tag + GitHub Release(Windows/macOS 双平台产物)。
 
 依赖主线:`T9 -> T10 -> T11 -> T12`;T13–T15 依赖 T11;T16+ 依赖 T12。
 
