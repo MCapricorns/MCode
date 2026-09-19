@@ -30,7 +30,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, GetProcessId, INFINITE,
     InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
@@ -384,6 +384,7 @@ fn spawn_attempt(
     let mut flags = CREATE_UNICODE_ENVIRONMENT
         | CREATE_NEW_PROCESS_GROUP
         | CREATE_SUSPENDED
+        | CREATE_NO_WINDOW
         | EXTENDED_STARTUPINFO_PRESENT;
     if breakaway {
         flags |= CREATE_BREAKAWAY_FROM_JOB;
