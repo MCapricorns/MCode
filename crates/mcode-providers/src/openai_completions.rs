@@ -251,6 +251,10 @@ impl FrameReducer for CompletionsReducer {
         if let Some(usage) = chunk["usage"].as_object() {
             self.usage = Some(Usage {
                 input_tokens: usage["prompt_tokens"].as_u64().unwrap_or_default(),
+                cache_read_tokens: usage
+                    .get("prompt_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+                    .and_then(serde_json::Value::as_u64),
                 output_tokens: usage["completion_tokens"].as_u64().unwrap_or_default(),
             });
         }
@@ -394,7 +398,8 @@ mod tests {
             message.usage,
             Some(Usage {
                 input_tokens: 3,
-                output_tokens: 5
+                output_tokens: 5,
+                cache_read_tokens: None
             })
         );
         let call = match &message.blocks[2] {

@@ -169,6 +169,7 @@ pub(crate) struct MessagesReducer {
     current: usize,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: Option<u64>,
     stop_reason: Option<StopReason>,
     message_stopped: bool,
     terminal_sent: bool,
@@ -222,6 +223,7 @@ impl MessagesReducer {
                 usage: Some(Usage {
                     input_tokens: self.input_tokens,
                     output_tokens: self.output_tokens,
+                    cache_read_tokens: self.cache_read_tokens,
                 }),
                 stop_reason: self.stop_reason.unwrap_or(StopReason::Stop),
             },
@@ -240,9 +242,9 @@ impl FrameReducer for MessagesReducer {
         let event_type = event["type"].as_str().unwrap_or_default();
         match event_type {
             "message_start" => {
-                self.input_tokens = event["message"]["usage"]["input_tokens"]
-                    .as_u64()
-                    .unwrap_or_default();
+                let usage = &event["message"]["usage"];
+                self.input_tokens = usage["input_tokens"].as_u64().unwrap_or_default();
+                self.cache_read_tokens = usage["cache_read_input_tokens"].as_u64();
             }
             "content_block_start" => {
                 let index = event["index"].as_u64().unwrap_or_default() as usize;
@@ -429,7 +431,7 @@ mod tests {
         let mut reducer = MessagesReducer::new();
         let mut events = Vec::new();
         for data in [
-            json!({"type": "message_start", "message": {"usage": {"input_tokens": 7}}}).to_string(),
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 7, "cache_read_input_tokens": 5}}}).to_string(),
             json!({"type": "content_block_start", "index": 0,
                    "content_block": {"type": "thinking", "thinking": ""}})
             .to_string(),
@@ -475,7 +477,8 @@ mod tests {
             message.usage,
             Some(Usage {
                 input_tokens: 7,
-                output_tokens: 4
+                output_tokens: 4,
+                cache_read_tokens: Some(5)
             })
         );
         let ContentBlock::Thinking(thinking) = &message.blocks[0] else {

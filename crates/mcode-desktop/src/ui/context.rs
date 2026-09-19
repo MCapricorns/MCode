@@ -104,6 +104,63 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     )),
             )
         })
+        .when(vm.last_turn.is_some(), |this| {
+            let turn = vm.last_turn.as_ref().expect("checked");
+            let mut rows: Vec<(String, String)> = Vec::new();
+            let context_window = vm.catalog.as_ref().and_then(|catalog| {
+                let provider_id = vm.selected_provider.as_deref()?;
+                let provider = catalog.provider(provider_id)?;
+                provider
+                    .models
+                    .iter()
+                    .find(|model| model.id == turn.model)
+                    .map(|model| model.context)
+                    .filter(|context| *context > 0)
+            });
+            match context_window {
+                Some(window) => {
+                    let percent = (turn.input as f64 / window as f64 * 1000.0).round() / 10.0;
+                    rows.push((
+                        "Context".to_owned(),
+                        format!("{} / {} ({percent}%)", compact(turn.input), compact(window)),
+                    ));
+                }
+                None => rows.push(("Context".to_owned(), compact(turn.input))),
+            }
+            if let Some(cache) = turn.cache
+                && turn.input > 0
+            {
+                rows.push(("Cache".to_owned(), format!("{}%", cache * 100 / turn.input)));
+            }
+            if turn.elapsed_ms > 0 {
+                let per_second = turn.output as f64 / (turn.elapsed_ms as f64 / 1000.0);
+                rows.push((
+                    "Speed".to_owned(),
+                    format!("{per_second:.1} tok/s over {} s", turn.elapsed_ms / 1000),
+                ));
+            }
+            rows.push(("Output".to_owned(), compact(turn.output)));
+            this.child(
+                div()
+                    .id("overview-last-turn")
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .mt_1()
+                    .child(div().text_xs().opacity(0.6).child("Last turn"))
+                    .children(rows.into_iter().map(|(label, value)| {
+                        div()
+                            .id(format!("last-turn-{label}"))
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .gap_2()
+                            .text_sm()
+                            .child(div().opacity(0.6).child(label))
+                            .child(div().child(value))
+                    })),
+            )
+        })
         .when(!vm.todo_rows.is_empty(), |this| {
             this.child(
                 div()
@@ -169,4 +226,15 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                         .child(div().text_xs().opacity(0.6).child(ellipsis(path, 60)))
                 })),
         )
+}
+
+/// Compact token-count spelling: 12.3k / 1.2M.
+fn compact(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
 }

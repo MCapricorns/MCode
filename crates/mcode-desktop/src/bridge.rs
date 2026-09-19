@@ -220,6 +220,10 @@ pub enum BridgeEvent {
         input: u64,
         /// Output tokens.
         output: u64,
+        /// Prompt tokens served from the provider cache, when reported.
+        cache: Option<u64>,
+        /// Wall-clock turn duration in milliseconds.
+        elapsed_ms: u64,
         /// Committed usage entry projection.
         entry: ConversationEntry,
     },
@@ -1578,6 +1582,7 @@ package installs) — never to search, read, or write files.",
     );
     system_prompt.push_str(&mcode_agent::build_system_prompt(&registry));
 
+    let turn_started = std::time::Instant::now();
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
     let checkpoint_home = home.clone();
     let checkpoint_cwd = cwd.clone();
@@ -1711,11 +1716,14 @@ package installs) — never to search, read, or write files.",
                                 Ok(event_id) => {
                                     let entry = project_assistant_from(&event_id, &payload);
                                     if usage_enabled && let Some(usage) = message.usage {
+                                        let elapsed_ms = turn_started.elapsed().as_millis() as u64;
                                         let usage_payload = serde_json::json!({
                                             "provider": usage_provider,
                                             "model": usage_model,
                                             "input": usage.input_tokens,
                                             "output": usage.output_tokens,
+                                            "cache": usage.cache_read_tokens,
+                                            "elapsed_ms": elapsed_ms,
                                         });
                                         if let Ok(bytes) = serde_json::to_vec(&usage_payload)
                                             && let Ok(usage_event) =
@@ -1727,6 +1735,8 @@ package installs) — never to search, read, or write files.",
                                                 model: usage_model.clone(),
                                                 input: usage.input_tokens,
                                                 output: usage.output_tokens,
+                                                cache: usage.cache_read_tokens,
+                                                elapsed_ms,
                                                 entry: project_usage(&usage_event, &bytes),
                                             });
                                         }
@@ -2069,10 +2079,22 @@ fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry {
     let model = value["model"].as_str().unwrap_or("unknown");
     let input = value["input"].as_u64().unwrap_or_default();
     let output = value["output"].as_u64().unwrap_or_default();
+    let cache = value["cache"].as_u64();
+    let elapsed_ms = value["elapsed_ms"].as_u64().unwrap_or_default();
+    let mut text = format!("{model}: {input} in / {output} out");
+    if elapsed_ms > 0 {
+        let per_second = output as f64 / (elapsed_ms as f64 / 1000.0);
+        text.push_str(&format!(" \u{b7} {per_second:.0} tok/s"));
+    }
+    if let Some(cache) = cache
+        && input > 0
+    {
+        text.push_str(&format!(" \u{b7} {}% cached", cache * 100 / input));
+    }
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::Usage,
-        text: format!("{model}: {input} in / {output} out"),
+        text,
         call_id: None,
     }
 }

@@ -232,6 +232,9 @@ pub enum StopReason {
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Prompt tokens served from the provider cache, when reported.
+    #[serde(default)]
+    pub cache_read_tokens: Option<u64>,
 }
 
 /// Binary content (base64) with its MIME type.
@@ -314,6 +317,7 @@ mod tests {
                 usage: Some(Usage {
                     input_tokens: 1_200,
                     output_tokens: 42,
+                    cache_read_tokens: None,
                 }),
                 stop_reason,
             }));
@@ -444,6 +448,7 @@ mod tests {
         assert_rejects_unknown_field(&Usage {
             input_tokens: 7,
             output_tokens: 9,
+            cache_read_tokens: None,
         });
         assert_rejects_unknown_field(&BinaryData {
             data: "Zm9v".into(),

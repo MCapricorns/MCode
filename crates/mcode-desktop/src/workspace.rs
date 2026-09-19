@@ -196,6 +196,8 @@ impl Workspace {
                 model,
                 input,
                 output,
+                cache,
+                elapsed_ms,
                 entry,
             } => {
                 if !matches_active(&session_id) {
@@ -206,6 +208,8 @@ impl Workspace {
                     model,
                     input,
                     output,
+                    cache,
+                    elapsed_ms,
                     entry,
                 }
             }

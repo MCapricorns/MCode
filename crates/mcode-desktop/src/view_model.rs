@@ -50,6 +50,21 @@ pub struct ConversationEntry {
     pub call_id: Option<String>,
 }
 
+/// Metrics for one completed model turn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnStats {
+    /// Model id the turn ran on.
+    pub model: String,
+    /// Input (prompt) tokens reported by the provider.
+    pub input: u64,
+    /// Output (completion) tokens reported by the provider.
+    pub output: u64,
+    /// Prompt tokens served from the provider cache, when reported.
+    pub cache: Option<u64>,
+    /// Wall-clock duration in milliseconds.
+    pub elapsed_ms: u64,
+}
+
 /// The currently open conversation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveConversation {
@@ -289,6 +304,8 @@ pub struct WorkspaceState {
     pub todo_rows: Vec<(String, String)>,
     /// Cumulative usage per provider/model: (key, input, output, requests).
     pub usage_totals: Vec<(String, u64, u64, u64)>,
+    /// Most recent turn's timing and token metrics, when usage is enabled.
+    pub last_turn: Option<TurnStats>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -400,6 +417,8 @@ pub enum DesktopAction {
         model: String,
         input: u64,
         output: u64,
+        cache: Option<u64>,
+        elapsed_ms: u64,
         entry: ConversationEntry,
     },
     /// The durable task list changed.
@@ -573,11 +592,20 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             model,
             input,
             output,
+            cache,
+            elapsed_ms,
             entry,
         } => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
             }
+            state.last_turn = Some(TurnStats {
+                model: model.clone(),
+                input,
+                output,
+                cache,
+                elapsed_ms,
+            });
             let key = format!("{provider}/{model}");
             if let Some(row) = state
                 .usage_totals

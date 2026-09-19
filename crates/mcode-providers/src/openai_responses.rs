@@ -225,6 +225,7 @@ impl FrameReducer for ResponsesReducer {
                 let usage = &event["response"]["usage"];
                 self.usage = Some(Usage {
                     input_tokens: usage["input_tokens"].as_u64().unwrap_or_default(),
+                    cache_read_tokens: usage["input_tokens_details"]["cached_tokens"].as_u64(),
                     output_tokens: usage["output_tokens"].as_u64().unwrap_or_default(),
                 });
                 return vec![self.assemble()];
@@ -320,7 +321,8 @@ mod tests {
             message.usage,
             Some(Usage {
                 input_tokens: 9,
-                output_tokens: 2
+                output_tokens: 2,
+                cache_read_tokens: None
             })
         );
         let call = match &message.blocks[1] {
