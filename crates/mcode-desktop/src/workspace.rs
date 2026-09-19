@@ -251,6 +251,15 @@ impl Workspace {
                 self.dispatch(BridgeCommand::GetCatalog, cx);
                 return;
             }
+            BridgeEvent::CopilotSignedIn => {
+                // The provider entry and key landed; refresh the settings
+                // projection so the row and keyed badge appear immediately.
+                self.dispatch(BridgeCommand::LoadSettings, cx);
+                DesktopAction::CopilotSignInFinished(Ok(()))
+            }
+            BridgeEvent::CopilotSignInFailed { message } => {
+                DesktopAction::CopilotSignInFinished(Err(message))
+            }
             BridgeEvent::UpdateAvailable { offer } => {
                 let version = offer.version.clone();
                 let notes_url = offer.notes_url.clone();
@@ -324,6 +333,18 @@ impl Workspace {
             }
             // A failed mention search just leaves the menu empty.
             BridgeReply::ProjectFiles(Err(_)) => {}
+            BridgeReply::CopilotSignInStarted(Ok(info)) => {
+                self.apply_action(
+                    DesktopAction::CopilotSignInStarted(crate::view_model::CopilotSignIn {
+                        user_code: info.user_code,
+                        verification_uri: info.verification_uri,
+                    }),
+                    cx,
+                );
+            }
+            BridgeReply::CopilotSignInStarted(Err(message)) => {
+                self.apply_action(DesktopAction::CopilotSignInFinished(Err(message)), cx);
+            }
             BridgeReply::AskAnswered(Ok(())) => {}
             BridgeReply::Sent(Ok((head, entry))) => {
                 self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
@@ -1182,6 +1203,12 @@ impl Workspace {
     pub(super) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
         self.preset_key_input = None;
         self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+    }
+
+    /// Starts the GitHub device-flow sign-in with the checked model list.
+    pub(super) fn on_start_copilot_sign_in(&mut self, cx: &mut Context<Self>) {
+        let models = self.vm.preset_models.clone();
+        self.dispatch(BridgeCommand::StartCopilotSignIn { models }, cx);
     }
 
     pub(super) fn preset_key_input(

@@ -18,7 +18,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px, rems,
 };
 
-use super::ellipsis;
+use super::{ellipsis, skin};
 use crate::view_model::{DesktopAction, SettingsSection, UpdateState};
 use crate::workspace::Workspace;
 
@@ -719,45 +719,124 @@ fn render_preset_form(
                     )
                 }),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .opacity(0.6)
-                        .child("API key (stored in the secret vault)"),
-                )
-                .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_2()
-                .child(
-                    Button::new("preset-confirm")
-                        .icon(IconName::Check)
-                        .label("Add provider")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            let provider_id = provider_id_owned.clone();
-                            workspace.on_add_preset(&provider_id, cx);
-                        })),
-                )
-                .child(
-                    Button::new("preset-cancel")
-                        .label("Cancel")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_close_preset(cx);
-                        })),
-                ),
-        )
+        .when(preset.auth == mcode_catalog::AUTH_DEVICE_CODE, |this| {
+            // OAuth sign-in replaces the pasted key for this provider.
+            let theme = cx.theme();
+            let sign_in = workspace.vm().copilot_sign_in.clone();
+            let error = workspace.vm().copilot_error.clone();
+            this.child(
+                div()
+                    .id("preset-sign-in")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .when_some(error, |this, message| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .p_2()
+                                .rounded_md()
+                                .bg(theme.danger.opacity(0.12))
+                                .text_color(theme.danger)
+                                .child(message),
+                        )
+                    })
+                    .when_some(sign_in, |this, sign_in| {
+                        this.child(
+                            div()
+                                .id("preset-sign-in-code")
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .p_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(skin::glass_border(theme))
+                                .bg(skin::glass(theme))
+                                .child(
+                                    div().text_xs().opacity(0.7).child(
+                                        "Your browser opened github.com/login/device — enter this code:",
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xl()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                        .child(sign_in.user_code),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .opacity(0.5)
+                                        .child(format!("waiting at {}", sign_in.verification_uri)),
+                                ),
+                        )
+                    })
+                    .when(workspace.vm().copilot_sign_in.is_none(), |this| {
+                        this.child(
+                            Button::new("preset-sign-in-start")
+                                .icon(IconName::Github)
+                                .label("Sign in with GitHub")
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_start_copilot_sign_in(cx);
+                                })),
+                        )
+                    })
+                    .child(
+                        Button::new("preset-cancel-oauth")
+                            .label("Close")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace.on_close_preset(cx);
+                            })),
+                    ),
+            )
+        })
+        .when(preset.auth != mcode_catalog::AUTH_DEVICE_CODE, |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .opacity(0.6)
+                            .child("API key (stored in the secret vault)"),
+                    )
+                    .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(
+                        Button::new("preset-confirm")
+                            .icon(IconName::Check)
+                            .label("Add provider")
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                let provider_id = provider_id_owned.clone();
+                                workspace.on_add_preset(&provider_id, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("preset-cancel")
+                            .label("Cancel")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace.on_close_preset(cx);
+                            })),
+                    ),
+            )
+        })
         .into_any_element()
 }
 

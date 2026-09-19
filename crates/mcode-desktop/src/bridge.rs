@@ -25,12 +25,16 @@ use mcode_catalog::{
     CachedCatalog, CatalogDocument, DEFAULT_MAX_AGE_SECS, RefreshOutcome, http_client,
 };
 use mcode_config::{
-    AppSettings, AuthorityRevision, HomeLayout, UiState, read_app_settings, read_provider_secrets,
-    read_ui_state, replace_app_settings, replace_provider_secrets, replace_ui_state,
+    AppSettings, AuthorityRevision, HomeLayout, ProviderSettings, UiState, read_app_settings,
+    read_provider_secrets, read_ui_state, replace_app_settings, replace_provider_secrets,
+    replace_ui_state,
 };
 use mcode_core::Message;
 use mcode_provider_api::{Provider as _, Request, StreamEvent};
-use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
+use mcode_providers::{
+    COPILOT_PROVIDER_ID, DeviceTokenPoll, ReqwestTransport, ResolvedProvider, WireProvider,
+    copilot_bearer, poll_device_token, start_device_flow,
+};
 use mcode_session::session::{
     self, BranchId, EventKind, HeadStamp, SessionCallId, SessionError, SessionId, SessionService,
 };
@@ -80,6 +84,11 @@ pub enum BridgeCommand {
         provider_id: String,
         /// The key; empty clears the stored entry.
         api_key: String,
+    },
+    /// Start the GitHub Copilot OAuth device-flow sign-in.
+    StartCopilotSignIn {
+        /// Model ids to bind to the provider once the sign-in succeeds.
+        models: Vec<String>,
     },
     /// Run one model turn over stored history and stream the reply.
     ChatTurn {
@@ -283,6 +292,13 @@ pub enum BridgeEvent {
         /// The resolved release offer.
         offer: UpdateOffer,
     },
+    /// The Copilot device-flow sign-in completed; the provider is ready.
+    CopilotSignedIn,
+    /// The Copilot device-flow sign-in failed or expired.
+    CopilotSignInFailed {
+        /// Rendered failure for the sign-in panel.
+        message: String,
+    },
 }
 
 /// A reply from the core thread, already projected for the view-model.
@@ -332,6 +348,17 @@ pub enum BridgeReply {
     UpdateChecked(Result<Option<UpdateOffer>, String>),
     /// Download-and-verify result.
     UpdateDownloaded(Result<PreparedUpdate, String>),
+    /// The device flow started; the user code is on screen.
+    CopilotSignInStarted(Result<CopilotSignInInfo, String>),
+}
+
+/// What the user needs to complete a device-flow sign-in.
+#[derive(Clone, Debug)]
+pub struct CopilotSignInInfo {
+    /// Code the user types at the verification page.
+    pub user_code: String,
+    /// Verification page opened in the browser.
+    pub verification_uri: String,
 }
 
 /// The resolved provider catalog shared with the UI.
@@ -563,6 +590,15 @@ fn run_core(
                         let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
                     });
                 }
+                BridgeCommand::StartCopilotSignIn { models } => {
+                    let reply = with_reply.reply;
+                    let task_state = state.clone();
+                    let task_events = events.clone();
+                    tokio::spawn(async move {
+                        let outcome = copilot_sign_in(task_state, task_events, models).await;
+                        let _ = reply.send(outcome);
+                    });
+                }
                 command => {
                     let outcome = handle(&state, &command).await;
                     if with_reply.reply.send(outcome).is_err() {
@@ -583,6 +619,8 @@ struct CoreState {
     catalog: Arc<RwLock<CatalogInfo>>,
     /// Per-session project directories for tool runs.
     projects: Arc<Mutex<HashMap<String, PathBuf>>>,
+    /// Cached short-lived Copilot bearer token and its unix expiry.
+    copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
 }
 
 impl CoreState {
@@ -607,6 +645,7 @@ impl CoreState {
             })),
             home,
             projects: Arc::new(Mutex::new(projects)),
+            copilot: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -722,6 +761,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::SetProjectDir { .. } => BridgeReply::ProjectSet(Err(message)),
         BridgeCommand::CheckUpdate => BridgeReply::UpdateChecked(Err(message)),
         BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
+        BridgeCommand::StartCopilotSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
     }
 }
 
@@ -766,6 +806,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             provider_id,
             api_key,
         } => BridgeReply::ProviderKeySaved(save_provider_key(&state.home, provider_id, api_key)),
+        BridgeCommand::StartCopilotSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(
+            "device sign-in runs as a concurrent task".to_owned(),
+        )),
         BridgeCommand::ChatTurn { .. } => {
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
         }
@@ -1479,6 +1522,175 @@ fn secrets_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
     AuthorityRevision::new(header.revision).map_err(|_| ())
 }
 
+// ---- GitHub Copilot OAuth device flow ----
+
+/// Starts the device flow, opens the browser, and spawns the poll loop that
+/// finishes the sign-in (or reports failure) over the event channel.
+async fn copilot_sign_in(
+    state: Arc<CoreState>,
+    events: mpsc::SyncSender<BridgeEvent>,
+    models: Vec<String>,
+) -> BridgeReply {
+    let client = match http_client(UPDATE_USER_AGENT) {
+        Ok(client) => client,
+        Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
+    };
+    let start = match start_device_flow(&client).await {
+        Ok(start) => start,
+        Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
+    };
+    open_browser(&start.verification_uri);
+    let device_code = start.device_code;
+    let mut interval_secs = start.interval_secs.max(1);
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(start.expires_in_secs.max(1));
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            if std::time::Instant::now() >= deadline {
+                let _ = events.send(BridgeEvent::CopilotSignInFailed {
+                    message: "the sign-in code expired before authorization".to_owned(),
+                });
+                return;
+            }
+            match poll_device_token(&client, &device_code).await {
+                Ok(DeviceTokenPoll::Granted(token)) => {
+                    let outcome = finish_copilot_sign_in(&state, &token, &models).await;
+                    let _ = events.send(match outcome {
+                        Ok(()) => BridgeEvent::CopilotSignedIn,
+                        Err(message) => BridgeEvent::CopilotSignInFailed { message },
+                    });
+                    return;
+                }
+                Ok(DeviceTokenPoll::Pending) => {}
+                Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
+                Ok(DeviceTokenPoll::Denied(reason)) => {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed {
+                        message: reason.to_owned(),
+                    });
+                    return;
+                }
+                Err(message) => {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed { message });
+                    return;
+                }
+            }
+        }
+    });
+    BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
+        user_code: start.user_code,
+        verification_uri: start.verification_uri,
+    }))
+}
+
+/// Verifies the grant works, stores the OAuth token, and configures the
+/// provider entry.
+async fn finish_copilot_sign_in(
+    state: &CoreState,
+    github_token: &str,
+    models: &[String],
+) -> Result<(), String> {
+    let client = http_client(UPDATE_USER_AGENT)?;
+    let bearer = copilot_bearer(&client, github_token).await?;
+    *state.copilot.lock().await = Some((bearer.token, bearer.expires_at_unix));
+    save_provider_key(&state.home, COPILOT_PROVIDER_ID, github_token)?;
+    upsert_copilot_provider(state, models)
+}
+
+/// Adds or refreshes the `github-copilot` provider entry with the chosen
+/// models, defaulting to the catalog's tool-calling presets.
+fn upsert_copilot_provider(state: &CoreState, models: &[String]) -> Result<(), String> {
+    let catalog = state
+        .catalog
+        .read()
+        .map(|guard| guard.clone())
+        .ok()
+        .and_then(|catalog| {
+            catalog
+                .document
+                .provider(COPILOT_PROVIDER_ID)
+                .map(|preset| (preset.base_url.clone(), preset.models.clone()))
+        });
+    let (base_url, catalog_models) =
+        catalog.unwrap_or_else(|| ("https://api.githubcopilot.com".to_owned(), Vec::new()));
+    let bound: Vec<String> = if models.is_empty() {
+        catalog_models
+            .iter()
+            .filter(|model| model.tool_call)
+            .take(6)
+            .map(|model| model.id.clone())
+            .collect()
+    } else {
+        models.to_vec()
+    };
+    if bound.is_empty() {
+        return Err("no Copilot models were selected".to_owned());
+    }
+    let (mut settings, revision, _, _) = load_settings(&state.home)?;
+    match settings
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == COPILOT_PROVIDER_ID)
+    {
+        Some(existing) => {
+            existing.models = bound;
+            existing.enabled = true;
+        }
+        None => settings.providers.push(ProviderSettings {
+            id: COPILOT_PROVIDER_ID.to_owned(),
+            kind: mcode_catalog::KIND_OPENAI_COMPLETIONS.to_owned(),
+            base_url,
+            models: bound,
+            enabled: true,
+        }),
+    }
+    replace_app_settings(&state.home, revision, &settings)
+        .map_err(|error| render_config_error(&error))?;
+    Ok(())
+}
+
+/// Returns a live Copilot bearer, exchanging a fresh one when the cached copy
+/// is stale.
+async fn ensure_copilot_bearer(state: &CoreState, github_token: &str) -> Result<String, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let mut cache = state.copilot.lock().await;
+    if let Some((token, expires_at)) = cache.as_ref()
+        && *expires_at > now.saturating_add(60)
+    {
+        return Ok(token.clone());
+    }
+    let client = http_client(UPDATE_USER_AGENT)?;
+    let bearer = copilot_bearer(&client, github_token).await?;
+    let token = bearer.token;
+    *cache = Some((token.clone(), bearer.expires_at_unix));
+    Ok(token)
+}
+
+/// Opens one verification page in the default browser, best-effort.
+fn open_browser(url: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = url;
+    }
+}
+
 /// One model turn: resolve the provider, stream the reply into the event
 /// channel, and commit the assistant message to the session ledger.
 #[allow(clippy::too_many_arguments)]
@@ -1533,13 +1745,25 @@ async fn run_chat_turn(
         .find(|provider| provider.id == provider_id && provider.enabled)
         .ok_or_else(|| "provider not found or disabled in settings".to_owned())?;
     let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
-    let api_key = secrets
+    let stored_key = secrets
         .key(provider_id)
         .ok_or_else(|| "provider API key is not set".to_owned())?
         .to_owned();
-    let resolved =
-        ResolvedProvider::resolve(provider, model, &api_key, &settings.effective_user_agent())
+    // Copilot stores its long-lived OAuth token where other providers keep
+    // an API key; each turn exchanges it for a short-lived bearer.
+    let (bearer, extra_headers) = if provider.base_url.contains("githubcopilot.com") {
+        let token = ensure_copilot_bearer(state, &stored_key).await?;
+        (
+            token,
+            vec![("copilot-integration-id".to_owned(), "mcode".to_owned())],
+        )
+    } else {
+        (stored_key, Vec::new())
+    };
+    let mut resolved =
+        ResolvedProvider::resolve(provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
+    resolved.headers.extend(extra_headers);
     let transport = ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?;
     let wire = WireProvider::new(resolved.clone(), Arc::new(transport));
 
@@ -3044,6 +3268,58 @@ mod tests {
         let parent = tempfile::tempdir().expect("parent");
         let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
         (parent, layout)
+    }
+
+    #[test]
+    fn copilot_provider_upsert_binds_models_and_refreshes_in_place() {
+        // SessionService::new starts background workers that need a reactor.
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let (parent, layout) = home();
+                let state = CoreState::new(layout.clone());
+                upsert_copilot_provider(&state, &["gpt-x".to_owned(), "claude-y".to_owned()])
+                    .expect("first upsert");
+                let settings = read_app_settings(&layout).expect("settings");
+                let provider = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == COPILOT_PROVIDER_ID)
+                    .expect("provider row");
+                assert!(provider.enabled);
+                assert_eq!(provider.kind, mcode_catalog::KIND_OPENAI_COMPLETIONS);
+                assert_eq!(provider.base_url, "https://api.githubcopilot.com");
+                assert_eq!(
+                    provider.models,
+                    vec!["gpt-x".to_owned(), "claude-y".to_owned()]
+                );
+
+                // An empty selection falls back to the catalog's tool-calling
+                // models.
+                upsert_copilot_provider(&state, &[]).expect("default models");
+                let settings = read_app_settings(&layout).expect("settings reread");
+                let provider = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == COPILOT_PROVIDER_ID)
+                    .expect("row");
+                assert!(!provider.models.is_empty());
+                assert!(provider.models.len() <= 6);
+
+                assert_eq!(
+                    settings
+                        .providers
+                        .iter()
+                        .filter(|provider| provider.id == COPILOT_PROVIDER_ID)
+                        .count(),
+                    1,
+                    "refresh updates the single row instead of duplicating"
+                );
+                drop(state);
+                drop(parent);
+            });
     }
 
     fn drive(bridge: &CoreBridge, command: BridgeCommand) -> BridgeReply {

@@ -61,6 +61,15 @@ pub struct ComposerMention {
     pub items: Vec<(String, String)>,
 }
 
+/// An in-flight OAuth device-flow sign-in shown in the settings UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopilotSignIn {
+    /// Code the user types at the verification page.
+    pub user_code: String,
+    /// Verification page opened in the browser.
+    pub verification_uri: String,
+}
+
 /// The mention trigger parsed from the composer draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MentionKind {
@@ -367,6 +376,10 @@ pub struct WorkspaceState {
     pub last_turn: Option<TurnStats>,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,
+    /// In-flight Copilot device-flow sign-in, when any.
+    pub copilot_sign_in: Option<CopilotSignIn>,
+    /// The last Copilot sign-in failure, shown in the sign-in panel.
+    pub copilot_error: Option<String>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// True when the window uses the dark theme.
@@ -474,6 +487,10 @@ pub enum DesktopAction {
     ResourcesLoaded(Vec<(String, String)>),
     /// File matches for the active `@` mention arrived from the bridge.
     MentionFiles(Vec<String>),
+    /// The Copilot device flow started; show the user code.
+    CopilotSignInStarted(CopilotSignIn),
+    /// The Copilot device flow finished; `Err` keeps the panel with a message.
+    CopilotSignInFinished(Result<(), String>),
     /// A durable usage record arrived.
     UsageRecorded {
         provider: String,
@@ -638,6 +655,14 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                     })
                     .collect();
             }
+        }
+        DesktopAction::CopilotSignInStarted(info) => {
+            state.copilot_sign_in = Some(info);
+            state.copilot_error = None;
+        }
+        DesktopAction::CopilotSignInFinished(outcome) => {
+            state.copilot_sign_in = None;
+            state.copilot_error = outcome.err();
         }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
@@ -1052,6 +1077,49 @@ mod tests {
         );
         assert!(state.sessions[0].active, "reload keeps the open mark");
         assert!(!state.sessions[1].active);
+    }
+
+    #[test]
+    fn copilot_sign_in_lifecycle_shows_code_then_error_or_clear() {
+        let mut state = WorkspaceState::default();
+        reduce(
+            &mut state,
+            DesktopAction::CopilotSignInStarted(CopilotSignIn {
+                user_code: "AB12-CD34".to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+            }),
+        );
+        assert_eq!(
+            state
+                .copilot_sign_in
+                .as_ref()
+                .map(|sign_in| sign_in.user_code.as_str()),
+            Some("AB12-CD34")
+        );
+        assert!(state.copilot_error.is_none());
+
+        reduce(
+            &mut state,
+            DesktopAction::CopilotSignInFinished(
+                Err("the request was denied on GitHub".to_owned()),
+            ),
+        );
+        assert!(state.copilot_sign_in.is_none());
+        assert_eq!(
+            state.copilot_error.as_deref(),
+            Some("the request was denied on GitHub")
+        );
+
+        reduce(
+            &mut state,
+            DesktopAction::CopilotSignInStarted(CopilotSignIn {
+                user_code: "ZZ99".to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+            }),
+        );
+        reduce(&mut state, DesktopAction::CopilotSignInFinished(Ok(())));
+        assert!(state.copilot_sign_in.is_none());
+        assert!(state.copilot_error.is_none(), "success clears the error");
     }
 
     #[test]
