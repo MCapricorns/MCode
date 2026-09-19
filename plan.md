@@ -77,6 +77,15 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 
 - [x] release:T29/T30/T20/T21/T22 + 设置校验错误字段级提示 + provider 端点拼接容错(修复 MiniMax `/v1` 双拼 404)与真实配置 E2E;发布 `v0.2.0` tag(Windows/macOS 双平台产物)。
 
+### v0.2.x 现场修复与补全(2026-09-19)
+
+- [x] fix:工具轮全挂 —— ledger 的 call/result 顺序检查要求 ToolResult 解析已打开的 ToolCall 事件,但 pump 从不写 ToolCall(InvalidArgument → 每个工具回合失败);现 ToolStarted 开身份、ToolCompleted 复用同一身份落 ToolResult;回归测试覆盖(cdb4da6)。
+- [x] fix:二次消息"无效请求" —— 回合历史曾由扁平 UI 条目重建(ToolResult 变 assistant 空文本、tool_use 丢失);现 `ledger_history` 从 typed 事件重建,usage/task 不进 provider;真实 provider E2E 验证工具往返(cdb4da6/3f49bdf)。
+- [x] fix:pwsh 弹黑框 —— 控制台子进程加 `CREATE_NO_WINDOW`,管道照常捕获(2e7ca31)。
+- [x] feat:思考强度 —— settings `reasoningEffort`(low/medium/high)→ 模型菜单 THINKING 区 → anthropic thinking budget / openai reasoning_effort;.mcode/agents.md 纳入资源发现(69bf39e)。
+- [x] feat:回合分析 —— Usage 增 cache_read_tokens(anthropic/openai 解析)+ 回合 elapsed;Overview 显示 context window 占比、cache%、tok/s(c907f38)。
+- [x] feat:composer `@` 文件索引(bridge 有界项目内搜索,跳 VCS/依赖目录,最短路径优先)与 `/` 命令菜单(/new、/settings)(e255740)。
+
 依赖主线:`T9 -> T10 -> T11 -> T12`;T13–T15 依赖 T11;T16+ 依赖 T12。
 
 ## 开发门禁
