@@ -8,9 +8,16 @@
 //! as concurrent runtime tasks that stream [`BridgeEvent`]s back through a
 //! bounded channel the UI polls. Configuration reads stay synchronous on the
 //! same thread.
+//!
+//! The command channel is a tokio unbounded channel: the worker loop must
+//! `await` commands instead of blocking the runtime thread, or spawned tasks
+//! (chat turns, catalog refreshes) would starve until the next command
+//! arrives. `UnboundedSender::send` is synchronous, so the UI side never
+//! touches async machinery.
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::{Arc, Mutex, RwLock};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use mcode_agent::{Agent, AgentConfig, HookRunner};
@@ -36,8 +43,6 @@ use super::view_model::{
     ActiveConversation, ConversationEntry, EntryKind, SessionSummary, project_entry,
 };
 
-/// Bound for outstanding bridge commands.
-const COMMAND_QUEUE: usize = 256;
 /// Bound for streaming chat events buffered toward the UI.
 const EVENT_QUEUE: usize = 512;
 
@@ -304,7 +309,7 @@ impl CatalogInfo {
 
 /// Handle to the core thread.
 pub struct CoreBridge {
-    command_tx: Option<mpsc::SyncSender<WithReply>>,
+    command_tx: Option<tokio::sync::mpsc::UnboundedSender<WithReply>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -315,7 +320,7 @@ impl CoreBridge {
     /// streaming event channel.
     #[must_use]
     pub fn start(home: HomeLayout) -> (Self, mpsc::Receiver<BridgeEvent>) {
-        let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_QUEUE);
+        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::sync_channel(EVENT_QUEUE);
         let worker = std::thread::Builder::new()
             .name("mcode-core".into())
@@ -343,12 +348,17 @@ impl CoreBridge {
         command: BridgeCommand,
     ) -> impl Future<Output = BridgeReply> + Send + 'static {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let sender = self
-            .command_tx
-            .as_ref()
-            .expect("core bridge already shut down");
-        let _ = sender.send(command.with_reply(reply_tx));
+        let sender = self.command_tx.clone();
         async move {
+            // An unbounded send only fails when the worker stopped; surface
+            // that as the generic loss reply instead of panicking here.
+            let sender = match sender {
+                Some(sender) => sender,
+                None => return BridgeReply::Sessions(Err("core bridge stopped".to_owned())),
+            };
+            if sender.send(command.with_reply(reply_tx)).is_err() {
+                return BridgeReply::Sessions(Err("core thread stopped".to_owned()));
+            }
             match reply_rx.await {
                 Ok(reply) => reply,
                 Err(_) => BridgeReply::Sessions(Err("core thread stopped".to_owned())),
@@ -422,7 +432,7 @@ static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
 
 fn run_core(
     home: HomeLayout,
-    commands: mpsc::Receiver<WithReply>,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<WithReply>,
     events: mpsc::SyncSender<BridgeEvent>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -432,7 +442,7 @@ fn run_core(
         Ok(runtime) => runtime,
         Err(_) => {
             // Fail every pending request and stop; the UI surfaces the loss.
-            for with_reply in commands.try_iter() {
+            while let Some(with_reply) = commands.blocking_recv() {
                 let _ = with_reply
                     .reply
                     .send(error_reply(&with_reply.command, "core runtime unavailable"));
@@ -447,7 +457,7 @@ fn run_core(
         let state = Arc::new(CoreState::new(home));
         spawn_catalog_refresh(state.clone(), events.clone());
         spawn_update_check(state.clone(), events.clone());
-        while let Ok(with_reply) = commands.recv() {
+        while let Some(with_reply) = commands.recv().await {
             match with_reply.command {
                 BridgeCommand::ChatTurn {
                     session,
@@ -529,6 +539,17 @@ struct CoreState {
 impl CoreState {
     fn new(home: HomeLayout) -> Self {
         let cached = mcode_catalog::current(&home);
+        // Session→project bindings survive restarts through the durable UI
+        // state; seed the in-memory map so tool working directories resolve
+        // before the desktop re-binds anything.
+        let mut projects = HashMap::new();
+        if let Ok(ui_state) = read_ui_state(&home) {
+            for (session_id, project) in &ui_state.session_projects {
+                if let Some(session) = SessionId::parse(session_id) {
+                    projects.insert(session.as_str().to_owned(), PathBuf::from(project));
+                }
+            }
+        }
         Self {
             service: SessionService::new(&home),
             catalog: Arc::new(RwLock::new(CatalogInfo {
@@ -536,7 +557,7 @@ impl CoreState {
                 fetched_at: cached.fetched_at,
             })),
             home,
-            projects: Arc::new(Mutex::new(HashMap::new())),
+            projects: Arc::new(Mutex::new(projects)),
         }
     }
 
@@ -691,10 +712,10 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
         }
         BridgeCommand::WebSearch { query } => {
-            BridgeReply::WebSearched(web_search(&state.home, query))
+            BridgeReply::WebSearched(web_search(&state.home, query).await)
         }
         BridgeCommand::McpListTools { server_id } => {
-            BridgeReply::McpTools(mcp_list_tools(&state.home, server_id))
+            BridgeReply::McpTools(mcp_list_tools(&state.home, server_id).await)
         }
         BridgeCommand::RollbackWorkspace { session_id } => BridgeReply::RolledBack(
             mcode_config::rollback_session(&state.home, session_id)
@@ -767,7 +788,10 @@ fn list_resources(state: &CoreState, session_id: &str) -> Result<Vec<(String, St
 }
 
 /// Lists tools of one enabled MCP server over stdio or HTTP.
-fn mcp_list_tools(home: &HomeLayout, server_id: &str) -> Result<(String, Vec<String>), String> {
+///
+/// Runs on the caller's runtime; never builds a nested one (a nested
+/// `Runtime::block_on` panics and takes the core thread down with it).
+async fn mcp_list_tools(home: &HomeLayout, server_id: &str) -> Result<(String, Vec<String>), String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let server = settings
         .mcp_servers
@@ -777,60 +801,56 @@ fn mcp_list_tools(home: &HomeLayout, server_id: &str) -> Result<(String, Vec<Str
     let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
     let api_key = secrets.key(&format!("mcp-{server_id}")).map(str::to_owned);
     let timeout = mcode_mcp::DEFAULT_REQUEST_TIMEOUT;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| "mcp runtime unavailable".to_owned())?;
-    runtime.block_on(async {
-        let channel: Arc<dyn mcode_mcp::JsonRpcChannel> = match server.transport.as_str() {
-            "stdio" => {
-                let command = server
-                    .command
-                    .as_deref()
-                    .ok_or("stdio server is missing its command")?;
-                Arc::new(
-                    mcode_mcp::StdioChannel::spawn(command, &server.args, timeout)
-                        .await
-                        .map_err(|error| format!("MCP spawn failed: {error}"))?,
+    let channel: Arc<dyn mcode_mcp::JsonRpcChannel> = match server.transport.as_str() {
+        "stdio" => {
+            let command = server
+                .command
+                .as_deref()
+                .ok_or("stdio server is missing its command")?;
+            Arc::new(
+                mcode_mcp::StdioChannel::spawn(command, &server.args, timeout)
+                    .await
+                    .map_err(|error| format!("MCP spawn failed: {error}"))?,
+            )
+        }
+        "http" => {
+            let endpoint = server
+                .endpoint
+                .as_deref()
+                .ok_or("http server is missing its endpoint")?;
+            Arc::new(
+                mcode_mcp::HttpChannel::new(
+                    endpoint,
+                    mcode_mcp::HttpChannelOptions {
+                        key_header: mcode_mcp::KeyHeader::parse(server.key_header.as_deref()),
+                        api_key,
+                        timeout,
+                    },
                 )
-            }
-            "http" => {
-                let endpoint = server
-                    .endpoint
-                    .as_deref()
-                    .ok_or("http server is missing its endpoint")?;
-                Arc::new(
-                    mcode_mcp::HttpChannel::new(
-                        endpoint,
-                        mcode_mcp::HttpChannelOptions {
-                            key_header: mcode_mcp::KeyHeader::parse(server.key_header.as_deref()),
-                            api_key,
-                            timeout,
-                        },
-                    )
-                    .map_err(|error| format!("MCP channel failed: {error}"))?,
-                )
-            }
-            _ => return Err("unknown MCP transport".to_owned()),
-        };
-        let mut client = mcode_mcp::McpClient::new(channel);
-        client
-            .initialize()
-            .await
-            .map_err(|error| format!("MCP handshake failed: {error}"))?;
-        let tools = client
-            .list_tools()
-            .await
-            .map_err(|error| format!("MCP tools listing failed: {error}"))?;
-        Ok((
-            server_id.to_owned(),
-            tools.iter().map(|tool| tool.name.clone()).collect(),
-        ))
-    })
+                .map_err(|error| format!("MCP channel failed: {error}"))?,
+            )
+        }
+        _ => return Err("unknown MCP transport".to_owned()),
+    };
+    let mut client = mcode_mcp::McpClient::new(channel);
+    client
+        .initialize()
+        .await
+        .map_err(|error| format!("MCP handshake failed: {error}"))?;
+    let tools = client
+        .list_tools()
+        .await
+        .map_err(|error| format!("MCP tools listing failed: {error}"))?;
+    Ok((
+        server_id.to_owned(),
+        tools.iter().map(|tool| tool.name.clone()).collect(),
+    ))
 }
 
 /// Runs one bounded search over the enabled backend, if any.
-fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>, String> {
+///
+/// Runs on the caller's runtime; never builds a nested one.
+async fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>, String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let backend = settings
         .web
@@ -842,16 +862,10 @@ fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>, Strin
         .map_err(|_| "web transport unavailable".to_owned())?;
     let client = mcode_web::WebClient::new(&backend.endpoint, std::sync::Arc::new(transport))
         .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| "web runtime unavailable".to_owned())?;
-    runtime.block_on(async {
-        client
-            .search(query, 8, tokio_util::sync::CancellationToken::new())
-            .await
-            .map_err(|error| format!("search failed: {error}"))
-    })
+    client
+        .search(query, 8, tokio_util::sync::CancellationToken::new())
+        .await
+        .map_err(|error| format!("search failed: {error}"))
 }
 
 fn load_settings(

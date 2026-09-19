@@ -317,6 +317,14 @@ impl Workspace {
                 let revision = revision.get();
                 let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
                 state.mcp_with_keys = mcp_keys;
+                // Apply the persisted theme once at startup; later changes go
+                // through on_toggle_theme.
+                let mode = if state.theme == "light" {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                Theme::change(mode, None, cx);
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
             }
@@ -365,6 +373,7 @@ impl Workspace {
                         auto_update: ui_state.auto_update,
                         selected_provider: ui_state.selected_provider,
                         selected_model: ui_state.selected_model,
+                        session_projects: ui_state.session_projects,
                     },
                     cx,
                 );
@@ -642,6 +651,7 @@ impl Workspace {
             auto_update: self.vm.auto_update,
             selected_provider: self.vm.selected_provider.clone(),
             selected_model: self.vm.selected_model.clone(),
+            session_projects: self.vm.session_projects.clone(),
         };
         self.dispatch(BridgeCommand::SaveUiState { state }, cx);
     }

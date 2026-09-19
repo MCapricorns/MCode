@@ -20,6 +20,10 @@ pub const UI_STATE_FORMAT_VERSION: u32 = 1;
 pub const UI_STATE_KIND: &str = "mcode-ui-state";
 /// Maximum remembered recent projects.
 pub const MAX_RECENT_PROJECTS: usize = 16;
+/// Maximum remembered session-to-project bindings.
+pub const MAX_SESSION_PROJECTS: usize = 256;
+/// Maximum length of one remembered session id.
+const MAX_SESSION_ID_BYTES: usize = 64;
 /// Maximum length of one remembered project path.
 const MAX_PROJECT_PATH_BYTES: usize = 1024;
 
@@ -35,8 +39,12 @@ pub struct UiState {
     pub auto_update: bool,
     /// Last selected provider id in the model picker.
     pub selected_provider: Option<String>,
-    /// Last selected model id in the model picker.
+    /// Last selected model id.
     pub selected_model: Option<String>,
+    /// Session-to-project bindings (session id, project path), most recent
+    /// first. Advisory: drives the project-grouped sidebar and restores tool
+    /// working directories after a restart.
+    pub session_projects: Vec<(String, String)>,
 }
 
 impl Default for UiState {
@@ -47,6 +55,7 @@ impl Default for UiState {
             auto_update: true,
             selected_provider: None,
             selected_model: None,
+            session_projects: Vec::new(),
         }
     }
 }
@@ -64,6 +73,33 @@ impl UiState {
         self.recent_projects.insert(0, project.clone());
         self.recent_projects.truncate(MAX_RECENT_PROJECTS);
         self.last_project = Some(project);
+    }
+
+    /// Binds one session to a project directory (upsert, most recent first).
+    ///
+    /// Invalid ids or paths are dropped silently, like `touch_project`.
+    pub fn set_session_project(&mut self, session_id: &str, project: &str) {
+        let Some(project) = valid_project_path(project) else {
+            return;
+        };
+        if !valid_session_id(session_id) {
+            return;
+        }
+        let session_id = session_id.to_owned();
+        self.session_projects
+            .retain(|(existing, _)| *existing != session_id);
+        self.session_projects
+            .insert(0, (session_id, project));
+        self.session_projects.truncate(MAX_SESSION_PROJECTS);
+    }
+
+    /// The project bound to one session, when remembered.
+    #[must_use]
+    pub fn project_for_session(&self, session_id: &str) -> Option<&str> {
+        self.session_projects
+            .iter()
+            .find(|(existing, _)| existing == session_id)
+            .map(|(_, project)| project.as_str())
     }
 
     /// Validates the document.
@@ -87,6 +123,14 @@ impl UiState {
         {
             return Err(invalid());
         }
+        if self.session_projects.len() > MAX_SESSION_PROJECTS {
+            return Err(invalid());
+        }
+        for (session_id, project) in &self.session_projects {
+            if !valid_session_id(session_id) || valid_project_path(project).is_none() {
+                return Err(invalid());
+            }
+        }
         Ok(())
     }
 }
@@ -100,6 +144,12 @@ fn valid_project_path(value: &str) -> Option<String> {
         return None;
     }
     Some(value.to_owned())
+}
+
+fn valid_session_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_SESSION_ID_BYTES
+        && !value.chars().any(char::is_control)
 }
 
 /// Reads the UI state; a missing document yields the defaults.
@@ -142,7 +192,7 @@ fn replace_bytes(state: &UiState) -> Result<Vec<u8>, ConfigError> {
         kind: UI_STATE_KIND.to_owned(),
         state: state.clone(),
     };
-    let mut bytes = serde_json::to_vec(&document)
+    let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
     bytes.push(b'\n');
     Ok(bytes)
@@ -229,11 +279,40 @@ mod tests {
         state.auto_update = false;
         state.selected_provider = Some("openai".to_owned());
         state.selected_model = Some("gpt-x".to_owned());
+        state.set_session_project("ses1-abc", &project_path(0));
         replace_ui_state(&home, &state).expect("publish");
         assert_eq!(read_ui_state(&home).expect("read"), state);
+        assert_eq!(
+            state.project_for_session("ses1-abc"),
+            Some(project_path(0).as_str())
+        );
 
         let path = home.owned_join(UI_STATE_PATH).expect("path");
         std::fs::write(&path, b"{\"formatVersion\":2}").expect("tamper");
         assert!(read_ui_state(&home).is_err());
+    }
+
+    #[test]
+    fn set_session_project_upserts_and_bounds() {
+        let mut state = UiState::default();
+        state.set_session_project("ses1-a", &project_path(0));
+        state.set_session_project("ses1-a", &project_path(1));
+        assert_eq!(state.session_projects.len(), 1);
+        assert_eq!(
+            state.project_for_session("ses1-a"),
+            Some(project_path(1).as_str())
+        );
+        // Relative paths and empty ids are dropped silently.
+        state.set_session_project("ses1-b", "relative");
+        state.set_session_project("", &project_path(2));
+        assert_eq!(state.session_projects.len(), 1);
+        assert!(
+            UiState {
+                session_projects: vec![("s".to_owned(), "relative".to_owned())],
+                ..UiState::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

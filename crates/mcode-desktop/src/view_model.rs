@@ -243,6 +243,9 @@ pub struct WorkspaceState {
     pub project_dir: Option<String>,
     /// Recent project directories, most recent first.
     pub recents: Vec<String>,
+    /// Session-to-project bindings (session id, project path), most recent
+    /// first; drives the project-grouped sidebar.
+    pub session_projects: Vec<(String, String)>,
     /// Whether update checks run automatically.
     pub auto_update: bool,
     /// Self-update progress.
@@ -379,9 +382,20 @@ pub enum DesktopAction {
         selected_provider: Option<String>,
         /// Last selected model id.
         selected_model: Option<String>,
+        /// Session-to-project bindings.
+        session_projects: Vec<(String, String)>,
     },
     /// A project directory was bound to the open session.
     ProjectOpened(String),
+    /// A session was bound to a project in the durable map.
+    SessionProjectBound {
+        /// Session identity spelling.
+        session_id: String,
+        /// Project directory path.
+        project: String,
+    },
+    /// The active project filter changed (sidebar project switcher).
+    ActiveProjectChanged(Option<String>),
     /// The model picker selected a provider.
     ProviderSelected(String),
     /// The model picker selected a model.
@@ -652,9 +666,11 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             auto_update,
             selected_provider,
             selected_model,
+            session_projects,
         } => {
             state.recents = recents;
             state.project_dir = last_project;
+            state.session_projects = session_projects;
             state.auto_update = auto_update;
             if selected_provider.is_some() {
                 state.selected_provider = selected_provider;
@@ -667,6 +683,18 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.recents.retain(|existing| existing != &project);
             state.recents.insert(0, project);
             state.recents.truncate(mcode_config::MAX_RECENT_PROJECTS);
+        }
+        DesktopAction::SessionProjectBound { session_id, project } => {
+            state
+                .session_projects
+                .retain(|(existing, _)| existing != &session_id);
+            state
+                .session_projects
+                .insert(0, (session_id, project.clone()));
+            state.session_projects.truncate(mcode_config::MAX_SESSION_PROJECTS);
+        }
+        DesktopAction::ActiveProjectChanged(project) => {
+            state.project_dir = project;
         }
         DesktopAction::ProviderSelected(provider) => {
             state.selected_provider = Some(provider.clone());
