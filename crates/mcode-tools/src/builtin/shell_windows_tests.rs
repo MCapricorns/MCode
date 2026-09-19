@@ -92,6 +92,37 @@ fn assert_execution_identity(details: &serde_json::Value) {
     assert!(!encoded.contains("NODE_OPTIONS"), "{encoded}");
 }
 
+#[test]
+fn utf8_prelude_lands_after_statement_ordering_prologue() {
+    let plain = powershell_script("Write-Output 'ok'");
+    assert!(plain.starts_with("try { [Console]::OutputEncoding"));
+    assert!(plain.ends_with("Write-Output 'ok'"));
+
+    // Leading using statements must remain the script's first statements.
+    let using = powershell_script("using namespace System.Text\nWrite-Output 'ok'");
+    assert!(using.starts_with("using namespace System.Text\n"));
+    assert!(using.contains("\ntry { [Console]::OutputEncoding"));
+
+    // Comments and blank lines stay ahead of the prelude too.
+    let commented = powershell_script("# note\n\nusing module Foo\nWrite-Output 'ok'");
+    assert!(commented.starts_with("# note\n\nusing module Foo\n"));
+
+    // A param block must keep its first-statement position.
+    let param = powershell_script("param(\n  $x = 'a)b'\n)\nWrite-Output $x");
+    assert!(param.starts_with("param(\n  $x = 'a)b'\n)\n"));
+    assert!(param.contains("\ntry { [Console]::OutputEncoding"));
+
+    // A bare final using line without a newline is separated from the prelude.
+    let bare = powershell_script("using namespace System.Text");
+    assert!(bare.starts_with("using namespace System.Text\ntry { [Console]::OutputEncoding"));
+
+    // The empty script stays a valid empty payload plus the prelude.
+    assert_eq!(
+        powershell_script(""),
+        format!("#\n{POWERSHELL_UTF8_PRELUDE}")
+    );
+}
+
 #[tokio::test]
 async fn captures_stdout_and_records_selected_shell() {
     let dir = tempfile::tempdir().unwrap();

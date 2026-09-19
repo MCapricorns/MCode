@@ -53,6 +53,16 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
     "-EncodedCommand",
 ];
 
+/// One executable line inserted after the script's statement-ordering
+/// prologue (leading comments, `using` statements, and `param` block): pins
+/// the hidden console's pipe encoding to UTF-8 so non-ASCII text survives on
+/// hosts whose console code page cannot encode it (CI runners, other
+/// locales). `try`/`catch` keeps locked-down hosts that forbid the .NET
+/// property assignment running the user script unchanged.
+#[cfg(windows)]
+const POWERSHELL_UTF8_PRELUDE: &str =
+    "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }";
+
 #[cfg(windows)]
 const WINDOWS_SHELL_EXECUTABLE: &str = "pwsh.exe";
 
@@ -396,7 +406,7 @@ async fn prepare_windows_shell(
     deadline: &mut std::pin::Pin<&mut tokio::time::Sleep>,
 ) -> Result<Option<PreparedShell>, ToolError> {
     let encoded = encode_powershell_command(
-        powershell_script(command),
+        &powershell_script(command),
         Path::new(WINDOWS_SHELL_EXECUTABLE),
     )?;
     let args = powershell_args(encoded);
@@ -447,7 +457,7 @@ async fn prepare_windows_shell(
                     }
                 }
             };
-            let encoded = encode_powershell_command(powershell_script(command), &managed)?;
+            let encoded = encode_powershell_command(&powershell_script(command), &managed)?;
             let args = powershell_args(encoded);
             let managed_program = managed.to_str().ok_or_else(|| {
                 ToolError::InvalidArgs(
@@ -531,12 +541,85 @@ async fn prepare_posix_shell(
 }
 
 #[cfg(windows)]
-fn powershell_script(command: &str) -> &str {
+fn powershell_script(command: &str) -> String {
+    let mut script = String::with_capacity(command.len() + POWERSHELL_UTF8_PRELUDE.len() + 4);
     if command.is_empty() {
         // PowerShell 7 rejects an empty -EncodedCommand payload as not Base64.
-        "#"
-    } else {
-        command
+        script.push_str("#\n");
+        script.push_str(POWERSHELL_UTF8_PRELUDE);
+        return script;
+    }
+    let prologue = powershell_prologue_units(command);
+    script.push_str(&command[..prologue]);
+    if !script.is_empty() && !script.ends_with('\n') {
+        script.push('\n');
+    }
+    script.push_str(POWERSHELL_UTF8_PRELUDE);
+    script.push('\n');
+    script.push_str(&command[prologue..]);
+    script
+}
+
+/// Byte offset of the end of the leading statement-ordering prologue — blank
+/// lines, comments, `using` statements, and one `param (...)` block — which
+/// PowerShell requires (`using`) or expects (`param`) before all other
+/// statements. The UTF-8 prelude is inserted right after it, so those forms
+/// keep their required position.
+#[cfg(windows)]
+fn powershell_prologue_units(command: &str) -> usize {
+    let mut offset = 0_usize;
+    let mut paren_depth: i64 = 0;
+    let mut in_param_block = false;
+    let mut quote: Option<char> = None;
+    for line in command.split_inclusive('\n') {
+        if in_param_block {
+            scan_param_line(line, &mut paren_depth, &mut quote);
+            offset += line.len();
+            if paren_depth <= 0 {
+                in_param_block = false;
+            }
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let is_prologue_line = trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("using ")
+            || trimmed.starts_with("using\t");
+        if is_prologue_line {
+            offset += line.len();
+            continue;
+        }
+        if trimmed.starts_with("param(") || trimmed.starts_with("param (") {
+            in_param_block = true;
+            paren_depth = 0;
+            quote = None;
+            scan_param_line(line, &mut paren_depth, &mut quote);
+            offset += line.len();
+            if paren_depth <= 0 {
+                in_param_block = false;
+            }
+            continue;
+        }
+        break;
+    }
+    offset
+}
+
+/// Tracks paren depth across one line of a `param (...)` block, ignoring
+/// parentheses inside single- or double-quoted strings.
+#[cfg(windows)]
+fn scan_param_line(line: &str, paren_depth: &mut i64, quote: &mut Option<char>) {
+    for character in line.chars() {
+        match *quote {
+            Some(open) if character == open => *quote = None,
+            Some(_) => {}
+            None => match character {
+                '\'' | '"' => *quote = Some(character),
+                '(' => *paren_depth += 1,
+                ')' => *paren_depth -= 1,
+                _ => {}
+            },
+        }
     }
 }
 
@@ -731,10 +814,13 @@ fn display_exit(status: &std::process::ExitStatus) -> i32 {
 
 /// Encode the user script itself as PowerShell's UTF-16LE Base64 transport.
 ///
-/// No launcher script or .NET decoding API is inserted, so a leading `using`
+/// Besides the single-line UTF-8 console-encoding prelude that
+/// [`powershell_script`] inserts after the statement-ordering prologue, no
+/// launcher script or .NET decoding API is inserted, so a leading `using`
 /// statement remains the first statement and ConstrainedLanguage can execute
-/// its permitted cmdlets. The exact `CreateProcessW` budget includes the quoted
-/// executable, fixed arguments, encoded payload, spaces, and final UTF-16 NUL.
+/// its permitted cmdlets. The exact `CreateProcessW` budget includes the
+/// quoted executable, fixed arguments, encoded payload, spaces, and final
+/// UTF-16 NUL.
 #[cfg(any(windows, test))]
 pub(crate) fn encode_powershell_command(
     command: &str,
