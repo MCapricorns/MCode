@@ -176,6 +176,8 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
+                // Refresh the sidebar so the session title picks up the turn.
+                self.dispatch(BridgeCommand::ListSessions, cx);
                 DesktopAction::ChatDone { head, entry }
             }
             BridgeEvent::ChatFailed {
@@ -298,6 +300,7 @@ impl Workspace {
                 if let Some(project) = self.pending_project.take() {
                     self.bind_project(&project, cx);
                 }
+                self.dispatch(BridgeCommand::ListSessions, cx);
             }
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
@@ -535,7 +538,31 @@ impl Workspace {
     }
 
     pub(super) fn on_new_session(&mut self, cx: &mut Context<Self>) {
+        // New chats inherit the active project so the sidebar grouping and
+        // the tool working directory follow the project switcher.
+        if self.vm.project_dir.is_some() {
+            self.pending_project = self.vm.project_dir.clone();
+        }
         self.dispatch(BridgeCommand::CreateSession, cx);
+    }
+
+    /// Switches the sidebar's active project filter (no session rebinding).
+    pub(super) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
+        self.apply_action(DesktopAction::ActiveProjectChanged(project), cx);
+        self.persist_ui_state(cx);
+    }
+
+    pub(super) fn on_toggle_project_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ProjectMenuToggled(open), cx);
+    }
+
+    pub(super) fn on_show_settings_section(
+        &mut self,
+        section: crate::view_model::SettingsSection,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_action(DesktopAction::ShowSettingsSection(section), cx);
     }
 
     pub(super) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
@@ -1066,17 +1093,6 @@ impl Workspace {
 
     pub(super) fn on_remove_backend(&mut self, index: usize, cx: &mut Context<Workspace>) {
         self.apply_action(DesktopAction::SettingsBackendRemoved(index), cx);
-    }
-
-    pub(super) fn on_toggle_backend(&mut self, index: usize, cx: &mut Context<Workspace>) {
-        let enabled = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.web_backends.get(index))
-            .map(|backend| !backend.enabled)
-            .unwrap_or(false);
-        self.apply_action(DesktopAction::SettingsBackendToggled(index, enabled), cx);
     }
 
     pub(super) fn mcp_form(

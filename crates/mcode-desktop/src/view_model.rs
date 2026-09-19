@@ -14,6 +14,8 @@ pub struct SessionSummary {
     pub session_id: String,
     /// Root branch identity spelling.
     pub root_branch_id: String,
+    /// Display title: the session's first user message, trimmed.
+    pub title: String,
     /// Total committed events across branches.
     pub event_count: u64,
     /// Whether this session is currently open.
@@ -171,6 +173,63 @@ pub enum MainView {
     Settings,
 }
 
+/// One settings navigation section (the secondary menu).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsSection {
+    /// Theme and request identity.
+    #[default]
+    General,
+    /// Providers, catalog presets, and custom endpoints.
+    Models,
+    /// MCP servers.
+    Mcp,
+    /// Web search backends.
+    Web,
+    /// Usage records and data export/import.
+    Data,
+    /// Version, updates, and the provider catalog.
+    About,
+}
+
+impl SettingsSection {
+    /// Stable nav identifier.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Models => "models",
+            Self::Mcp => "mcp",
+            Self::Web => "web",
+            Self::Data => "data",
+            Self::About => "about",
+        }
+    }
+
+    /// Nav row label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Models => "Models",
+            Self::Mcp => "MCP",
+            Self::Web => "Web search",
+            Self::Data => "Data",
+            Self::About => "About",
+        }
+    }
+
+    /// Nav row icon.
+    pub fn icon(self) -> gpui_kit::assets::IconName {
+        use gpui_kit::assets::IconName;
+        match self {
+            Self::General => IconName::SlidersHorizontal,
+            Self::Models => IconName::Bot,
+            Self::Mcp => IconName::PlugZap,
+            Self::Web => IconName::Globe,
+            Self::Data => IconName::Database,
+            Self::About => IconName::Info,
+        }
+    }
+}
+
 /// Self-update progress shown in settings and banners.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum UpdateState {
@@ -235,6 +294,10 @@ pub struct WorkspaceState {
     pub error: Option<String>,
     /// Chat or settings main view.
     pub view: MainView,
+    /// Settings navigation section.
+    pub settings_section: SettingsSection,
+    /// Whether the sidebar project switcher dropdown is open.
+    pub project_menu_open: bool,
     /// The resolved provider catalog.
     pub catalog: Option<Arc<mcode_catalog::CatalogDocument>>,
     /// Unix seconds of the catalog's last successful cloud fetch.
@@ -363,6 +426,10 @@ pub enum DesktopAction {
     DismissError,
     /// Switch the main area between chat and settings.
     ShowMainView(MainView),
+    /// Switch the settings secondary menu.
+    ShowSettingsSection(SettingsSection),
+    /// The sidebar project switcher opened or closed.
+    ProjectMenuToggled(bool),
     /// The provider catalog resolved (bundled or cloud).
     CatalogLoaded {
         /// The catalog document.
@@ -653,6 +720,8 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ToggleTheme => state.dark_theme = !state.dark_theme,
         DesktopAction::DismissError => state.error = None,
         DesktopAction::ShowMainView(view) => state.view = view,
+        DesktopAction::ShowSettingsSection(section) => state.settings_section = section,
+        DesktopAction::ProjectMenuToggled(open) => state.project_menu_open = open,
         DesktopAction::CatalogLoaded {
             document,
             fetched_at,
@@ -684,14 +753,19 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.recents.insert(0, project);
             state.recents.truncate(mcode_config::MAX_RECENT_PROJECTS);
         }
-        DesktopAction::SessionProjectBound { session_id, project } => {
+        DesktopAction::SessionProjectBound {
+            session_id,
+            project,
+        } => {
             state
                 .session_projects
                 .retain(|(existing, _)| existing != &session_id);
             state
                 .session_projects
                 .insert(0, (session_id, project.clone()));
-            state.session_projects.truncate(mcode_config::MAX_SESSION_PROJECTS);
+            state
+                .session_projects
+                .truncate(mcode_config::MAX_SESSION_PROJECTS);
         }
         DesktopAction::ActiveProjectChanged(project) => {
             state.project_dir = project;
@@ -833,6 +907,7 @@ mod tests {
         SessionSummary {
             session_id: id.to_owned(),
             root_branch_id: format!("br-{id}"),
+            title: format!("chat {id}"),
             event_count: count,
             active: false,
         }

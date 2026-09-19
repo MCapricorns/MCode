@@ -16,8 +16,8 @@
 //! touches async machinery.
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 
 use mcode_agent::{Agent, AgentConfig, HookRunner};
@@ -672,13 +672,16 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
 
 async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
     match command {
-        BridgeCommand::ListSessions => {
-            BridgeReply::Sessions(inspect_summaries(&state.home).map_err(render_error))
-        }
+        BridgeCommand::ListSessions => BridgeReply::Sessions(
+            inspect_summaries(&state.service, &state.home)
+                .await
+                .map_err(render_error),
+        ),
         BridgeCommand::CreateSession => match state.service.create().await {
             Ok(created) => BridgeReply::Created(Ok(SessionSummary {
                 session_id: created.session_id.as_str().to_owned(),
                 root_branch_id: created.branch_id.as_str().to_owned(),
+                title: String::new(),
                 event_count: 0,
                 active: true,
             })),
@@ -791,7 +794,10 @@ fn list_resources(state: &CoreState, session_id: &str) -> Result<Vec<(String, St
 ///
 /// Runs on the caller's runtime; never builds a nested one (a nested
 /// `Runtime::block_on` panics and takes the core thread down with it).
-async fn mcp_list_tools(home: &HomeLayout, server_id: &str) -> Result<(String, Vec<String>), String> {
+async fn mcp_list_tools(
+    home: &HomeLayout,
+    server_id: &str,
+) -> Result<(String, Vec<String>), String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let server = settings
         .mcp_servers
@@ -924,20 +930,60 @@ fn render_config_error(error: &mcode_config::ConfigError) -> String {
     format!("settings error: {error}")
 }
 
-fn inspect_summaries(home: &HomeLayout) -> Result<Vec<SessionSummary>, SessionError> {
-    Ok(session::inspect_sessions(home)?
-        .into_iter()
-        .map(|snapshot| SessionSummary {
-            root_branch_id: snapshot
-                .branches
-                .first()
-                .map(|branch| branch.branch_id.as_str().to_owned())
-                .unwrap_or_default(),
+/// Lists sessions with display titles: the first user message of each root
+/// branch, first page only. Per-session read failures degrade to an empty
+/// title; the listing itself never fails on one bad session.
+async fn inspect_summaries(
+    service: &SessionService,
+    home: &HomeLayout,
+) -> Result<Vec<SessionSummary>, SessionError> {
+    let snapshots = session::inspect_sessions(home)?;
+    let mut summaries = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        let Some(root) = snapshot.branches.first() else {
+            continue;
+        };
+        let branch_id = root.branch_id.clone();
+        let snapshot_head = root.head.clone();
+        let title = session_title(service, &snapshot.session_id, &branch_id, &snapshot_head).await;
+        summaries.push(SessionSummary {
+            root_branch_id: branch_id.as_str().to_owned(),
             event_count: snapshot.branches.iter().map(|b| b.event_count).sum(),
             session_id: snapshot.session_id.as_str().to_owned(),
+            title,
             active: false,
-        })
-        .collect())
+        });
+    }
+    Ok(summaries)
+}
+
+/// Reads the first user message of a session's root branch for the sidebar
+/// title; empty when the session has no messages yet. A stale manifest head
+/// (an active turn appended events) degrades to an empty title.
+async fn session_title(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    head: &HeadStamp,
+) -> String {
+    let Ok(page) = service.read(session, branch, head, None, 8).await else {
+        return String::new();
+    };
+    for event in &page.items {
+        if event.kind != EventKind::Message {
+            continue;
+        }
+        if let Ok(loaded) = service.load_event(session, branch, &event.event_id).await {
+            return title_from_text(&decode_text(&loaded.payload));
+        }
+    }
+    String::new()
+}
+
+/// Collapses one message into a one-line sidebar title.
+fn title_from_text(text: &str) -> String {
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(60).collect()
 }
 
 async fn open_conversation(

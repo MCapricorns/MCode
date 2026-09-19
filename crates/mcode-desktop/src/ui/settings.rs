@@ -1,0 +1,1499 @@
+//! The full-page settings view: a secondary left nav (General / Models /
+//! MCP / Web / Data / About) and a sectioned content pane with switch rows
+//! and clean forms.
+//!
+//! Rendering order matters: entities are created and row lists materialized
+//! with `&mut Context` first, and only then is `cx.theme()` borrowed for the
+//! layout pass.
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::theme::Theme;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, px, rems,
+};
+
+use super::ellipsis;
+use crate::view_model::{DesktopAction, SettingsSection, UpdateState};
+use crate::workspace::Workspace;
+
+pub(super) fn render_settings_view(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let section = workspace.vm().settings_section;
+    let settings_ready = workspace.vm().settings.is_some();
+    let header_meta = workspace
+        .vm()
+        .settings
+        .clone()
+        .map(|s| (s.dirty, s.saving, s.revision));
+    let theme = cx.theme();
+    div()
+        .id("settings-view")
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        .bg(theme.background)
+        .child(
+            div()
+                .id("settings-header")
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .px_6()
+                .py_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui_kit::FontWeight::BOLD)
+                        .child("Settings"),
+                )
+                .child(div().flex().flex_row().items_center().gap_2().when_some(
+                    header_meta,
+                    |this, (dirty, saving, revision)| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .opacity(0.45)
+                                .child(format!("revision {revision}")),
+                        )
+                        .child(
+                            Button::new("settings-save")
+                                .icon(IconName::Check)
+                                .label("Save changes")
+                                .small()
+                                .primary()
+                                .disabled(!dirty || saving)
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_save_settings(cx);
+                                })),
+                        )
+                    },
+                )),
+        )
+        .child(
+            div()
+                .id("settings-body")
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_row()
+                .child(render_settings_nav(section, cx))
+                .child(
+                    div()
+                        .id("settings-content")
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .overflow_y_scroll()
+                        .child(
+                            div()
+                                .id("settings-content-inner")
+                                .mx_auto()
+                                .max_w(rems(52.))
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                .px_6()
+                                .py_4()
+                                .when(!settings_ready, |this| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .opacity(0.6)
+                                            .child("Loading settings\u{2026}"),
+                                    )
+                                })
+                                .when(settings_ready, |this| {
+                                    this.child(match section {
+                                        SettingsSection::General => {
+                                            render_general_section(workspace, window, cx)
+                                        }
+                                        SettingsSection::Models => {
+                                            render_models_section(workspace, window, cx)
+                                        }
+                                        SettingsSection::Mcp => {
+                                            render_mcp_section(workspace, window, cx)
+                                        }
+                                        SettingsSection::Web => {
+                                            render_web_section(workspace, window, cx)
+                                        }
+                                        SettingsSection::Data => render_data_section(workspace, cx),
+                                        SettingsSection::About => {
+                                            render_about_section(workspace, cx)
+                                        }
+                                    })
+                                }),
+                        ),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_settings_nav(section: SettingsSection, cx: &mut Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let sections = [
+        SettingsSection::General,
+        SettingsSection::Models,
+        SettingsSection::Mcp,
+        SettingsSection::Web,
+        SettingsSection::Data,
+        SettingsSection::About,
+    ];
+    let rows: Vec<AnyElement> = sections
+        .into_iter()
+        .map(|candidate| {
+            let selected = candidate == section;
+            let icon = candidate.icon();
+            let label = candidate.label();
+            div()
+                .id(format!("settings-nav-{}", candidate.id()))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py(px(6.))
+                .rounded_md()
+                .text_sm()
+                .cursor_pointer()
+                .when(selected, |this| {
+                    this.bg(theme.sidebar_accent)
+                        .text_color(theme.sidebar_accent_foreground)
+                })
+                .when(!selected, |this| this.text_color(theme.sidebar_foreground))
+                .hover(|this| this.bg(theme.sidebar_accent))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_show_settings_section(candidate, cx);
+                }))
+                .child(Icon::new(icon).small().text_color(if selected {
+                    theme.sidebar_accent_foreground
+                } else {
+                    theme.muted_foreground
+                }))
+                .child(label)
+                .into_any_element()
+        })
+        .collect();
+    div()
+        .id("settings-nav")
+        .w(px(196.))
+        .h_full()
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .p_3()
+        .flex_shrink_0()
+        .border_r_1()
+        .border_color(theme.border)
+        .bg(theme.sidebar)
+        .children(rows)
+}
+
+/// One settings card: title, optional hint, and rows.
+fn settings_card(
+    id: &str,
+    title: &str,
+    hint: Option<&str>,
+    theme: &Theme,
+    children: Vec<AnyElement>,
+) -> impl IntoElement {
+    div()
+        .id(format!("card-{id}"))
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .id(format!("card-{id}-header"))
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(title.to_owned()),
+                )
+                .when_some(hint, |this, hint| {
+                    this.child(div().text_xs().opacity(0.5).child(hint.to_owned()))
+                }),
+        )
+        .child(
+            div()
+                .id(format!("card-{id}-body"))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(children),
+        )
+}
+
+/// A label + control row used across sections.
+fn settings_row(
+    id: &str,
+    label: &str,
+    description: Option<&str>,
+    control: AnyElement,
+) -> AnyElement {
+    div()
+        .id(format!("row-{id}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .min_w_0()
+                .child(div().text_sm().child(label.to_owned()))
+                .when_some(description, |this, description| {
+                    this.child(div().text_xs().opacity(0.5).child(description.to_owned()))
+                }),
+        )
+        .child(control)
+        .into_any_element()
+}
+
+// ---- General ----
+
+fn render_general_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let ua_input = workspace.settings_ua_input(window, cx);
+    let dark = workspace.vm().dark_theme;
+    let effective_ua = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.effective_user_agent.clone())
+        .unwrap_or_default();
+    let theme_row = settings_row(
+        "theme",
+        "Color theme",
+        None,
+        div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .child(
+                Button::new("theme-light")
+                    .icon(IconName::Sun)
+                    .label("Light")
+                    .small()
+                    .when(!dark, |this| this.primary())
+                    .when(dark, |this| this.ghost())
+                    .on_click(cx.listener(|workspace, _, window, cx| {
+                        if workspace.vm().dark_theme {
+                            workspace.on_toggle_theme(window, cx);
+                        }
+                    }))
+                    .into_any_element(),
+            )
+            .child(
+                Button::new("theme-dark")
+                    .icon(IconName::Moon)
+                    .label("Dark")
+                    .small()
+                    .when(dark, |this| this.primary())
+                    .when(!dark, |this| this.ghost())
+                    .on_click(cx.listener(|workspace, _, window, cx| {
+                        if !workspace.vm().dark_theme {
+                            workspace.on_toggle_theme(window, cx);
+                        }
+                    }))
+                    .into_any_element(),
+            )
+            .into_any_element(),
+    );
+    let ua_field = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().text_sm().child("HTTP User-Agent"))
+        .child(div().h(px(30.)).text_sm().child(Input::new(&ua_input)))
+        .child(
+            div()
+                .text_xs()
+                .opacity(0.5)
+                .child(format!("Effective: {effective_ua}")),
+        )
+        .into_any_element();
+    let theme = cx.theme();
+    settings_card(
+        "appearance",
+        "Appearance",
+        Some("Theme applies immediately and persists with settings."),
+        theme,
+        vec![theme_row, ua_field],
+    )
+    .into_any_element()
+}
+
+// ---- Models ----
+
+fn render_models_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
+    };
+    let catalog = workspace.vm().catalog.clone();
+    let active_preset = workspace.vm().active_preset.clone();
+    // &mut Context work first: input entities and nested forms.
+    let preset_search = workspace.preset_search_input(window, cx);
+    let provider_form_element = render_provider_form(workspace, window, cx);
+    let preset_form_element = active_preset
+        .as_ref()
+        .map(|preset_id| render_preset_form(workspace, preset_id, window, cx))
+        .unwrap_or_else(|| div().into_any_element());
+
+    let mut provider_rows: Vec<(usize, String, String, String, usize, bool, bool)> = Vec::new();
+    for (index, provider) in settings.providers.iter().enumerate() {
+        let name = catalog
+            .as_ref()
+            .map(|catalog| catalog.display_name(&provider.id))
+            .unwrap_or_else(|| provider.id.clone());
+        let host = provider
+            .base_url
+            .strip_prefix("https://")
+            .unwrap_or(&provider.base_url)
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let keyed = settings
+            .providers_with_keys
+            .iter()
+            .any(|id| id == &provider.id);
+        provider_rows.push((
+            index,
+            name,
+            provider.kind.clone(),
+            host,
+            provider.models.len(),
+            keyed,
+            provider.enabled,
+        ));
+    }
+    let provider_row_elements: Vec<AnyElement> = provider_rows
+        .into_iter()
+        .map(|(index, name, kind, host, models, keyed, enabled)| {
+            provider_row(index, name, kind, host, models, keyed, enabled, cx)
+        })
+        .collect();
+
+    let preset_search_text = workspace.vm().preset_search.to_lowercase();
+    let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
+    if let Some(catalog) = catalog.as_ref() {
+        for provider in &catalog.providers {
+            if !preset_search_text.is_empty()
+                && !provider.name.to_lowercase().contains(&preset_search_text)
+                && !provider.id.contains(&preset_search_text)
+            {
+                continue;
+            }
+            if preset_rows.len() >= 60 {
+                break;
+            }
+            preset_rows.push((
+                provider.id.clone(),
+                provider.name.clone(),
+                provider.kind.clone(),
+                provider.models.len(),
+            ));
+        }
+    }
+    let preset_row_elements: Vec<AnyElement> = preset_rows
+        .into_iter()
+        .map(|(id, name, kind, models)| preset_row(id, name, kind, models, cx).into_any_element())
+        .collect();
+
+    let theme = cx.theme();
+    let providers_empty = provider_row_elements.is_empty();
+    settings_card(
+        "providers",
+        "Model providers",
+        Some(
+            "Pick a provider, paste its API key, done. Every listed model becomes \
+             selectable in the composer.",
+        ),
+        theme,
+        vec![
+            div()
+                .when(providers_empty, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .child("No providers yet — add one from the catalog below"),
+                    )
+                })
+                .children(provider_row_elements)
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .pt_1()
+                .child(div().text_xs().opacity(0.7).child("Add from catalog"))
+                .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
+                .child(
+                    div()
+                        .id("preset-catalog-list")
+                        .max_h(px(240.))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(preset_row_elements),
+                )
+                .into_any_element(),
+            preset_form_element,
+            provider_form_element,
+        ],
+    )
+    .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn provider_row(
+    index: usize,
+    name: String,
+    kind: String,
+    host: String,
+    models: usize,
+    keyed: bool,
+    enabled: bool,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("provider-row-{index}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .overflow_hidden()
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.6)
+                        .child(format!("{kind} \u{b7} {host} \u{b7} {models} model(s)")),
+                ),
+        )
+        .child(Icon::new(IconName::KeyRound).small().text_color(if keyed {
+            theme.success
+        } else {
+            theme.danger
+        }))
+        .child(
+            Switch::new(format!("provider-toggle-{index}"))
+                .checked(enabled)
+                .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                    if let Some(provider) = workspace
+                        .vm()
+                        .settings
+                        .as_ref()
+                        .and_then(|s| s.providers.get(index))
+                        .cloned()
+                    {
+                        let updated = mcode_config::ProviderSettings {
+                            enabled: *checked,
+                            ..provider
+                        };
+                        workspace.apply_action(
+                            DesktopAction::SettingsProviderChanged(index, updated),
+                            cx,
+                        );
+                    }
+                })),
+        )
+        .child(super::icon_button(
+            format!("provider-remove-{index}"),
+            IconName::Trash,
+            cx.listener(move |workspace, _, _, cx| {
+                workspace.on_remove_provider(index, cx);
+            }),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn preset_row(
+    id: String,
+    name: String,
+    kind: String,
+    models: usize,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("preset-row-{id}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py(px(5.))
+        .rounded_md()
+        .hover(|this| this.bg(theme.secondary))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(div().text_sm().overflow_hidden().child(name))
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.6)
+                        .child(format!("{id} \u{b7} {kind} \u{b7} {models} models")),
+                ),
+        )
+        .child(
+            Button::new(format!("preset-add-{id}"))
+                .icon(IconName::Plus)
+                .label("Add")
+                .small()
+                .outline()
+                .on_click({
+                    let id = id.clone();
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_open_preset(&id, cx);
+                    })
+                }),
+        )
+}
+
+/// The expanded preset form: model picker plus the API key input.
+fn render_preset_form(
+    workspace: &mut Workspace,
+    provider_id: &str,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let key_input = workspace.preset_key_input(window, cx);
+    let Some(catalog) = workspace.vm().catalog.clone() else {
+        return div().into_any_element();
+    };
+    let Some(preset) = catalog.provider(provider_id) else {
+        return div().into_any_element();
+    };
+    let name = preset.name.clone();
+    let models: Vec<String> = preset
+        .models
+        .iter()
+        .take(64)
+        .map(|model| model.id.clone())
+        .collect();
+    let chosen = workspace
+        .vm()
+        .preset_model
+        .clone()
+        .unwrap_or_else(|| models.first().cloned().unwrap_or_default());
+    let menu_open = workspace.vm().preset_model_menu_open;
+    let provider_id_owned = provider_id.to_owned();
+    let theme = cx.theme();
+    div()
+        .id("preset-form")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.primary)
+        .bg(theme.secondary)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child(format!("Add {name}")),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().opacity(0.6).child("Default model"))
+                .child(
+                    Button::new("preset-model-chip")
+                        .label(chosen.clone())
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            let open = !workspace.vm().preset_model_menu_open;
+                            workspace.apply_action(DesktopAction::PresetModelMenuToggled(open), cx);
+                        })),
+                )
+                .when(menu_open, |this| {
+                    this.child(
+                        div()
+                            .id("preset-model-list")
+                            .max_h(px(180.))
+                            .overflow_y_scroll()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.background)
+                            .p_1()
+                            .flex()
+                            .flex_col()
+                            .gap_px()
+                            .children(models.into_iter().map(|model| {
+                                let model_for_click = model.clone();
+                                div()
+                                    .id(format!("preset-model-{model}"))
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_sm()
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(theme.secondary))
+                                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                                        workspace.apply_action(
+                                            DesktopAction::PresetModelChanged(
+                                                model_for_click.clone(),
+                                            ),
+                                            cx,
+                                        );
+                                        workspace.apply_action(
+                                            DesktopAction::PresetModelMenuToggled(false),
+                                            cx,
+                                        );
+                                    }))
+                                    .child(model)
+                            })),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.6)
+                        .child("API key (stored in the secret vault)"),
+                )
+                .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(
+                    Button::new("preset-confirm")
+                        .icon(IconName::Check)
+                        .label("Add provider")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            let provider_id = provider_id_owned.clone();
+                            workspace.on_add_preset(&provider_id, cx);
+                        })),
+                )
+                .child(
+                    Button::new("preset-cancel")
+                        .label("Cancel")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_close_preset(cx);
+                        })),
+                ),
+        )
+        .into_any_element()
+}
+
+// ---- MCP ----
+
+fn render_mcp_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
+    };
+    let mcp_rows: Vec<(String, String, bool, bool, usize)> = settings
+        .mcp_servers
+        .iter()
+        .enumerate()
+        .map(|(index, server)| {
+            (
+                server.id.clone(),
+                server.transport.clone(),
+                server.enabled,
+                settings.mcp_with_keys.iter().any(|id| id == &server.id),
+                index,
+            )
+        })
+        .collect();
+    let builtin_servers = mcode_config::builtin_mcp_servers();
+    let catalog_rows: Vec<(String, String)> = builtin_servers
+        .iter()
+        .filter(|server| {
+            !settings
+                .mcp_servers
+                .iter()
+                .any(|configured| configured.id == server.id)
+        })
+        .map(|server| (server.id.clone(), server.transport.clone()))
+        .collect();
+    // &mut Context work first.
+    let catalog_row_elements: Vec<AnyElement> = catalog_rows
+        .iter()
+        .map(|(id, transport)| builtin_catalog_row(id, transport, cx))
+        .collect();
+    let mcp_form_element = render_mcp_form(workspace, window, cx);
+    let key_input = workspace.mcp_key_input(window, cx);
+    let mcp_row_elements: Vec<AnyElement> = mcp_rows
+        .into_iter()
+        .map(|(id, transport, enabled, keyed, index)| {
+            mcp_row(id, transport, enabled, keyed, index, cx)
+        })
+        .collect();
+
+    let theme = cx.theme();
+    let mcp_empty = mcp_row_elements.is_empty();
+    let has_catalog = !catalog_row_elements.is_empty();
+    settings_card(
+        "mcp",
+        "MCP servers",
+        Some(
+            "Stdio or Streamable-HTTP tool servers. Enabled servers join the agent's \
+             toolset next turn.",
+        ),
+        theme,
+        vec![
+            div()
+                .when(mcp_empty, |this| {
+                    this.child(div().text_xs().opacity(0.5).child("No MCP servers yet"))
+                })
+                .children(mcp_row_elements)
+                .into_any_element(),
+            div()
+                .when(has_catalog, |this| {
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_2()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.7)
+                                    .child("Built-in catalog — paste a key, then Add"),
+                            )
+                            .children(catalog_row_elements),
+                    )
+                })
+                .child(
+                    div()
+                        .id("mcp-key-row")
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .opacity(0.6)
+                                .child("Key for the built-in catalog server above"),
+                        )
+                        .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
+                )
+                .into_any_element(),
+            mcp_form_element,
+        ],
+    )
+    .into_any_element()
+}
+
+fn mcp_row(
+    id: String,
+    transport: String,
+    enabled: bool,
+    keyed: bool,
+    index: usize,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("mcp-row-{id}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(id.clone()),
+                )
+                .child(div().text_xs().opacity(0.6).child(format!(
+                    "{transport} \u{b7} {}",
+                    if keyed { "key stored" } else { "no key" }
+                ))),
+        )
+        .child(
+            Switch::new(format!("mcp-toggle-{id}"))
+                .checked(enabled)
+                .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                    workspace.apply_action(DesktopAction::SettingsMcpToggled(index, *checked), cx);
+                })),
+        )
+        .child(
+            Button::new(format!("mcp-tools-{id}"))
+                .label("List tools")
+                .small()
+                .ghost()
+                .on_click({
+                    let id = id.clone();
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_list_mcp_tools(&id, cx);
+                    })
+                }),
+        )
+        .child(super::icon_button(
+            format!("mcp-remove-{id}"),
+            IconName::Trash,
+            cx.listener(move |workspace, _, _, cx| {
+                workspace.apply_action(DesktopAction::SettingsMcpRemoved(index), cx);
+            }),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -> AnyElement {
+    div()
+        .id(format!("mcp-catalog-{id}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .opacity(0.8)
+                .child(format!("{id} \u{b7} {transport}")),
+        )
+        .child(
+            Button::new(format!("mcp-add-{id}"))
+                .label("Add")
+                .small()
+                .primary()
+                .on_click({
+                    let id = id.to_owned();
+                    cx.listener(move |workspace, _, window, cx| {
+                        let server = mcode_config::builtin_mcp_servers()
+                            .into_iter()
+                            .find(|server| server.id == id)
+                            .expect("catalog entry");
+                        let key = workspace
+                            .mcp_key_input(window, cx)
+                            .read(cx)
+                            .value()
+                            .trim()
+                            .to_owned();
+                        workspace.on_add_builtin_mcp(server, &key, cx);
+                    })
+                }),
+        )
+        .into_any_element()
+}
+
+// ---- Web ----
+
+fn render_web_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
+    };
+    let backend_form_element = render_backend_form(workspace, window, cx);
+    let backend_rows: Vec<(String, String, bool, usize)> = settings
+        .web_backends
+        .iter()
+        .enumerate()
+        .map(|(index, backend)| {
+            (
+                backend.id.clone(),
+                backend.kind.clone(),
+                backend.enabled,
+                index,
+            )
+        })
+        .collect();
+    let backend_row_elements: Vec<AnyElement> = backend_rows
+        .into_iter()
+        .map(|(id, kind, enabled, index)| backend_row(id, kind, enabled, index, cx))
+        .collect();
+    let theme = cx.theme();
+    let backends_empty = backend_row_elements.is_empty();
+    settings_card(
+        "web",
+        "Web search",
+        Some("One enabled backend powers the Web panel."),
+        theme,
+        vec![
+            div()
+                .when(backends_empty, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .child("No backends yet — add one below"),
+                    )
+                })
+                .children(backend_row_elements)
+                .into_any_element(),
+            backend_form_element,
+        ],
+    )
+    .into_any_element()
+}
+
+fn backend_row(
+    id: String,
+    kind: String,
+    enabled: bool,
+    index: usize,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("backend-row-{id}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(id.clone()),
+                )
+                .child(div().text_xs().opacity(0.6).child(kind)),
+        )
+        .child(
+            Switch::new(format!("backend-toggle-{id}"))
+                .checked(enabled)
+                .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                    workspace
+                        .apply_action(DesktopAction::SettingsBackendToggled(index, *checked), cx);
+                })),
+        )
+        .child(super::icon_button(
+            format!("backend-remove-{id}"),
+            IconName::Trash,
+            cx.listener(move |workspace, _, _, cx| {
+                workspace.on_remove_backend(index, cx);
+            }),
+            cx,
+        ))
+        .into_any_element()
+}
+
+// ---- Data ----
+
+fn render_data_section(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+    let usage_enabled = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.usage_enabled)
+        .unwrap_or(true);
+    let usage_row = settings_row(
+        "usage",
+        "Durable usage records",
+        Some("Write a Usage event per completed turn, aggregated in the Overview panel."),
+        Switch::new("settings-usage-toggle")
+            .checked(usage_enabled)
+            .on_click(cx.listener(|workspace, checked: &bool, _, cx| {
+                workspace.apply_action(DesktopAction::SettingsUsageToggled(*checked), cx);
+            }))
+            .into_any_element(),
+    );
+    let theme = cx.theme();
+    settings_card(
+        "data",
+        "Data",
+        Some("Usage records and moving your configuration between machines."),
+        theme,
+        vec![usage_row],
+    )
+    .into_any_element()
+}
+
+// ---- About ----
+
+fn render_about_section(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+    let vm = workspace.vm();
+    let current = mcode_updates::current_version().to_owned();
+    let catalog_line = match vm.catalog_fetched_at {
+        0 => "bundled snapshot".to_owned(),
+        seconds => {
+            let date = catalog_date(seconds);
+            format!("cloud catalog \u{b7} fetched {date}")
+        }
+    };
+    let auto_update = vm.auto_update;
+    let status: (String, Option<AnyElement>) = match &vm.update {
+        UpdateState::Idle => ("Update checks run at startup.".to_owned(), None),
+        UpdateState::Checking => ("Checking for updates\u{2026}".to_owned(), None),
+        UpdateState::UpToDate => (
+            format!("v{current} is the latest version."),
+            Some(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().success)
+                    .child("up to date")
+                    .into_any_element(),
+            ),
+        ),
+        UpdateState::Available { version, .. } => (
+            format!("v{version} is available."),
+            Some(
+                Button::new("update-download")
+                    .icon(IconName::Download)
+                    .label("Download & install")
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_download_update(cx);
+                    }))
+                    .into_any_element(),
+            ),
+        ),
+        UpdateState::Downloading { .. } => ("Downloading and verifying\u{2026}".to_owned(), None),
+        UpdateState::Ready { version } => (
+            format!("v{version} is staged."),
+            Some(
+                Button::new("update-restart")
+                    .icon(IconName::RefreshCw)
+                    .label("Restart to install")
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_install_update(cx);
+                    }))
+                    .into_any_element(),
+            ),
+        ),
+        UpdateState::Failed(message) => (
+            message.clone(),
+            Some(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(ellipsis(message, 120))
+                    .into_any_element(),
+            ),
+        ),
+    };
+    let rows = vec![
+        settings_row(
+            "version",
+            "Current version",
+            None,
+            div()
+                .text_sm()
+                .opacity(0.8)
+                .child(format!("v{current}"))
+                .into_any_element(),
+        ),
+        settings_row(
+            "auto-update",
+            "Automatic checks",
+            Some("Check GitHub for a newer release once a day."),
+            Switch::new("update-auto-toggle")
+                .checked(auto_update)
+                .on_click(cx.listener(|workspace, checked: &bool, _, cx| {
+                    workspace.on_toggle_auto_update(*checked, cx);
+                }))
+                .into_any_element(),
+        ),
+        settings_row(
+            "update-status",
+            "Status",
+            None,
+            div()
+                .text_xs()
+                .opacity(0.7)
+                .child(status.0)
+                .into_any_element(),
+        ),
+        status
+            .1
+            .map(|node| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .child(node)
+                    .into_any_element()
+            })
+            .unwrap_or_else(|| div().into_any_element()),
+        settings_row(
+            "catalog",
+            "Provider catalog",
+            None,
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(div().text_xs().opacity(0.6).child(catalog_line))
+                .child(
+                    Button::new("catalog-refresh")
+                        .icon(IconName::RefreshCw)
+                        .label("Refresh")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_refresh_catalog(cx);
+                        })),
+                )
+                .into_any_element(),
+        ),
+    ];
+    let theme = cx.theme();
+    settings_card(
+        "about",
+        "About",
+        Some("The app updates itself from GitHub releases."),
+        theme,
+        rows,
+    )
+    .into_any_element()
+}
+
+fn catalog_date(seconds: u64) -> String {
+    // Bounded ISO-ish date from unix seconds without a chrono dependency.
+    let days = seconds / 86_400;
+    let (year, month, day) = civil_from_days(days as i64);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+// ---- shared form widgets ----
+
+fn labeled_field(label: &str, input: Entity<InputState>) -> impl IntoElement {
+    div()
+        .id(format!("form-field-{label}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().text_xs().opacity(0.6).child(label.to_owned()))
+        .child(div().h(px(28.)).child(Input::new(&input)))
+}
+
+/// Inline add-backend form state.
+pub(crate) struct BackendForm {
+    /// Backend identity input.
+    pub id: Entity<InputState>,
+    /// Backend kind input (`querit` or `custom`).
+    pub kind: Entity<InputState>,
+    /// HTTPS endpoint input.
+    pub endpoint: Entity<InputState>,
+}
+
+impl BackendForm {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Entity<Self> {
+        let mut make = |placeholder: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let id = make("id, e.g. querit-main");
+        let kind = make("querit | custom");
+        let endpoint = make("https://search.example.com");
+        cx.new(|_| Self { id, kind, endpoint })
+    }
+}
+
+fn render_backend_form(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = workspace.backend_form(window, cx);
+    let theme = cx.theme();
+    div()
+        .id("backend-form")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_md()
+        .bg(theme.secondary)
+        .child(div().text_xs().opacity(0.7).child("Add web search backend"))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_sm()
+                .child(labeled_field("id", form.read(cx).id.clone()))
+                .child(labeled_field("kind", form.read(cx).kind.clone()))
+                .child(labeled_field("endpoint", form.read(cx).endpoint.clone())),
+        )
+        .child(
+            Button::new("backend-add")
+                .label("Add backend")
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_add_backend(cx);
+                })),
+        )
+        .into_any_element()
+}
+
+/// Inline add-MCP-server form state (http or stdio).
+pub(crate) struct McpForm {
+    /// Server identity input.
+    pub id: Entity<InputState>,
+    /// Transport input (`http` or `stdio`).
+    pub transport: Entity<InputState>,
+    /// HTTP endpoint input (http transport).
+    pub endpoint: Entity<InputState>,
+    /// Command input (stdio transport).
+    pub command: Entity<InputState>,
+    /// API key input, stored in the secret store.
+    pub api_key: Entity<InputState>,
+}
+
+impl McpForm {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Entity<Self> {
+        let mut make = |placeholder: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let id = make("id, e.g. my-mcp");
+        let transport = make("http | stdio");
+        let endpoint = make("https://mcp.example.com/mcp");
+        let command = make("stdio: command (e.g. npx)");
+        let api_key = make("api key (leave empty to skip)");
+        cx.new(|_| Self {
+            id,
+            transport,
+            endpoint,
+            command,
+            api_key,
+        })
+    }
+}
+
+fn render_mcp_form(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = workspace.mcp_form(window, cx);
+    let theme = cx.theme();
+    div()
+        .id("mcp-form")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_md()
+        .bg(theme.secondary)
+        .child(
+            div()
+                .text_xs()
+                .opacity(0.7)
+                .child("Add a custom MCP server"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_sm()
+                .child(labeled_field("id", form.read(cx).id.clone()))
+                .child(labeled_field("transport", form.read(cx).transport.clone()))
+                .child(labeled_field(
+                    "endpoint (http)",
+                    form.read(cx).endpoint.clone(),
+                ))
+                .child(labeled_field(
+                    "command (stdio)",
+                    form.read(cx).command.clone(),
+                ))
+                .child(labeled_field(
+                    "api key (stored in secrets.json)",
+                    form.read(cx).api_key.clone(),
+                )),
+        )
+        .child(
+            Button::new("mcp-add")
+                .label("Add server")
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_add_mcp(cx);
+                })),
+        )
+        .into_any_element()
+}
+
+/// Inline custom-endpoint provider form state.
+pub(crate) struct ProviderForm {
+    /// Provider identity input.
+    pub id: Entity<InputState>,
+    /// Wire-protocol kind input.
+    pub kind: Entity<InputState>,
+    /// Base URL input.
+    pub base_url: Entity<InputState>,
+    /// Default model input.
+    pub model: Entity<InputState>,
+    /// API key input; stored in the secret store, never in settings.
+    pub api_key: Entity<InputState>,
+}
+
+impl ProviderForm {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Entity<Self> {
+        let mut make = |placeholder: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let id = make("id, e.g. openai-main");
+        let kind = make("anthropic-messages | openai-completions | openai-responses");
+        let base_url = make("https://api.example.com/v1");
+        let model = make("model id");
+        let api_key = make("api key (leave empty to skip)");
+        cx.new(|_| Self {
+            id,
+            kind,
+            base_url,
+            model,
+            api_key,
+        })
+    }
+}
+
+fn render_provider_form(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = workspace.provider_form(window, cx);
+    let theme = cx.theme();
+    div()
+        .id("provider-form")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_md()
+        .bg(theme.secondary)
+        .child(div().text_xs().opacity(0.7).child("Add a custom endpoint"))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_sm()
+                .child(labeled_field("id", form.read(cx).id.clone()))
+                .child(labeled_field("kind", form.read(cx).kind.clone()))
+                .child(labeled_field("base URL", form.read(cx).base_url.clone()))
+                .child(labeled_field("model", form.read(cx).model.clone()))
+                .child(labeled_field(
+                    "api key (stored in secrets.json)",
+                    form.read(cx).api_key.clone(),
+                )),
+        )
+        .child(
+            Button::new("provider-add")
+                .label("Add provider")
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_add_provider(cx);
+                })),
+        )
+        .into_any_element()
+}

@@ -88,8 +88,7 @@ impl UiState {
         let session_id = session_id.to_owned();
         self.session_projects
             .retain(|(existing, _)| *existing != session_id);
-        self.session_projects
-            .insert(0, (session_id, project));
+        self.session_projects.insert(0, (session_id, project));
         self.session_projects.truncate(MAX_SESSION_PROJECTS);
     }
 
@@ -147,9 +146,7 @@ fn valid_project_path(value: &str) -> Option<String> {
 }
 
 fn valid_session_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_SESSION_ID_BYTES
-        && !value.chars().any(char::is_control)
+    !value.is_empty() && value.len() <= MAX_SESSION_ID_BYTES && !value.chars().any(char::is_control)
 }
 
 /// Reads the UI state; a missing document yields the defaults.
