@@ -1,6 +1,6 @@
 # MCode 架构
 
-> 本文描述当前实现的产品架构；历史 Manager/Pack/WASM 插件体系已从产品目标中移除（详见 plan.md）。
+> 本文描述当前实现的产品架构；历史 Manager/Pack/WASM 插件体系已从产品目标中移除。
 
 ## 1. 产品形态
 
@@ -37,4 +37,3 @@ mcode-desktop (GPUI, Windows)
 | [01-agent-core.md](01-agent-core.md) | Agent loop、turn 模型、steer/follow-up、事件契约 |
 | [02-tools-permissions.md](02-tools-permissions.md) | canonical tools 与安全契约 |
 | [09-desktop-ui.md](09-desktop-ui.md) | 桌面布局、桥接模型、设置页结构 |
-| [../../plan.md](../../plan.md) | 唯一路线图与交付状态 |

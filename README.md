@@ -39,9 +39,7 @@ target/release/mcode-desktop.exe
 
 ## 文档
 
-- [plan.md](plan.md) — 路线图与交付状态
 - [docs/design/](docs/design/README.md) — 架构与契约
-- [docs/research/2026-09-18-minimax-code-notes.md](docs/research/2026-09-18-minimax-code-notes.md) — MiniMax Code（pi 衍生）架构学习笔记
 
 ## License
 

@@ -10,4 +10,3 @@
 | [01-agent-core.md](01-agent-core.md) | Agent loop、turn 模型、steer/follow-up、事件契约 |
 | [02-tools-permissions.md](02-tools-permissions.md) | canonical tools 安全契约 |
 | [09-desktop-ui.md](09-desktop-ui.md) | 桌面布局、桥接模型、设置页结构 |
-| [../../plan.md](../../plan.md) | 路线图与交付状态（唯一权威） |
