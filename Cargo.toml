@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/mcode-core",
     "crates/mcode-config",
+    "crates/mcode-catalog",
     "crates/mcode-provider-api",
     "crates/mcode-providers",
     "crates/mcode-tools",
@@ -10,6 +11,7 @@ members = [
     "crates/mcode-session",
     "crates/mcode-web",
     "crates/mcode-mcp",
+    "crates/mcode-updates",
     "crates/mcode-desktop",
 ]
 [workspace.package]
