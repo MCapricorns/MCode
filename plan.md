@@ -67,6 +67,7 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - [ ] T21:内置 Compaction adaptive scheduling、Provider child completion 与 atomic checkpoint。
 - [ ] T22:产品 export/import。
 - [ ] T29:目录预设的 provider 行内多模型勾选(当前默认单模型;更多模型经自定义 endpoint 或重改名预设添加)。
+- [x] T30:opencode v2 式桌面重绘(去系统标题栏 + 自绘窗口控制、应用图标、项目侧栏 + 会话分组/首条消息标题、composer 卡片化、整页设置二级导航、会话↔项目映射 ui.json、JSON 配置落盘格式化、bridge 命令改 tokio channel 修复回合饿死)。
 
 ### v0.1.0 收口
 
