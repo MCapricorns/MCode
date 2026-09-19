@@ -10,6 +10,7 @@
 
 mod anthropic_messages;
 mod driver;
+mod oauth;
 mod openai_completions;
 mod openai_responses;
 mod sse;
@@ -22,6 +23,10 @@ use tokio_util::sync::CancellationToken;
 use mcode_config::ProviderSettings;
 use mcode_provider_api::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
 
+pub use oauth::{
+    COPILOT_PROVIDER_ID, CopilotToken, DeviceCodeStart, DeviceTokenPoll, copilot_bearer,
+    poll_device_token, start_device_flow,
+};
 pub use sse::MAX_FRAME_BYTES;
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
 
