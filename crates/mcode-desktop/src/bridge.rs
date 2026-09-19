@@ -93,8 +93,6 @@ pub enum BridgeCommand {
         provider_id: String,
         /// Model id offered by that provider.
         model: String,
-        /// Conversation history including the committed user message.
-        history: Vec<Message>,
     },
     /// Run one bounded web search over the enabled backend.
     WebSearch {
@@ -505,7 +503,6 @@ fn run_core(
                     expected_head,
                     provider_id,
                     model,
-                    history,
                 } => {
                     let task = chat_turn(
                         state.clone(),
@@ -515,7 +512,6 @@ fn run_core(
                         expected_head,
                         provider_id,
                         model,
-                        history,
                     );
                     tokio::spawn(task);
                     let _ = with_reply.reply.send(BridgeReply::ChatStarted(Ok(())));
@@ -1200,6 +1196,63 @@ async fn read_branch(
     })
 }
 
+/// Rebuilds the model-facing turn history from committed branch events.
+///
+/// Assistant messages keep their tool_use blocks (and thinking signatures),
+/// and tool results replay as `Message::ToolResult`, so the wire sequence
+/// stays valid across turns. Usage and task bookkeeping never reach the
+/// provider.
+async fn ledger_history(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    snapshot_head: &HeadStamp,
+) -> Result<Vec<Message>, SessionError> {
+    let mut history = Vec::new();
+    let mut after: Option<mcode_session::session::SessionEventId> = None;
+    loop {
+        let page = service
+            .read(session, branch, snapshot_head, after.as_ref(), 256)
+            .await?;
+        if page.items.is_empty() {
+            break;
+        }
+        let last = page.items.last().expect("nonempty page").event_id.clone();
+        for event in &page.items {
+            let loaded = service.load_event(session, branch, &event.event_id).await?;
+            match event.kind {
+                EventKind::Message => {
+                    // Assistant messages are typed JSON; a parse miss means
+                    // the payload is the user's plain-text message.
+                    match serde_json::from_slice::<mcode_core::AssistantMessage>(&loaded.payload) {
+                        Ok(assistant) => history.push(Message::Assistant(assistant)),
+                        Err(_) => history.push(Message::User(mcode_core::UserMessage::text(
+                            decode_text(&loaded.payload),
+                        ))),
+                    }
+                }
+                EventKind::ToolResult => {
+                    if let Ok(result) =
+                        serde_json::from_slice::<mcode_core::ToolResultMessage>(&loaded.payload)
+                    {
+                        history.push(Message::ToolResult(result));
+                    }
+                }
+                EventKind::ToolCall | EventKind::Usage | EventKind::Task => {}
+            }
+        }
+        match page.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+        if after.as_ref() == Some(&last) {
+            // Defensive: a cursor equal to the last returned event would loop.
+            break;
+        }
+    }
+    Ok(history)
+}
+
 /// Rewinds the branch so everything from the recalled message onward is
 /// gone, then returns the truncated conversation plus the edited text.
 async fn recall_message(
@@ -1352,7 +1405,6 @@ async fn chat_turn(
     expected_head: HeadStamp,
     provider_id: String,
     model: String,
-    history: Vec<Message>,
 ) {
     let session_id = session.as_str().to_owned();
     let cwd = state.project_dir(&session_id);
@@ -1366,7 +1418,6 @@ async fn chat_turn(
         &provider_id,
         &model,
         cwd,
-        &history,
     )
     .await
     {
@@ -1388,7 +1439,6 @@ async fn run_chat_turn(
     provider_id: &str,
     model: &str,
     cwd: PathBuf,
-    history: &[Message],
 ) -> Result<(), String> {
     let home = &state.home;
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
@@ -1410,6 +1460,12 @@ async fn run_chat_turn(
 
     // The tool working directory is the bound project (created on demand).
     std::fs::create_dir_all(&cwd).map_err(|error| format!("workspace dir: {error}"))?;
+    // Replay history is rebuilt from the ledger's typed events: display
+    // entries flatten tool traffic into text, which breaks the
+    // tool_use/tool_result pairing providers validate.
+    let history = ledger_history(&state.service, &session, &branch, &expected_head)
+        .await
+        .map_err(render_error)?;
     let usage_enabled = settings.usage.enabled;
     let usage_provider = provider_id.to_owned();
     let usage_model = model.to_owned();
@@ -1497,8 +1553,13 @@ async fn run_chat_turn(
     .await;
 
     let resources = mcode_config::discover_resources(home, &cwd);
-    let mut system_prompt = String::from(
-        "You are MCode, a coding agent. Use the provided tools to read, edit, and run code.          Answer concisely and explain what you did.",
+    let mut system_prompt =
+        String::from("You are MCode, a coding agent. Answer concisely and explain what you did.");
+    system_prompt.push_str(
+        "\n\nFile work MUST use the native tools: `find` and `grep` to locate \
+files and code, `read` to inspect them, `write` and `edit` to change them. \
+Use `shell` only when a task genuinely needs a process (build, test, git, \
+package installs) — never to search, read, or write files.",
     );
     for part in mcode_config::render_resource_prompt(&resources) {
         system_prompt.push_str(
@@ -1579,9 +1640,20 @@ async fn run_chat_turn(
                     mcode_core::events::MessageDelta::ToolCallDelta { .. },
                 ) => {}
                 mcode_core::events::AgentEvent::ToolStarted { call_id, name } => {
+                    let spelling = call_id.to_string();
+                    // The ToolCall event must commit before its result; the
+                    // ledger's ordering check rejects results for calls that
+                    // were never opened.
+                    if let Err(error) = writer.open_call(&spelling, &name).await {
+                        let _ = pump_events.send(BridgeEvent::ChatFailed {
+                            session_id: pump_session_id.clone(),
+                            message: render_error(error),
+                        });
+                        return;
+                    }
                     let _ = pump_events.send(BridgeEvent::ToolStarted {
                         session_id: pump_session_id.clone(),
-                        call_id: call_id.to_string(),
+                        call_id: spelling,
                         name,
                     });
                 }
@@ -1593,10 +1665,7 @@ async fn run_chat_turn(
                     let Ok(payload) = serde_json::to_vec(&tool_result) else {
                         return;
                     };
-                    match writer
-                        .write(EventKind::ToolResult, Some(call_id.as_str()), &payload)
-                        .await
-                    {
+                    match writer.close_call(call_id.as_str(), &payload).await {
                         Ok(event_id) => {
                             let entry = project_tool_result(&event_id, &payload);
                             let _ = pump_events.send(BridgeEvent::ToolCompleted {
@@ -1628,7 +1697,7 @@ async fn run_chat_turn(
                     };
                     match serde_json::to_vec(&message) {
                         Ok(payload) => {
-                            match writer.write(EventKind::Message, None, &payload).await {
+                            match writer.write(EventKind::Message, &payload).await {
                                 Ok(event_id) => {
                                     let entry = project_assistant_from(&event_id, &payload);
                                     if usage_enabled && let Some(usage) = message.usage {
@@ -1640,7 +1709,7 @@ async fn run_chat_turn(
                                         });
                                         if let Ok(bytes) = serde_json::to_vec(&usage_payload)
                                             && let Ok(usage_event) =
-                                                writer.write(EventKind::Usage, None, &bytes).await
+                                                writer.write(EventKind::Usage, &bytes).await
                                         {
                                             let _ = pump_events.send(BridgeEvent::UsageRecorded {
                                                 session_id: pump_session_id.clone(),
@@ -1713,6 +1782,11 @@ struct HeadWriter {
     session: SessionId,
     branch: BranchId,
     head: Arc<tokio::sync::Mutex<HeadStamp>>,
+    /// Provider tool-call ids mapped to their open ledger call identity.
+    /// The ledger's ordering check requires every ToolResult to resolve a
+    /// ToolCall event with the same identity, so the identity is minted
+    /// once at ToolStarted and reused at ToolCompleted.
+    calls: Arc<tokio::sync::Mutex<HashMap<String, SessionCallId>>>,
 }
 
 impl HeadWriter {
@@ -1722,7 +1796,39 @@ impl HeadWriter {
             session,
             branch,
             head: Arc::new(tokio::sync::Mutex::new(head)),
+            calls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Opens the ledger call identity for one provider tool call and commits
+    /// the ToolCall event (payload carries the tool name for replay).
+    async fn open_call(&self, provider_call_id: &str, name: &str) -> Result<(), SessionError> {
+        let identity = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
+        self.calls
+            .lock()
+            .await
+            .insert(provider_call_id.to_owned(), identity.clone());
+        let payload = serde_json::json!({ "name": name });
+        let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
+        self.write_event(EventKind::ToolCall, Some(identity), &bytes)
+            .await
+            .map(|_| ())
+    }
+
+    /// Commits one ToolResult under the identity opened at ToolStarted.
+    async fn close_call(
+        &self,
+        provider_call_id: &str,
+        payload: &[u8],
+    ) -> Result<String, SessionError> {
+        let identity = self
+            .calls
+            .lock()
+            .await
+            .remove(provider_call_id)
+            .ok_or(SessionError::InvalidArgument)?;
+        self.write_event(EventKind::ToolResult, Some(identity), payload)
+            .await
     }
 
     /// The current committed head spelling, for UI refresh after any
@@ -1733,17 +1839,18 @@ impl HeadWriter {
     }
 
     /// Commits one payload of `kind` and returns (event id spelling, bytes).
-    async fn write(
+    async fn write(&self, kind: EventKind, payload: &[u8]) -> Result<String, SessionError> {
+        self.write_event(kind, None, payload).await
+    }
+
+    /// Commits one payload of `kind` under an explicit ledger call identity.
+    async fn write_event(
         &self,
         kind: EventKind,
-        call_id: Option<&str>,
+        ledger_call: Option<SessionCallId>,
         payload: &[u8],
     ) -> Result<String, SessionError> {
         let mut head = self.head.lock().await;
-        let ledger_call = match call_id {
-            Some(_) => Some(SessionCallId::generate().ok_or(SessionError::Corrupt)?),
-            None => None,
-        };
         let reservation = self
             .service
             .reserve_event(&self.session, &self.branch, kind, ledger_call, payload)
@@ -1862,7 +1969,7 @@ impl mcode_tools::builtin::TodoStore for BridgeTodoStore {
         let payload = document
             .to_payload()
             .map_err(|error| mcode_tools::ToolError::Execution(error.to_string()))?;
-        if let Err(error) = self.writer.write(EventKind::Task, None, &payload).await {
+        if let Err(error) = self.writer.write(EventKind::Task, &payload).await {
             return Err(mcode_tools::ToolError::Execution(render_error(error)));
         }
 
@@ -2571,6 +2678,105 @@ mod tests {
             usage: None,
             stop_reason: mcode_core::StopReason::Stop,
         })
+    }
+
+    #[tokio::test]
+    async fn ledger_history_preserves_tool_traffic() {
+        let (_parent, layout) = home();
+        let service = SessionService::new(&layout);
+        let created = service.create().await.expect("session created");
+        let session = created.session_id;
+        let branch = created.branch_id;
+        let writer = HeadWriter::new(
+            service.clone(),
+            session.clone(),
+            branch.clone(),
+            HeadStamp::Empty,
+        );
+
+        // A tool-using turn: user ask, assistant tool_use, tool result,
+        // usage bookkeeping, then the next user message.
+        writer
+            .write(EventKind::Message, b"list the rust files")
+            .await
+            .expect("user commit");
+        let assistant = mcode_core::AssistantMessage {
+            blocks: vec![mcode_core::ContentBlock::ToolCall(
+                mcode_core::ToolCall::new("call-1", "find", serde_json::json!({"pattern": "*.rs"})),
+            )],
+            usage: None,
+            stop_reason: mcode_core::StopReason::ToolUse,
+        };
+        writer
+            .write(
+                EventKind::Message,
+                &serde_json::to_vec(&assistant).expect("assistant json"),
+            )
+            .await
+            .expect("assistant commit");
+        let tool_result = mcode_core::ToolResultMessage {
+            tool_call_id: "call-1".to_owned(),
+            content: vec![mcode_core::ContentBlock::Text(mcode_core::TextBlock::new(
+                "src/main.rs",
+            ))],
+            is_error: false,
+            details: None,
+        };
+        writer
+            .open_call("call-1", "find")
+            .await
+            .expect("tool call commit");
+        let result_id = writer
+            .close_call(
+                "call-1",
+                &serde_json::to_vec(&tool_result).expect("result json"),
+            )
+            .await
+            .expect("tool result commit");
+        writer
+            .write(
+                EventKind::Usage,
+                br#"{"provider":"p","model":"m","input_tokens":1,"output_tokens":2}"#,
+            )
+            .await
+            .expect("usage commit");
+        let head = HeadStamp::Event(
+            mcode_session::session::SessionEventId::parse(&result_id).expect("head id"),
+        );
+
+        let history = ledger_history(&service, &session, &branch, &head)
+            .await
+            .expect("history read");
+        assert_eq!(history.len(), 3, "usage events never reach the model");
+        assert!(matches!(
+            &history[0],
+            Message::User(user) if user_content_text(user) == "list the rust files"
+        ));
+        match &history[1] {
+            Message::Assistant(assistant) => match assistant.blocks.first() {
+                Some(mcode_core::ContentBlock::ToolCall(call)) => {
+                    assert_eq!(call.id, "call-1");
+                    assert_eq!(call.name, "find");
+                }
+                other => panic!("expected a tool_use block, got {other:?}"),
+            },
+            other => panic!("expected an assistant message, got {other:?}"),
+        }
+        match &history[2] {
+            Message::ToolResult(result) => assert_eq!(result.tool_call_id, "call-1"),
+            other => panic!("expected a tool result, got {other:?}"),
+        }
+    }
+
+    /// Flat text of a user message's content blocks (test helper).
+    fn user_content_text(user: &mcode_core::UserMessage) -> String {
+        user.content
+            .iter()
+            .filter_map(|block| match block {
+                mcode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]

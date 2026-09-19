@@ -525,22 +525,8 @@ impl Workspace {
             );
             return;
         };
-        let history: Vec<mcode_core::Message> = conversation
-            .entries
-            .iter()
-            .map(|entry| match entry.kind {
-                crate::view_model::EntryKind::UserMessage => {
-                    mcode_core::Message::User(mcode_core::UserMessage::text(entry.text.clone()))
-                }
-                _ => mcode_core::Message::Assistant(mcode_core::AssistantMessage {
-                    blocks: vec![mcode_core::ContentBlock::Text(mcode_core::TextBlock::new(
-                        entry.text.clone(),
-                    ))],
-                    usage: None,
-                    stop_reason: mcode_core::StopReason::Stop,
-                }),
-            })
-            .collect();
+        // The bridge rebuilds the turn history from the ledger's typed
+        // events, so tool_use/tool_result pairing survives replay.
         self.dispatch(
             BridgeCommand::ChatTurn {
                 session,
@@ -548,7 +534,6 @@ impl Workspace {
                 expected_head,
                 provider_id: provider.id.clone(),
                 model,
-                history,
             },
             cx,
         );
