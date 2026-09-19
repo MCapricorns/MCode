@@ -73,6 +73,10 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 
 - [x] final:workspace 全量 audit(含目录下载/更新下载的安全边界)、发布 `v0.1.0` tag + GitHub Release(Windows/macOS 双平台产物)。
 
+### v0.2.0 收口
+
+- [x] release:T29/T30/T20/T21/T22 + 设置校验错误字段级提示 + provider 端点拼接容错(修复 MiniMax `/v1` 双拼 404)与真实配置 E2E;发布 `v0.2.0` tag(Windows/macOS 双平台产物)。
+
 依赖主线:`T9 -> T10 -> T11 -> T12`;T13–T15 依赖 T11;T16+ 依赖 T12。
 
 ## 开发门禁
