@@ -1002,15 +1002,22 @@ impl Workspace {
         let Some(preset) = catalog.provider(provider_id) else {
             return;
         };
-        let Some(model) = self
-            .vm
-            .preset_model
-            .clone()
-            .filter(|model| preset.models.iter().any(|entry| entry.id == *model))
-            .or_else(|| preset.models.first().map(|entry| entry.id.clone()))
-        else {
-            return;
-        };
+        // Checked models in catalog order; an empty selection falls back to
+        // the catalog's first model.
+        let checked = self.vm.preset_models.clone();
+        let mut models: Vec<String> = preset
+            .models
+            .iter()
+            .filter(|entry| checked.contains(&entry.id))
+            .map(|entry| entry.id.clone())
+            .collect();
+        if models.is_empty() {
+            let Some(first) = preset.models.first() else {
+                return;
+            };
+            models.push(first.id.clone());
+        }
+        let model = models[0].clone();
         // Unique id: the catalog spelling, suffixed when already configured.
         let mut id = preset.id.clone();
         let mut suffix = 2;
@@ -1035,7 +1042,7 @@ impl Workspace {
                 id: id.clone(),
                 kind: preset.kind.clone(),
                 base_url: preset.base_url.clone(),
-                models: vec![model.clone()],
+                models,
                 enabled: true,
             }),
             cx,

@@ -628,11 +628,12 @@ fn render_preset_form(
         .take(64)
         .map(|model| model.id.clone())
         .collect();
-    let chosen = workspace
-        .vm()
-        .preset_model
-        .clone()
-        .unwrap_or_else(|| models.first().cloned().unwrap_or_default());
+    let checked: Vec<String> = workspace.vm().preset_models.clone();
+    let selection_label = match checked.len() {
+        0 => models.first().cloned().unwrap_or_default(),
+        1 => checked[0].clone(),
+        n => format!("{} (+{} more)", checked[0], n - 1),
+    };
     let menu_open = workspace.vm().preset_model_menu_open;
     let provider_id_owned = provider_id.to_owned();
     let theme = cx.theme();
@@ -657,10 +658,10 @@ fn render_preset_form(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_xs().opacity(0.6).child("Default model"))
+                .child(div().text_xs().opacity(0.6).child("Models"))
                 .child(
                     Button::new("preset-model-chip")
-                        .label(chosen.clone())
+                        .label(selection_label)
                         .small()
                         .outline()
                         .on_click(cx.listener(|workspace, _, _, cx| {
@@ -683,9 +684,15 @@ fn render_preset_form(
                             .flex_col()
                             .gap_px()
                             .children(models.into_iter().map(|model| {
+                                let selected = checked.contains(&model);
                                 let model_for_click = model.clone();
                                 div()
                                     .id(format!("preset-model-{model}"))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
@@ -694,17 +701,20 @@ fn render_preset_form(
                                     .hover(|this| this.bg(theme.secondary))
                                     .on_click(cx.listener(move |workspace, _, _, cx| {
                                         workspace.apply_action(
-                                            DesktopAction::PresetModelChanged(
+                                            DesktopAction::PresetModelToggled(
                                                 model_for_click.clone(),
                                             ),
                                             cx,
                                         );
-                                        workspace.apply_action(
-                                            DesktopAction::PresetModelMenuToggled(false),
-                                            cx,
-                                        );
                                     }))
                                     .child(model)
+                                    .when(selected, |this| {
+                                        this.child(
+                                            Icon::new(IconName::Check)
+                                                .xsmall()
+                                                .text_color(theme.primary),
+                                        )
+                                    })
                             })),
                     )
                 }),

@@ -327,8 +327,9 @@ pub struct WorkspaceState {
     pub preset_search: String,
     /// The catalog provider currently being added, when any.
     pub active_preset: Option<String>,
-    /// Model chosen in the active preset form.
-    pub preset_model: Option<String>,
+    /// Models checked in the active preset form; empty means the catalog's
+    /// first model is used as the sole default.
+    pub preset_models: Vec<String>,
     /// Whether the preset form's model dropdown is open.
     pub preset_model_menu_open: bool,
 }
@@ -473,8 +474,8 @@ pub enum DesktopAction {
     PresetSearchChanged(String),
     /// A preset form opened or closed.
     ActivePresetChanged(Option<String>),
-    /// The active preset form selected a model.
-    PresetModelChanged(String),
+    /// The active preset form toggled one model's checkbox.
+    PresetModelToggled(String),
     /// The preset form's model dropdown opened or closed.
     PresetModelMenuToggled(bool),
     /// Self-update progress changed.
@@ -794,18 +795,17 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ModelMenuToggled(open) => state.model_menu_open = open,
         DesktopAction::PresetSearchChanged(text) => state.preset_search = text,
         DesktopAction::ActivePresetChanged(preset) => {
-            state.active_preset = preset.clone();
+            state.active_preset = preset;
             state.preset_model_menu_open = false;
-            state.preset_model = preset.and_then(|id| {
-                state
-                    .catalog
-                    .as_ref()
-                    .and_then(|catalog| catalog.provider(&id))
-                    .and_then(|provider| provider.models.first())
-                    .map(|model| model.id.clone())
-            });
+            state.preset_models = Vec::new();
         }
-        DesktopAction::PresetModelChanged(model) => state.preset_model = Some(model),
+        DesktopAction::PresetModelToggled(model) => {
+            if let Some(position) = state.preset_models.iter().position(|m| *m == model) {
+                state.preset_models.remove(position);
+            } else {
+                state.preset_models.push(model);
+            }
+        }
         DesktopAction::PresetModelMenuToggled(open) => state.preset_model_menu_open = open,
         DesktopAction::UpdateStateChanged(update) => state.update = update,
         DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
