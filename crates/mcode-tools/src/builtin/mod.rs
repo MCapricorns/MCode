@@ -14,6 +14,7 @@ mod powershell;
 pub(crate) mod process;
 pub mod read;
 pub mod shell;
+pub mod task;
 pub mod todo;
 pub mod write;
 
@@ -24,6 +25,7 @@ pub use find::FindTool;
 pub use grep::GrepTool;
 pub use read::ReadTool;
 pub use shell::ShellTool;
+pub use task::{SubagentRequest, TaskHost, TaskTool};
 pub use todo::{TodoStore, TodoWireTask, TodoWriteTool};
 pub use write::WriteTool;
 

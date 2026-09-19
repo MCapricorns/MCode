@@ -15,7 +15,7 @@
 //! arrives. `UnboundedSender::send` is synchronous, so the UI side never
 //! touches async machinery.
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
@@ -455,6 +455,9 @@ fn run_core(
         // The state lives behind one Arc: `SessionService` retires its
         // publication when a clone is dropped, so clones must share one
         // instance instead of duplicating it.
+        // Subagent worktree leases from a crashed process are recovered
+        // before any new turn can run.
+        recover_task_worktrees(&home);
         let state = Arc::new(CoreState::new(home));
         spawn_catalog_refresh(state.clone(), events.clone());
         spawn_update_check(state.clone(), events.clone());
@@ -1187,7 +1190,7 @@ async fn run_chat_turn(
         ResolvedProvider::resolve(provider, model, &api_key, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
     let transport = ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?;
-    let wire = WireProvider::new(resolved, Arc::new(transport));
+    let wire = WireProvider::new(resolved.clone(), Arc::new(transport));
 
     // The tool working directory is the bound project (created on demand).
     std::fs::create_dir_all(&cwd).map_err(|error| format!("workspace dir: {error}"))?;
@@ -1220,6 +1223,15 @@ async fn run_chat_turn(
             answer: tokio::sync::Mutex::new(Some(answer_rx)),
         });
         registry.register(Arc::new(mcode_tools::builtin::AskTool::new(channel)));
+        // task delegates scoped work to a subagent on the same provider;
+        // bounded slots, timeout, and worktree leases live in the host.
+        registry.register(Arc::new(mcode_tools::builtin::TaskTool::new(Arc::new(
+            BridgeTaskHost {
+                resolved: resolved.clone(),
+                home: home.clone(),
+                cwd: cwd.clone(),
+            },
+        ))));
         // todo_write persists the plan and appends a durable Task event.
         let todo_events = events.clone();
         let todo_session = session_id.to_owned();
@@ -1905,10 +1917,292 @@ async fn compact_history(
     compacted
 }
 
+// ---- subagents (T20) ----
+
+/// Concurrent subagent slots across the process.
+static TASK_SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+/// Maximum subagents running at once.
+const MAX_CONCURRENT_SUBAGENTS: usize = 4;
+/// Wall budget for one subagent.
+const SUBAGENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// Subagent system brief: the delegation is one-shot, no user interaction.
+const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MCode subagent. Complete the delegated task \\
+with the provided tools, then finish with your final answer as the last message. \\
+You cannot ask the user questions; make reasonable assumptions and report them.";
+
+/// Host for the `task` tool: runs one nested agent on the turn's provider
+/// with the built-in tools only (no ask_user, no task — depth stays at one).
+struct BridgeTaskHost {
+    resolved: ResolvedProvider,
+    home: mcode_config::HomeLayout,
+    cwd: PathBuf,
+}
+
+/// One git worktree lease: a disposable checkout plus its manifest, so a
+/// crashed process can recover leases on the next start.
+struct WorktreeLease {
+    path: PathBuf,
+    manifest: PathBuf,
+}
+
+impl WorktreeLease {
+    /// Creates a detached worktree of the current repository HEAD.
+    fn acquire(home: &mcode_config::HomeLayout, repo: &Path) -> Result<Self, String> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        let id = format!("task-{}-{stamp}", std::process::id());
+        let leases = home.root().join("task-worktrees");
+        std::fs::create_dir_all(&leases).map_err(|error| format!("lease dir: {error}"))?;
+        let path = leases.join(&id);
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "add", "--detach"])
+            .arg(&path)
+            .output()
+            .map_err(|error| format!("git worktree: {error}"))?;
+        if !output.status.success() {
+            let _ = std::fs::remove_dir(&path);
+            let reason = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("git worktree add failed: {}", reason.trim()));
+        }
+        let manifest = leases.join(format!("{id}.json"));
+        let record = serde_json::json!({
+            "repo": repo.to_string_lossy(),
+            "path": path.to_string_lossy(),
+        });
+        std::fs::write(&manifest, record.to_string())
+            .map_err(|error| format!("lease manifest: {error}"))?;
+        Ok(Self { path, manifest })
+    }
+
+    /// Releases the lease; best-effort because the work may be done.
+    fn release(self) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .output();
+        // Retry by repo path when the lease checkout itself is broken.
+        if matches!(&output, Ok(result) if !result.status.success())
+            && let Ok(record) = std::fs::read(&self.manifest)
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&record)
+            && let Some(repo) = value["repo"].as_str()
+        {
+            let _ = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["worktree", "remove", "--force"])
+                .arg(&self.path)
+                .output();
+        }
+        let _ = std::fs::remove_file(&self.manifest);
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Removes leases left behind by a crashed process. Best-effort: a lease
+/// whose repo is gone is simply deleted from disk.
+fn recover_task_worktrees(home: &mcode_config::HomeLayout) {
+    let leases = home.root().join("task-worktrees");
+    let Ok(entries) = std::fs::read_dir(&leases) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            if let Ok(bytes) = std::fs::read(&path)
+                && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                && let (Some(repo), Some(lease)) = (value["repo"].as_str(), value["path"].as_str())
+            {
+                let _ = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(repo)
+                    .args(["worktree", "remove", "--force"])
+                    .arg(lease)
+                    .output();
+            }
+            let _ = std::fs::remove_file(&path);
+        } else {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl mcode_tools::builtin::TaskHost for BridgeTaskHost {
+    async fn run_subagent(
+        &self,
+        request: mcode_tools::builtin::SubagentRequest,
+        progress: &mcode_tools::ToolStream,
+        cancel: &CancellationToken,
+    ) -> Result<String, mcode_tools::ToolError> {
+        let fail = |message: String| mcode_tools::ToolError::Execution(message);
+        let _ = progress.progress(format!("task queued: {}", request.description));
+        // Bounded queue: wait for a slot or cancellation.
+        let semaphore =
+            TASK_SLOTS.get_or_init(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_SUBAGENTS));
+        let permit = tokio::select! {
+            permit = semaphore.acquire() => permit.map_err(|_| fail("task slots closed".to_owned()))?,
+            _ = cancel.cancelled() => return Err(fail("task cancelled".to_owned())),
+        };
+        let lease = if request.worktree {
+            match WorktreeLease::acquire(&self.home, &self.cwd) {
+                Ok(lease) => Some(lease),
+                Err(message) => return Err(fail(message)),
+            }
+        } else {
+            None
+        };
+        let result = self
+            .drive_subagent(&request, progress, cancel, lease.as_ref())
+            .await;
+        if let Some(lease) = lease {
+            lease.release();
+        }
+        drop(permit);
+        result
+    }
+}
+
+impl BridgeTaskHost {
+    /// Runs the nested agent to completion under the wall budget.
+    async fn drive_subagent(
+        &self,
+        request: &mcode_tools::builtin::SubagentRequest,
+        progress: &mcode_tools::ToolStream,
+        cancel: &CancellationToken,
+        lease: Option<&WorktreeLease>,
+    ) -> Result<String, mcode_tools::ToolError> {
+        let fail = |message: String| mcode_tools::ToolError::Execution(message);
+        let run_dir = lease
+            .map(|lease| lease.path.clone())
+            .unwrap_or_else(|| self.cwd.clone());
+        let transport =
+            ReqwestTransport::new().map_err(|_| fail("HTTP transport unavailable".to_owned()))?;
+        let wire = WireProvider::new(self.resolved.clone(), Arc::new(transport));
+        let registry = Arc::new({
+            let registry = ToolRegistry::new();
+            mcode_tools::register_builtins(&registry);
+            registry
+        });
+        let run_dir_for_hooks = run_dir.clone();
+        let run_home = self.home.clone();
+        let hooks = HookRunner::default().with_before_tool(move |tool, args| {
+            if !matches!(tool, "write" | "edit") {
+                return;
+            }
+            let Some(raw_path) = args.get("path").and_then(serde_json::Value::as_str) else {
+                return;
+            };
+            // Subagent writes snapshot into a side checkpoint store so the
+            // parent session's rollback surface stays unchanged.
+            let session = format!("task-{}", std::process::id());
+            let path = std::path::PathBuf::from(raw_path);
+            let absolute = if path.is_absolute() {
+                path
+            } else {
+                run_dir_for_hooks.join(path)
+            };
+            let _ = mcode_config::checkpoint_file(&run_home, &session, &absolute);
+        });
+
+        let child_cancel = CancellationToken::new();
+        // Parent cancellation or timeout aborts the child.
+        let link = {
+            let child_cancel = child_cancel.clone();
+            let parent = cancel.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = parent.cancelled() => child_cancel.cancel(),
+                    _ = child_cancel.cancelled() => {}
+                }
+            })
+        };
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
+        let description = request.description.clone();
+        let progress_sink = progress.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Ok(event) = event_rx.recv().await {
+                if let mcode_core::events::AgentEvent::ToolStarted { name, .. } = event {
+                    let _ = progress_sink.progress(format!("{description}: {name}"));
+                }
+            }
+        });
+
+        let env = mcode_agent::TurnEnv::new(&wire, &registry, &hooks)
+            .with_cancel(child_cancel.clone())
+            .with_events(event_tx)
+            .with_cwd(run_dir);
+        let mut agent = Agent::new(AgentConfig::new().with_system_prompt(SUBAGENT_SYSTEM_PROMPT));
+        let prompt = Message::User(mcode_core::UserMessage::text(request.prompt.clone()));
+        let outcome = tokio::time::timeout(SUBAGENT_TIMEOUT, agent.prompt(prompt, &env)).await;
+        link.abort();
+        forwarder.abort();
+        match outcome {
+            Ok(Ok(_)) => (),
+            Ok(Err(error)) => return Err(fail(format!("subagent failed: {error}"))),
+            Err(_) => {
+                child_cancel.cancel();
+                return Err(fail("subagent timed out".to_owned()));
+            }
+        };
+        let answer = agent
+            .state()
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::Assistant(assistant) => {
+                    let text: String = assistant
+                        .blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            mcode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    (!text.trim().is_empty()).then_some(text)
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        if answer.trim().is_empty() {
+            return Err(fail("subagent returned no answer".to_owned()));
+        }
+        Ok(answer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mcode_session::session::EventKind;
+
+    #[test]
+    fn worktree_lease_acquires_and_releases() {
+        let (_parent, layout) = home();
+        let repo = std::env::current_dir().expect("cwd");
+        // Only meaningful inside a git checkout; skip elsewhere.
+        if !repo.join(".git").exists() {
+            return;
+        }
+        let lease = WorktreeLease::acquire(&layout, &repo).expect("lease");
+        assert!(lease.path.is_dir());
+        let manifest = lease.manifest.clone();
+        let checkout = lease.path.clone();
+        assert!(manifest.exists());
+        lease.release();
+        assert!(!manifest.exists());
+        assert!(!checkout.exists());
+    }
 
     fn user_msg(text: &str) -> Message {
         Message::User(mcode_core::UserMessage::text(text))
