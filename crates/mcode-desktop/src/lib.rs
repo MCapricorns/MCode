@@ -6,6 +6,7 @@
 //! only renders state and dispatches commands. No core type, file path, or
 //! credential ever reaches this crate's render code.
 pub mod bridge;
+pub mod export;
 pub mod ui;
 pub mod view_model;
 pub mod workspace;

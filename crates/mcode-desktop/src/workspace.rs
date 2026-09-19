@@ -330,6 +330,34 @@ impl Workspace {
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
             }
+            BridgeReply::Exported(Ok(_summary)) => {}
+            BridgeReply::Exported(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::Failed(format!("export failed: {message}")),
+                    cx,
+                );
+            }
+            BridgeReply::Imported(Ok(summary)) => {
+                // Reload everything the bundle may have replaced.
+                self.dispatch(BridgeCommand::LoadSettings, cx);
+                self.dispatch(BridgeCommand::LoadUiState, cx);
+                self.dispatch(BridgeCommand::ListSessions, cx);
+                if summary.sessions > 0 {
+                    self.apply_action(
+                        DesktopAction::Failed(format!(
+                            "imported {} new session(s); restart to see restored history",
+                            summary.sessions
+                        )),
+                        cx,
+                    );
+                }
+            }
+            BridgeReply::Imported(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::Failed(format!("import failed: {message}")),
+                    cx,
+                );
+            }
             BridgeReply::SettingsSaved(Ok(revision)) => {
                 self.apply_action(DesktopAction::SettingsSaved(revision.get()), cx);
             }
@@ -614,6 +642,50 @@ impl Workspace {
     // ---- project selection ----
 
     /// Opens the native folder picker and binds the chosen directory.
+    /// Exports product data (settings, UI state, todos, session ledgers) to
+    /// a file chosen in a save dialog. Secrets never travel.
+    pub(super) fn on_export_data(&mut self, cx: &mut Context<Self>) {
+        let directory = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let suggested = format!("mcode-export-{stamp}.json");
+        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else {
+                return;
+            };
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.dispatch(BridgeCommand::ExportData { path }, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Applies one export bundle chosen in an open dialog. Existing todos and
+    /// sessions are never overwritten.
+    pub(super) fn on_import_data(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose an MCode export bundle".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.first().cloned() else {
+                return;
+            };
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.dispatch(BridgeCommand::ImportData { path }, cx);
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn on_open_project_dialog(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: false,

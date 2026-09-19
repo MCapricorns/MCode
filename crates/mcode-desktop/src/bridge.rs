@@ -113,6 +113,16 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
+    /// Write one product-data export bundle to a user-chosen file.
+    ExportData {
+        /// Destination file chosen in a save dialog.
+        path: PathBuf,
+    },
+    /// Apply one product-data export bundle from a user-chosen file.
+    ImportData {
+        /// Bundle file chosen in an open dialog.
+        path: PathBuf,
+    },
     /// List discovered prompt resources for the session workspace.
     ListResources {
         /// Session identity spelling (selects the workspace directory).
@@ -269,6 +279,8 @@ pub enum BridgeReply {
     McpTools(Result<(String, Vec<String>), String>),
     /// Rollback outcome: restored absolute paths.
     RolledBack(Result<Vec<String>, String>),
+    Exported(Result<crate::export::ExportSummary, String>),
+    Imported(Result<crate::export::ImportSummary, String>),
     /// Resource list: (name, absolute path) pairs.
     Resources(Result<Vec<(String, String)>, String>),
     /// The user's answers were delivered to the waiting tool.
@@ -661,6 +673,8 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
         BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
         BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
+        BridgeCommand::ExportData { .. } => BridgeReply::Exported(Err(message)),
+        BridgeCommand::ImportData { .. } => BridgeReply::Imported(Err(message)),
         BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
         BridgeCommand::AskAnswer { .. } => BridgeReply::AskAnswered(Err(message)),
         BridgeCommand::GetCatalog | BridgeCommand::RefreshCatalog => {
@@ -728,6 +742,26 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             mcode_config::rollback_session(&state.home, session_id)
                 .map_err(|error| render_config_error(&error)),
         ),
+        BridgeCommand::ExportData { path } => {
+            let home = state.home.clone();
+            let path = path.clone();
+            let outcome =
+                tokio::task::spawn_blocking(move || crate::export::export_to_file(&home, &path))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|outcome| outcome);
+            BridgeReply::Exported(outcome)
+        }
+        BridgeCommand::ImportData { path } => {
+            let home = state.home.clone();
+            let path = path.clone();
+            let outcome =
+                tokio::task::spawn_blocking(move || crate::export::import_from_file(&home, &path))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|outcome| outcome);
+            BridgeReply::Imported(outcome)
+        }
         BridgeCommand::ListResources { session_id } => {
             BridgeReply::Resources(list_resources(state, session_id))
         }

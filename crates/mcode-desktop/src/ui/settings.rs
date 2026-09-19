@@ -1098,12 +1098,46 @@ fn render_data_section(workspace: &mut Workspace, cx: &mut Context<Workspace>) -
             .into_any_element(),
     );
     let theme = cx.theme();
+    let transfer_row = div()
+        .id("data-transfer")
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .pt_1()
+        .child(
+            Button::new("data-export")
+                .icon(IconName::Download)
+                .label("Export data\u{2026}")
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_export_data(cx);
+                })),
+        )
+        .child(
+            Button::new("data-import")
+                .icon(IconName::Upload)
+                .label("Import data\u{2026}")
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_import_data(cx);
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .opacity(0.55)
+                .child("Settings, todos, and sessions — API keys stay on this machine."),
+        )
+        .into_any_element();
     settings_card(
         "data",
         "Data",
         Some("Usage records and moving your configuration between machines."),
         theme,
-        vec![usage_row],
+        vec![usage_row, transfer_row],
     )
     .into_any_element()
 }
