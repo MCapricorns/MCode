@@ -199,6 +199,7 @@ fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoEl
         .flex_row()
         .items_center()
         .gap_2()
+        .group("session-row")
         .px_2()
         .py(px(6.))
         .rounded(px(7.))
@@ -216,6 +217,27 @@ fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoEl
                 workspace.on_open_session(&session_id, cx);
             })
         })
+        .child(
+            div()
+                .id(format!("session-delete-{}", summary.session_id))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(22.))
+                .rounded(px(5.))
+                .opacity(0.0)
+                .group_hover("session-row", |this| this.opacity(1.0))
+                .cursor_pointer()
+                .text_color(theme.muted_foreground)
+                .hover(|this| this.bg(theme.sidebar_accent))
+                .on_click({
+                    let session_id = session_id.clone();
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_delete_session(&session_id, cx);
+                    })
+                })
+                .child(Icon::new(IconName::Trash).xsmall()),
+        )
         .child(
             Icon::new(IconName::MessageSquare)
                 .xsmall()

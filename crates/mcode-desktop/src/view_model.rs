@@ -340,6 +340,8 @@ pub enum DesktopAction {
     SessionCreated(SessionSummary),
     /// A session finished recovery and its conversation is ready.
     ConversationOpened(ActiveConversation),
+    /// The open session's data was deleted; drop the conversation.
+    SessionDeleted,
     /// The composer text changed.
     ComposerChanged(String),
     /// The composer sent; the entry was durably committed.
@@ -518,6 +520,12 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 entries: Vec::new(),
                 streaming: None,
             });
+        }
+        DesktopAction::SessionDeleted => {
+            state.active = None;
+            state.sending = false;
+            state.pending_ask = None;
+            state.error = None;
         }
         DesktopAction::ConversationOpened(conversation) => {
             let session_id = conversation.session_id.clone();

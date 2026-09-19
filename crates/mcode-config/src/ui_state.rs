@@ -78,6 +78,16 @@ impl UiState {
     /// Binds one session to a project directory (upsert, most recent first).
     ///
     /// Invalid ids or paths are dropped silently, like `touch_project`.
+    /// Drops one directory from the remembered projects (and last-project
+    /// pin when it matches).
+    pub fn remove_recent(&mut self, project: &str) {
+        self.recent_projects.retain(|existing| existing != project);
+        if self.last_project.as_deref() == Some(project) {
+            self.last_project = self.recent_projects.first().cloned();
+        }
+    }
+
+    /// Upserts one session's project binding at the front of the list.
     pub fn set_session_project(&mut self, session_id: &str, project: &str) {
         let Some(project) = valid_project_path(project) else {
             return;

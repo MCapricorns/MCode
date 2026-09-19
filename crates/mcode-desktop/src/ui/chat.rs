@@ -61,17 +61,19 @@ pub(super) fn render_chat(
                         .when(entries.is_empty() && streaming.is_none(), |this| {
                             this.child(render_welcome(workspace, cx))
                         })
-                        .children(
-                            entries
-                                .into_iter()
-                                .map(|entry| render_entry(entry, cx.theme()).into_any_element()),
-                        )
+                        .children(entries.into_iter().enumerate().map(|(index, entry)| {
+                            if entry.kind == EntryKind::UserMessage {
+                                render_user_entry(entry, index > 0, index, cx)
+                            } else {
+                                render_entry(entry, cx.theme()).into_any_element()
+                            }
+                        }))
                         .when_some(streaming, |this, streaming| {
                             this.child(render_streaming_entry(streaming, cx.theme()))
                         }),
                 ),
         )
-        .child(render_composer(workspace, cx))
+        .child(render_composer(workspace, _window, cx))
         .into_any_element()
 }
 
@@ -211,6 +213,27 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                 })
                             })
                             .child(
+                                div()
+                                    .id(format!("recent-remove-{}", super::short_id(&project)))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(20.))
+                                    .rounded(px(5.))
+                                    .opacity(0.0)
+                                    .group_hover("recent-row", |this| this.opacity(1.0))
+                                    .cursor_pointer()
+                                    .text_color(theme.muted_foreground)
+                                    .hover(|this| this.bg(theme.secondary))
+                                    .on_click({
+                                        let project = project.clone();
+                                        cx.listener(move |workspace, _, _, cx| {
+                                            workspace.on_remove_recent(&project, cx);
+                                        })
+                                    })
+                                    .child(Icon::new(IconName::X).xsmall()),
+                            )
+                            .child(
                                 Icon::new(IconName::Folder)
                                     .xsmall()
                                     .text_color(theme.muted_foreground),
@@ -319,9 +342,16 @@ fn render_entry(entry: ConversationEntry, theme: &Theme) -> impl IntoElement {
 
 /// The bottom composer: a single card with the textarea on top and a chip
 /// row (project, model, send) inside it — the opencode desktop shape.
-fn render_composer(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
-    let theme = cx.theme();
+fn render_composer(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
     let composer = workspace.composer().clone();
+    if let Some(text) = workspace.take_composer_prefill() {
+        composer.update(cx, |state, cx| state.set_value(text, window, cx));
+    }
+    let theme = cx.theme();
     let model_label: SharedString = model_picker_label(workspace.vm()).into();
     let has_session = workspace.vm().active.is_some();
     let sending = workspace.vm().sending;
@@ -436,6 +466,90 @@ fn render_composer(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> im
                     ),
             ),
     )
+}
+
+/// One user bubble with hover actions: edit-and-resend (rewinds to before
+/// this message and prefills the composer) and recall (drops this message
+/// and everything after). The first message has no prior event to rewind
+/// to, so its actions hide.
+fn render_user_entry(
+    entry: ConversationEntry,
+    can_rewind: bool,
+    index: usize,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let mut bubble = div()
+        .id(format!("entry-{}", entry.event_id))
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap_1()
+        .group("user-entry")
+        .child(
+            div()
+                .max_w(rems(40.))
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .rounded_tr(px(4.))
+                .text_sm()
+                .bg(theme.primary)
+                .text_color(theme.primary_foreground)
+                .child(entry.text),
+        );
+    if can_rewind {
+        bubble = bubble.child(
+            div()
+                .id(format!("entry-actions-{index}"))
+                .flex()
+                .flex_row()
+                .gap_1()
+                .opacity(0.0)
+                .group_hover("user-entry", |this| this.opacity(1.0))
+                .child(
+                    div()
+                        .id(format!("entry-edit-{index}"))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .h(px(22.))
+                        .rounded(px(6.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|this| this.bg(theme.secondary))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_edit_message(index, cx);
+                        }))
+                        .child(Icon::new(IconName::Pen).xsmall())
+                        .child("edit"),
+                )
+                .child(
+                    div()
+                        .id(format!("entry-recall-{index}"))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .h(px(22.))
+                        .rounded(px(6.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|this| this.bg(theme.secondary))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_recall_message(index, cx);
+                        }))
+                        .child(Icon::new(IconName::RefreshCcw).xsmall())
+                        .child("recall"),
+                ),
+        );
+    }
+    bubble.into_any_element()
 }
 
 fn model_picker_label(vm: &crate::view_model::WorkspaceState) -> String {

@@ -64,6 +64,8 @@ pub struct Workspace {
     preset_search_input: Option<Entity<InputState>>,
     ask_input: Option<Entity<InputState>>,
     pending_project: Option<String>,
+    /// Draft restored by 撤回修改, applied on the next render (needs a window).
+    pending_composer_prefill: Option<String>,
     pending_catalog_refresh: bool,
     runtime_ticks: u64,
 }
@@ -95,6 +97,7 @@ impl Workspace {
             preset_search_input: None,
             ask_input: None,
             pending_project: None,
+            pending_composer_prefill: None,
             pending_catalog_refresh: false,
             runtime_ticks: 0,
         });
@@ -356,6 +359,21 @@ impl Workspace {
                     cx,
                 );
             }
+            BridgeReply::Recalled(Ok((conversation, edit))) => {
+                let prefill = edit.clone();
+                self.apply_action(
+                    DesktopAction::ConversationOpened((*conversation).clone()),
+                    cx,
+                );
+                if prefill.is_some() {
+                    self.pending_composer_prefill = prefill;
+                }
+                cx.notify();
+            }
+            BridgeReply::SessionDeleted(Ok(())) => {
+                self.apply_action(DesktopAction::SessionDeleted, cx);
+                self.dispatch(BridgeCommand::ListSessions, cx);
+            }
             BridgeReply::SettingsSaved(Ok(revision)) => {
                 self.apply_action(DesktopAction::SettingsSaved(revision.get()), cx);
             }
@@ -451,6 +469,8 @@ impl Workspace {
             | BridgeReply::ChatStarted(Err(message))
             | BridgeReply::McpTools(Err(message))
             | BridgeReply::RolledBack(Err(message))
+            | BridgeReply::Recalled(Err(message))
+            | BridgeReply::SessionDeleted(Err(message))
             | BridgeReply::Resources(Err(message))
             | BridgeReply::AskAnswered(Err(message)) => {
                 self.apply_action(DesktopAction::Failed(message), cx);
@@ -559,6 +579,98 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    /// Rewinds to just before the user message at `index` and prefills the
+    /// composer with its text (修改). The first message has no prior event to
+    /// rewind to and is ignored.
+    pub(super) fn on_edit_message(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.recall_at(index, true, cx);
+    }
+
+    /// Rewinds to just before the user message at `index` (撤回).
+    pub(super) fn on_recall_message(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.recall_at(index, false, cx);
+    }
+
+    fn recall_at(&mut self, index: usize, edit: bool, cx: &mut Context<Self>) {
+        if self.vm.sending {
+            return;
+        }
+        let Some(conversation) = self.vm.active.clone() else {
+            return;
+        };
+        if index == 0 || index >= conversation.entries.len() {
+            return;
+        }
+        if conversation.entries[index].kind != crate::view_model::EntryKind::UserMessage {
+            return;
+        }
+        let Some(session) = SessionId::parse(&conversation.session_id) else {
+            return;
+        };
+        let Some(branch) = BranchId::parse(&conversation.branch_id) else {
+            return;
+        };
+        let expected_head = parse_head(&conversation.head);
+        let to_event = conversation.entries[index - 1].event_id.clone();
+        let edit = if edit {
+            Some(conversation.entries[index].text.clone())
+        } else {
+            None
+        };
+        self.dispatch(
+            BridgeCommand::RecallMessage {
+                session,
+                branch,
+                expected_head,
+                to_event,
+                edit,
+            },
+            cx,
+        );
+    }
+
+    /// Deletes one session's durable data and drops it if active.
+    pub(super) fn on_delete_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self
+            .vm
+            .active
+            .as_ref()
+            .is_some_and(|conversation| conversation.session_id == session_id)
+        {
+            self.apply_action(DesktopAction::SessionDeleted, cx);
+        }
+        self.dispatch(
+            BridgeCommand::DeleteSession {
+                session_id: session_id.to_owned(),
+            },
+            cx,
+        );
+    }
+
+    /// Removes one directory from the remembered projects list.
+    pub(super) fn on_remove_recent(&mut self, project: &str, cx: &mut Context<Self>) {
+        self.dispatch(
+            BridgeCommand::RemoveRecent {
+                project: project.to_owned(),
+            },
+            cx,
+        );
+        self.apply_action(
+            DesktopAction::ActiveProjectChanged(
+                self.vm
+                    .project_dir
+                    .clone()
+                    .filter(|current| current != project),
+            ),
+            cx,
+        );
+    }
+
+    /// Takes the composer prefill restored by edit-and-resend.
+    pub(super) fn take_composer_prefill(&mut self) -> Option<String> {
+        self.pending_composer_prefill.take()
     }
 
     pub(super) fn on_new_session(&mut self, cx: &mut Context<Self>) {

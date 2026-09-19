@@ -111,6 +111,30 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
+    /// Rewind the branch to just before one user message (recall), with an
+    /// optional edited text to re-send.
+    RecallMessage {
+        /// Session identity spelling.
+        session: SessionId,
+        /// Branch identity spelling.
+        branch: BranchId,
+        /// Head the UI believes the branch is at.
+        expected_head: HeadStamp,
+        /// Event to rewind to (the entry before the recalled message).
+        to_event: String,
+        /// Edited text to prefill for re-sending.
+        edit: Option<String>,
+    },
+    /// Deletes one session's durable data (ledger, todos, checkpoints).
+    DeleteSession {
+        /// Session identity spelling.
+        session_id: String,
+    },
+    /// Removes one directory from the remembered projects list.
+    RemoveRecent {
+        /// The project directory to forget.
+        project: String,
+    },
     /// Write one product-data export bundle to a user-chosen file.
     ExportData {
         /// Destination file chosen in a save dialog.
@@ -277,6 +301,8 @@ pub enum BridgeReply {
     McpTools(Result<(String, Vec<String>), String>),
     /// Rollback outcome: restored absolute paths.
     RolledBack(Result<Vec<String>, String>),
+    Recalled(Result<(Box<ActiveConversation>, Option<String>), String>),
+    SessionDeleted(Result<(), String>),
     Exported(Result<crate::export::ExportSummary, String>),
     Imported(Result<crate::export::ImportSummary, String>),
     /// Resource list: (name, absolute path) pairs.
@@ -671,6 +697,9 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::WebSearch { .. } => BridgeReply::WebSearched(Err(message)),
         BridgeCommand::McpListTools { .. } => BridgeReply::McpTools(Err(message)),
         BridgeCommand::RollbackWorkspace { .. } => BridgeReply::RolledBack(Err(message)),
+        BridgeCommand::RecallMessage { .. } => BridgeReply::Recalled(Err(message)),
+        BridgeCommand::DeleteSession { .. } => BridgeReply::SessionDeleted(Err(message)),
+        BridgeCommand::RemoveRecent { .. } => BridgeReply::UiStateSaved(Err(message)),
         BridgeCommand::ExportData { .. } => BridgeReply::Exported(Err(message)),
         BridgeCommand::ImportData { .. } => BridgeReply::Imported(Err(message)),
         BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
@@ -740,6 +769,46 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             mcode_config::rollback_session(&state.home, session_id)
                 .map_err(|error| render_config_error(&error)),
         ),
+        BridgeCommand::RecallMessage {
+            session,
+            branch,
+            expected_head,
+            to_event,
+            edit,
+        } => {
+            let service = state.service.clone();
+            let session = session.clone();
+            let branch = branch.clone();
+            let expected_head = expected_head.clone();
+            let to_event = to_event.clone();
+            let edit = edit.clone();
+            let task = tokio::spawn(async move {
+                recall_message(&service, &session, &branch, &expected_head, &to_event)
+                    .await
+                    .map(|conversation| (Box::new(conversation), edit))
+            });
+            match task.await {
+                Ok(Ok(payload)) => BridgeReply::Recalled(Ok(payload)),
+                Ok(Err(message)) => BridgeReply::Recalled(Err(message)),
+                Err(error) => BridgeReply::Recalled(Err(error.to_string())),
+            }
+        }
+        BridgeCommand::DeleteSession { session_id } => {
+            BridgeReply::SessionDeleted(delete_session(&state.home, session_id))
+        }
+        BridgeCommand::RemoveRecent { project } => {
+            let mut ui_state = match read_ui_state(&state.home) {
+                Ok(ui_state) => ui_state,
+                Err(error) => {
+                    return BridgeReply::UiStateSaved(Err(render_config_error(&error)));
+                }
+            };
+            ui_state.remove_recent(project);
+            match replace_ui_state(&state.home, &ui_state) {
+                Ok(()) => BridgeReply::UiStateSaved(Ok(())),
+                Err(error) => BridgeReply::UiStateSaved(Err(render_config_error(&error))),
+            }
+        }
         BridgeCommand::ExportData { path } => {
             let home = state.home.clone();
             let path = path.clone();
@@ -1089,22 +1158,28 @@ async fn open_conversation(
         .iter()
         .min_by_key(|head| head.branch_id.as_str())
         .ok_or(SessionError::NotFound)?;
-    let branch_id = root.branch_id.clone();
-    let snapshot_head = root.head.clone();
+    read_branch(service, session, &root.branch_id, &root.head).await
+}
+
+/// Reads one branch's committed events into display entries.
+async fn read_branch(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    snapshot_head: &HeadStamp,
+) -> Result<ActiveConversation, SessionError> {
     let mut entries = Vec::new();
     let mut after: Option<mcode_session::session::SessionEventId> = None;
     loop {
         let page = service
-            .read(session, &branch_id, &snapshot_head, after.as_ref(), 256)
+            .read(session, branch, snapshot_head, after.as_ref(), 256)
             .await?;
         if page.items.is_empty() {
             break;
         }
         let last = page.items.last().expect("nonempty page").event_id.clone();
         for event in &page.items {
-            let loaded = service
-                .load_event(session, &branch_id, &event.event_id)
-                .await?;
+            let loaded = service.load_event(session, branch, &event.event_id).await?;
             entries.push(project_replayed_entry(event, &loaded.payload));
         }
         match page.next {
@@ -1118,11 +1193,63 @@ async fn open_conversation(
     }
     Ok(ActiveConversation {
         session_id: session.as_str().to_owned(),
-        branch_id: branch_id.as_str().to_owned(),
-        head: head_spelling(&snapshot_head),
+        branch_id: branch.as_str().to_owned(),
+        head: head_spelling(snapshot_head),
         entries,
         streaming: None,
     })
+}
+
+/// Rewinds the branch so everything from the recalled message onward is
+/// gone, then returns the truncated conversation plus the edited text.
+async fn recall_message(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    _expected_head: &HeadStamp,
+    to_event: &str,
+) -> Result<ActiveConversation, String> {
+    let target = mcode_session::session::SessionEventId::parse(to_event)
+        .ok_or_else(|| "the rewind target is not a valid event id".to_owned())?;
+    let reservation = service
+        .reserve_branch(
+            session,
+            mcode_session::session::BranchMutationKind::Rewind,
+            branch,
+            &target,
+        )
+        .await
+        .map_err(render_error)?;
+    let branched = service
+        .rewind(session, branch, &target, &reservation)
+        .await
+        .map_err(render_error)?;
+    read_branch(service, session, &branched.branch_id, &branched.head)
+        .await
+        .map_err(render_error)
+}
+
+/// Deletes one session's durable footprint: ledger, todos, compaction
+/// checkpoint, and file snapshots. The ids are plain names by construction.
+fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), String> {
+    if session_id.is_empty()
+        || session_id.contains(['/', '\\', ':', '\0'])
+        || session_id == "."
+        || session_id == ".."
+    {
+        return Err("invalid session id".to_owned());
+    }
+    let roots = [
+        home.root()
+            .join("plugins/session/data/sessions")
+            .join(session_id),
+        home.root().join("workspace").join(session_id),
+        home.root().join("checkpoints").join(session_id),
+    ];
+    for root in roots {
+        std::fs::remove_dir_all(&root).map_err(|error| format!("delete: {error}"))?;
+    }
+    Ok(())
 }
 
 async fn send_message(
@@ -1381,6 +1508,14 @@ async fn run_chat_turn(
         );
         system_prompt.push_str(&part);
     }
+    // The tool registry's usage hints ride along, so the model knows which
+    // tools exist and how to call them (a custom prompt alone drops them).
+    system_prompt.push_str(
+        "
+
+",
+    );
+    system_prompt.push_str(&mcode_agent::build_system_prompt(&registry));
 
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
     let checkpoint_home = home.clone();
