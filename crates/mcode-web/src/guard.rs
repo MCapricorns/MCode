@@ -119,6 +119,97 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         || segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0)
 }
 
+/// Strips terminal escape sequences, control characters (keeping newline
+/// and tab), and bidi overrides from untrusted remote text, mirroring the
+/// querit client's sanitizer. Retrieved page text is data, never terminal
+/// input.
+pub fn sanitize_remote_text(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let mut out = String::with_capacity(value.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let current = chars[index];
+        match current {
+            '\u{1b}' => {
+                match chars.get(index + 1).copied() {
+                    Some('[') => index = skip_csi(&chars, index + 2),
+                    Some(']') => index = skip_osc(&chars, index + 2),
+                    Some(next) if matches!(next, 'P' | 'X' | '^' | '_') => {
+                        index = skip_control_string(&chars, index + 2);
+                    }
+                    Some(_) => index += 2,
+                    None => index += 1,
+                }
+            }
+            '\u{9b}' => index = skip_csi(&chars, index + 1),
+            '\u{9d}' => index = skip_osc(&chars, index + 1),
+            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => {
+                index = skip_control_string(&chars, index + 1);
+            }
+            '\n' | '\t' => {
+                out.push(current);
+                index += 1;
+            }
+            _ if (current as u32) < 0x20 || matches!(current as u32, 0x7f..=0x9f) => {
+                index += 1;
+            }
+            _ if is_bidi_control(current) => index += 1,
+            _ => {
+                out.push(current);
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+fn is_bidi_control(current: char) -> bool {
+    matches!(current as u32,
+        0x061c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+}
+
+fn skip_csi(chars: &[char], start: usize) -> usize {
+    let mut index = start;
+    while index < chars.len() {
+        let current = chars[index];
+        index += 1;
+        if ('@'..='~').contains(&current) {
+            return index;
+        }
+    }
+    index
+}
+
+fn skip_osc(chars: &[char], start: usize) -> usize {
+    let mut index = start;
+    while index < chars.len() {
+        let current = chars[index];
+        if current == '\u{7}' || current == '\u{9c}' {
+            return index + 1;
+        }
+        if current == '\u{1b}' && chars.get(index + 1) == Some(&'\\') {
+            return index + 2;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn skip_control_string(chars: &[char], start: usize) -> usize {
+    let mut index = start;
+    while index < chars.len() {
+        let current = chars[index];
+        if current == '\u{9c}' {
+            return index + 1;
+        }
+        if current == '\u{1b}' && chars.get(index + 1) == Some(&'\\') {
+            return index + 2;
+        }
+        index += 1;
+    }
+    index
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +247,29 @@ mod tests {
         ] {
             assert!(!is_fetchable_url(url), "{url}");
         }
+    }
+
+    #[test]
+    fn sanitize_strips_escape_sequences_and_bidi_controls() {
+        // CSI color codes vanish, text survives.
+        assert_eq!(sanitize_remote_text("a\u{1b}[31mred\u{1b}[0m b"), "ared b");
+        // OSC with BEL terminator and DCS with ST terminator.
+        assert_eq!(sanitize_remote_text("x\u{1b}]0;title\u{7}y"), "xy");
+        assert_eq!(sanitize_remote_text("x\u{1b}P1;2;q\u{1b}\\y"), "xy");
+        // C1 CSI/OSC single-char introducers (OSC needs its ST terminator;
+        // an unterminated OSC eats to end-of-input, as in the reference).
+        assert_eq!(sanitize_remote_text("x\u{9b}31my"), "xy");
+        assert_eq!(sanitize_remote_text("x\u{9d}0;t\u{9c}y"), "xy");
+        assert_eq!(sanitize_remote_text("x\u{9d}0;ty"), "x");
+        // Other controls drop; newline and tab stay.
+        assert_eq!(sanitize_remote_text("a\u{0}b\u{7f}c\nd\te"), "abc\nd\te");
+        // Bidi overrides drop, CJK and emoji survive.
+        assert_eq!(
+            sanitize_remote_text("a\u{202e}b\u{2066}c\u{4e2d}\u{1f600}"),
+            "abc\u{4e2d}\u{1f600}"
+        );
+        // Plain text passes through untouched.
+        assert_eq!(sanitize_remote_text("plain text 123"), "plain text 123");
     }
 
     #[test]

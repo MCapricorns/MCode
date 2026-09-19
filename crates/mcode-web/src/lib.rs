@@ -132,6 +132,11 @@ impl WebClient {
             .into_iter()
             .take(max_results)
             .filter(|result| guard::is_fetchable_url(&result.url))
+            .map(|mut result| {
+                result.title = guard::sanitize_remote_text(&result.title);
+                result.snippet = guard::sanitize_remote_text(&result.snippet);
+                result
+            })
             .collect();
         if results.len() > guard::MAX_SEARCH_RESULTS {
             return Err(WebError::Protocol);
@@ -174,6 +179,7 @@ impl WebClient {
             if !allowed.contains(&page.url) {
                 return Err(WebError::Protocol);
             }
+            page.content = guard::sanitize_remote_text(&page.content);
             if page.content.chars().count() > guard::MAX_PAGE_BYTES {
                 page.content = page.content.chars().take(guard::MAX_PAGE_BYTES).collect();
                 page.truncated = true;
