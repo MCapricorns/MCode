@@ -2220,6 +2220,62 @@ mod tests {
     use super::*;
     use mcode_session::session::EventKind;
 
+    /// End-to-end over the real provider configured in the user's home:
+    /// settings parse, vault key, resolve, stream, decode. Run explicitly
+    /// with `cargo test -p mcode-desktop -- --ignored live_provider`.
+    #[tokio::test]
+    #[ignore = "calls the live provider configured under ~/.mcode"]
+    async fn live_provider_streams_a_reply() {
+        let home = HomeLayout::from_process().expect("home");
+        let settings = read_app_settings(&home).expect("settings parse");
+        let secrets = read_provider_secrets(&home).expect("secrets vault");
+        let provider = settings
+            .providers
+            .iter()
+            .find(|provider| provider.enabled && provider.id.contains("minimax"))
+            .or_else(|| settings.providers.iter().find(|provider| provider.enabled))
+            .expect("configure an enabled provider with its key first");
+        let model = provider
+            .models
+            .first()
+            .expect("the provider lists a model")
+            .clone();
+        let key = secrets
+            .key(&provider.id)
+            .expect("the provider key lives in the vault")
+            .to_owned();
+        let resolved =
+            ResolvedProvider::resolve(provider, &model, &key, &settings.effective_user_agent())
+                .expect("resolve");
+        let transport = ReqwestTransport::new().expect("transport");
+        let wire = WireProvider::new(resolved, Arc::new(transport));
+        let request = Request::new()
+            .with_system_prompt("Reply with exactly one word.")
+            .with_message(Message::User(mcode_core::UserMessage::text("Say pong.")));
+        let cancel = CancellationToken::new();
+        let mut stream = wire.stream(&request, cancel).await.expect("stream starts");
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::TextDelta(delta) => text.push_str(&delta),
+                StreamEvent::Done { .. } => break,
+                StreamEvent::Error(error) => panic!(
+                    "stream error kind={:?} message={}",
+                    error.kind(),
+                    error.message().unwrap_or("<none>"),
+                ),
+                _ => {}
+            }
+        }
+        assert!(!text.trim().is_empty(), "reply text arrives");
+        println!(
+            "provider {} model {} replied with {} chars",
+            provider.id,
+            model,
+            text.chars().count()
+        );
+    }
+
     #[test]
     fn worktree_lease_acquires_and_releases() {
         let (_parent, layout) = home();

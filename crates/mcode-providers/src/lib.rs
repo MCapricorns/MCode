@@ -47,6 +47,20 @@ pub struct ResolvedProvider {
     pub headers: Vec<(String, String)>,
 }
 
+/// Appends `prefix + suffix` to the base without doubling: a base that
+/// already ends with the full path is used as-is, and a base ending with
+/// `prefix` gets only `suffix`.
+fn endpoint_with(base: &str, prefix: &str, suffix: &str) -> String {
+    let full = format!("{prefix}{suffix}");
+    if base.ends_with(&full) {
+        base.to_owned()
+    } else if base.ends_with(prefix) {
+        format!("{base}{suffix}")
+    } else {
+        format!("{base}{full}")
+    }
+}
+
 impl ResolvedProvider {
     /// Resolves settings plus a vault-supplied key into one endpoint.
     ///
@@ -66,18 +80,20 @@ impl ResolvedProvider {
         let base = settings.base_url.trim_end_matches('/');
         let (endpoint, extra) = match settings.kind.as_str() {
             "anthropic-messages" => (
-                format!("{base}{ANTHROPIC_MESSAGES_PATH}"),
+                // A base that already carries the versioned path (common when
+                // pasting a vendor console URL) must not be doubled.
+                endpoint_with(base, "/v1", "/messages"),
                 vec![
                     ("x-api-key".to_owned(), api_key.to_owned()),
                     ("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned()),
                 ],
             ),
             "openai-completions" => (
-                format!("{base}{OPENAI_COMPLETIONS_PATH}"),
+                endpoint_with(base, "", OPENAI_COMPLETIONS_PATH),
                 vec![("authorization".to_owned(), format!("Bearer {api_key}"))],
             ),
             "openai-responses" => (
-                format!("{base}{OPENAI_RESPONSES_PATH}"),
+                endpoint_with(base, "", OPENAI_RESPONSES_PATH),
                 vec![("authorization".to_owned(), format!("Bearer {api_key}"))],
             ),
             _ => {
@@ -163,6 +179,31 @@ impl Provider for WireProvider {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn endpoint_join_never_doubles_the_path() {
+        use super::endpoint_with;
+        assert_eq!(
+            endpoint_with("https://x/anthropic", "/v1", "/messages"),
+            "https://x/anthropic/v1/messages"
+        );
+        assert_eq!(
+            endpoint_with("https://x/anthropic/v1", "/v1", "/messages"),
+            "https://x/anthropic/v1/messages"
+        );
+        assert_eq!(
+            endpoint_with("https://x/anthropic/v1/messages", "/v1", "/messages"),
+            "https://x/anthropic/v1/messages"
+        );
+        assert_eq!(
+            endpoint_with("https://x/api", "", "/chat/completions"),
+            "https://x/api/chat/completions"
+        );
+        assert_eq!(
+            endpoint_with("https://x/api/chat/completions", "", "/chat/completions"),
+            "https://x/api/chat/completions"
+        );
+    }
+
     use std::sync::Mutex;
 
     use bytes::Bytes;
