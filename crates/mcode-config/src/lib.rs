@@ -33,6 +33,7 @@ mod settings;
 mod staging;
 mod todos;
 mod transaction_id;
+mod ui_state;
 
 #[doc(inline)]
 pub use authority::{
@@ -106,3 +107,8 @@ pub use todos::{
 };
 #[doc(inline)]
 pub use transaction_id::TransactionId;
+#[doc(inline)]
+pub use ui_state::{
+    MAX_RECENT_PROJECTS, UI_STATE_FORMAT_VERSION, UI_STATE_KIND, UI_STATE_PATH, UiState,
+    read_ui_state, replace_ui_state,
+};
