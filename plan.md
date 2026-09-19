@@ -63,7 +63,7 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 
 ### Backlog(v0.1.0 后)
 
-- [ ] T20:内置 Subagents async fan-out、bounded queue、steer/follow-up/cancel、worktree lease 与 crash recovery。
+- [x] T20:内置 Subagents(`task` 工具:host channel + 同 provider 子代理、深度 1、4 槽信号量 bounded queue、10 分钟预算、父级 cancel 联动、可选 git worktree lease + 启动恢复)。
 - [x] T21:内置 Compaction(每次 Provider 请求前重估 token,超阈值用子完成汇总历史头部,尾 8 条保留,`workspace/<session>/compaction.json` 原子落盘,ledger 不动,失败降级全量)。
 - [ ] T22:产品 export/import。
 - [x] T29:目录预设的 provider 行内多模型勾选(预设表单模型多选清单,确认时按目录序写入全部勾选模型,默认首模型)。
