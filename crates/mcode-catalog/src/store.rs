@@ -1,0 +1,281 @@
+//! Catalog persistence and cloud refresh.
+//!
+//! Resolution order: a young cached document wins without network traffic;
+//! otherwise one conditional GET revalidates the cloud document and rewrites
+//! the cache; on any failure the cached or vendored snapshot keeps the
+//! product fully functional offline.
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use mcode_config::{HomeLayout, locked_update_owned_file, read_owned_file};
+use serde::{Deserialize, Serialize};
+
+use crate::modelsdev::{MODELS_DEV_API_URL, parse_models_dev};
+use crate::{CatalogDocument, parse_snapshot};
+
+/// Cache path below the owned home.
+pub const CATALOG_CACHE_PATH: &str = "catalog-cache.json";
+/// Maximum encoded cache size.
+pub const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
+/// Cache format version.
+pub const CACHE_FORMAT_VERSION: u32 = 1;
+/// Cache kind tag.
+pub const CACHE_KIND: &str = "mcode-catalog-cache";
+/// Maximum cloud document size accepted.
+pub const MAX_CLOUD_BYTES: usize = 32 * 1024 * 1024;
+/// Default auto-refresh age: the cache is revalidated at most this often.
+pub const DEFAULT_MAX_AGE_SECS: u64 = 6 * 60 * 60;
+
+/// A catalog document together with its cache metadata.
+#[derive(Clone, Debug)]
+pub struct CachedCatalog {
+    /// The catalog document.
+    pub document: CatalogDocument,
+    /// Unix seconds when the cloud copy was last fetched.
+    pub fetched_at: u64,
+    /// Opaque ETag validator from the cloud copy.
+    pub etag: Option<String>,
+}
+
+/// The result of one refresh attempt.
+#[derive(Clone, Debug)]
+pub enum RefreshOutcome {
+    /// The cache was young enough; no network traffic happened.
+    Fresh(CachedCatalog),
+    /// The cloud document was unchanged (HTTP 304).
+    NotModified(CachedCatalog),
+    /// A new cloud document replaced the cache.
+    Updated(CachedCatalog),
+    /// The refresh failed; the caller keeps the previous catalog.
+    Unavailable(String),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheDocument {
+    format_version: u32,
+    kind: String,
+    fetched_at: u64,
+    etag: Option<String>,
+    document: CatalogDocument,
+}
+
+/// The vendored offline baseline, parsed once.
+pub fn bundled() -> &'static CatalogDocument {
+    static SNAPSHOT: OnceLock<CatalogDocument> = OnceLock::new();
+    SNAPSHOT.get_or_init(|| parse_snapshot(include_bytes!("../src/snapshot.json")))
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+/// Reads the cached catalog from the owned home, when present and valid.
+#[must_use]
+pub fn load_cache(home: &HomeLayout) -> Option<CachedCatalog> {
+    let bytes = read_owned_file(home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES).ok()??;
+    let document: CacheDocument = serde_json::from_slice(bytes.as_slice()).ok()?;
+    if document.format_version != CACHE_FORMAT_VERSION || document.kind != CACHE_KIND {
+        return None;
+    }
+    if document.etag.as_ref().is_some_and(|etag| etag.len() > 256) {
+        return None;
+    }
+    Some(CachedCatalog {
+        document: document.document,
+        fetched_at: document.fetched_at,
+        etag: document.etag,
+    })
+}
+
+/// Resolves the current catalog: cache when valid, else the vendored snapshot.
+#[must_use]
+pub fn current(home: &HomeLayout) -> CachedCatalog {
+    load_cache(home).unwrap_or_else(|| CachedCatalog {
+        document: bundled().clone(),
+        fetched_at: 0,
+        etag: None,
+    })
+}
+
+fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
+    let document = CacheDocument {
+        format_version: CACHE_FORMAT_VERSION,
+        kind: CACHE_KIND.to_owned(),
+        fetched_at: cache.fetched_at,
+        etag: cache.etag.clone(),
+        document: cache.document.clone(),
+    };
+    let mut bytes = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    if bytes.len() > MAX_CACHE_BYTES {
+        return Err("catalog cache exceeded its size bound".to_owned());
+    }
+    locked_update_owned_file(home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES, |_| {
+        Ok(bytes.clone())
+    })
+    .map_err(|error| error.to_string())
+}
+
+/// Runs one refresh against the cloud catalog.
+///
+/// `force` bypasses the freshness window. Network failures and parse
+/// failures surface as [`RefreshOutcome::Unavailable`]; the caller keeps
+/// whatever catalog it already had.
+pub async fn refresh(
+    home: &HomeLayout,
+    client: &reqwest::Client,
+    force: bool,
+    max_age_secs: u64,
+) -> RefreshOutcome {
+    let existing = current(home);
+    let age = unix_now().saturating_sub(existing.fetched_at);
+    if existing.fetched_at > 0 && !force && age < max_age_secs {
+        return RefreshOutcome::Fresh(existing);
+    }
+
+    let mut request = client
+        .get(MODELS_DEV_API_URL)
+        .header("accept", "application/json");
+    if let Some(etag) = existing.etag.clone() {
+        request = request.header("if-none-match", etag);
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => return RefreshOutcome::Unavailable(format!("catalog fetch failed: {error}")),
+    };
+    if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .or(existing.etag.clone());
+        let refreshed = CachedCatalog {
+            fetched_at: unix_now(),
+            etag,
+            ..existing
+        };
+        if let Err(message) = write_cache(home, &refreshed) {
+            return RefreshOutcome::Unavailable(message);
+        }
+        return RefreshOutcome::NotModified(refreshed);
+    }
+    if !response.status().is_success() {
+        return RefreshOutcome::Unavailable(format!(
+            "catalog endpoint returned {}",
+            response.status()
+        ));
+    }
+    let headers = response.headers().clone();
+    let bytes = match response.bytes().await {
+        Ok(bytes) if bytes.len() <= MAX_CLOUD_BYTES => bytes,
+        Ok(_) => return RefreshOutcome::Unavailable("catalog document oversized".to_owned()),
+        Err(error) => return RefreshOutcome::Unavailable(format!("catalog read failed: {error}")),
+    };
+    let document = parse_models_dev(&bytes);
+    if document.providers.is_empty() {
+        return RefreshOutcome::Unavailable("catalog document had no usable providers".to_owned());
+    }
+    let etag = headers
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let refreshed = CachedCatalog {
+        document,
+        fetched_at: unix_now(),
+        etag,
+    };
+    if let Err(message) = write_cache(home, &refreshed) {
+        return RefreshOutcome::Unavailable(message);
+    }
+    RefreshOutcome::Updated(refreshed)
+}
+
+/// Builds the HTTP client used for catalog and update downloads.
+///
+/// # Errors
+///
+/// Returns the reqwest build error message.
+pub fn http_client(user_agent: &str) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(user_agent.to_owned())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("http client unavailable: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modelsdev::parse_models_dev;
+
+    fn layout() -> (tempfile::TempDir, HomeLayout) {
+        let parent = tempfile::tempdir().expect("parent");
+        let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
+        (parent, layout)
+    }
+
+    fn sample_catalog() -> CatalogDocument {
+        parse_models_dev(
+            br#"{"acme": {"npm": "@ai-sdk/openai-compatible",
+                "api": "https://api.acme.dev/v1", "name": "Acme",
+                "models": {"m1": {"name": "M1"}}}}"#,
+        )
+    }
+
+    #[test]
+    fn bundled_snapshot_loads_once_and_is_cached() {
+        let first = bundled();
+        let second = bundled();
+        assert!(std::ptr::eq(first, second), "snapshot parsed once");
+        assert!(!first.providers.is_empty());
+    }
+
+    #[test]
+    fn cache_round_trips_and_falls_back_to_snapshot() {
+        let (_parent, home) = layout();
+        assert!(load_cache(&home).is_none(), "no cache file yet");
+        let fallback = current(&home);
+        assert_eq!(fallback.document, *bundled());
+        assert_eq!(fallback.fetched_at, 0);
+
+        let cache = CachedCatalog {
+            document: sample_catalog(),
+            fetched_at: unix_now(),
+            etag: Some("\"abc\"".to_owned()),
+        };
+        write_cache(&home, &cache).expect("write cache");
+        let loaded = load_cache(&home).expect("cache loads");
+        assert_eq!(loaded.document, sample_catalog());
+        assert_eq!(loaded.etag.as_deref(), Some("\"abc\""));
+
+        std::fs::write(
+            home.owned_join(CATALOG_CACHE_PATH).expect("path"),
+            b"{\"formatVersion\":9}",
+        )
+        .expect("tamper");
+        assert!(load_cache(&home).is_none(), "format check rejects");
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_the_cache_when_it_is_fresh() {
+        let (_parent, home) = layout();
+        let cache = CachedCatalog {
+            document: sample_catalog(),
+            fetched_at: unix_now(),
+            etag: None,
+        };
+        write_cache(&home, &cache).expect("write cache");
+        let client = http_client("mcode-test").expect("client");
+        match refresh(&home, &client, false, DEFAULT_MAX_AGE_SECS).await {
+            RefreshOutcome::Fresh(outcome) => {
+                assert_eq!(outcome.document, sample_catalog());
+            }
+            other => panic!("expected fresh cache, got {other:?}"),
+        }
+    }
+}
