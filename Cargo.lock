@@ -4175,7 +4175,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-agent"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "mcode-core",
@@ -4191,7 +4191,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-catalog"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "mcode-config",
  "reqwest",
@@ -4203,7 +4203,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-config"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "blake3",
@@ -4222,7 +4222,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4232,7 +4232,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-desktop"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "gpui-kit",
@@ -4256,7 +4256,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-mcp"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -4268,7 +4268,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-provider-api"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "mcode-core",
@@ -4280,7 +4280,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-providers"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4297,7 +4297,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-session"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
  "mcode-config",
@@ -4311,7 +4311,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-tools"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "async-trait",
@@ -4357,7 +4357,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-updates"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "reqwest",
  "semver",
@@ -4369,7 +4369,7 @@ dependencies = [
 
 [[package]]
 name = "mcode-web"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "mcode-config",
