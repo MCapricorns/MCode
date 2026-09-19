@@ -9,6 +9,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
+
 /// Chunk size for bounded copies and reads.
 const CHUNK_BYTES: u64 = 1024 * 1024;
 
