@@ -9,7 +9,9 @@
 //! environment filtering is not a sandbox. Valid calls run directly with no
 //! Core permission prompt. Use this tool for pipelines, redirection,
 //! expansion, and scripts; filesystem and search tools stay in-process.
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;

@@ -26,7 +26,7 @@ UI (GPUI main thread)
   -> UI 侧 await oneshot / 事件泵 (50ms) -> apply_reply/apply_event -> reduce -> cx.notify()
 ```
 
-- `CoreState` 必须以 `Arc` 共享：`SessionService` 的克隆体一旦 drop 会 retire publication 并中止 actor worker（`SessionService::drop`），因此禁止 `#[derive(Clone)]` 式的按值克隆。
+- `CoreState` 以 `Arc` 共享；`SessionService` 的克隆共享同一 inner（actor + generation fence），仅最后一个克隆 drop 时才 retire publication 并中止 actor worker，因此 per-turn 任务（`HeadWriter`、`RecallMessage` 等）可以安全持有克隆。
 - 长任务（`RefreshCatalog`、`CheckUpdate`、`DownloadUpdate`、`ChatTurn`）在 core 线程 spawn 为并发任务，reply 经 oneshot 返回；流式事件与目录/更新通知走 `BridgeEvent`（`CatalogUpdated`、`UpdateAvailable` 等）。
 - `CoreState` 持有 per-session 项目目录映射；`SetProjectDir` 校验目录存在后绑定，模型回合的工具 cwd、资源发现均使用项目目录（缺省回退 `workspace/<session>`）。
 - UI 侧不持有任何 tokio handle；core 线程退出时所有 pending 请求立即收到错误 reply。

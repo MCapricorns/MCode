@@ -21,17 +21,32 @@ pub(super) fn render_chat(
     _window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    let entries: Vec<ConversationEntry> = workspace
-        .vm()
-        .active
-        .as_ref()
-        .map(|conversation| conversation.entries.clone())
-        .unwrap_or_default();
-    let streaming = workspace
-        .vm()
-        .active
-        .as_ref()
-        .and_then(|c| c.streaming.clone());
+    // Entries render straight from state: cloning the whole transcript per
+    // frame made every notify (menu toggles, stream deltas) allocate all
+    // message text again. The borrow is scoped so the welcome and composer
+    // builders can still take `&mut Workspace`.
+    let (show_welcome, entry_elements, streaming_element) = {
+        let active = workspace.vm().active.as_ref();
+        let entries: &[ConversationEntry] = active
+            .map(|conversation| conversation.entries.as_slice())
+            .unwrap_or_default();
+        let streaming = active.and_then(|c| c.streaming.as_ref());
+        let show_welcome = entries.is_empty() && streaming.is_none();
+        let elements: Vec<gpui_kit::AnyElement> = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                if entry.kind == EntryKind::UserMessage {
+                    render_user_entry(entry, index > 0, index, cx)
+                } else {
+                    render_entry(entry, cx.theme()).into_any_element()
+                }
+            })
+            .collect();
+        let streaming_element = streaming
+            .map(|streaming| render_streaming_entry(streaming, cx.theme()).into_any_element());
+        (show_welcome, elements, streaming_element)
+    };
     div()
         .id("chat")
         .flex_1()
@@ -58,19 +73,11 @@ pub(super) fn render_chat(
                         .gap_3()
                         .py_4()
                         .px_4()
-                        .when(entries.is_empty() && streaming.is_none(), |this| {
+                        .when(show_welcome, |this| {
                             this.child(render_welcome(workspace, cx))
                         })
-                        .children(entries.into_iter().enumerate().map(|(index, entry)| {
-                            if entry.kind == EntryKind::UserMessage {
-                                render_user_entry(entry, index > 0, index, cx)
-                            } else {
-                                render_entry(entry, cx.theme()).into_any_element()
-                            }
-                        }))
-                        .when_some(streaming, |this, streaming| {
-                            this.child(render_streaming_entry(streaming, cx.theme()))
-                        }),
+                        .children(entry_elements)
+                        .when_some(streaming_element, |this, streaming| this.child(streaming)),
                 ),
         )
         .child(render_composer(workspace, _window, cx))
@@ -79,7 +86,7 @@ pub(super) fn render_chat(
 
 /// The in-flight assistant turn: collapsed thinking plus a bubble.
 fn render_streaming_entry(
-    streaming: crate::view_model::StreamingReply,
+    streaming: &crate::view_model::StreamingReply,
     theme: &Theme,
 ) -> impl IntoElement {
     div()
@@ -109,7 +116,7 @@ fn render_streaming_entry(
                     .rounded_lg()
                     .rounded_tl(px(4.))
                     .bg(theme.secondary)
-                    .child(streaming.text),
+                    .child(streaming.text.clone()),
             )
         })
 }
@@ -262,7 +269,7 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
 
 /// Flat transcript entry rendering: user rows as tinted cards, assistant
 /// text bare, tool activity as compact mono rows.
-fn render_entry(entry: ConversationEntry, theme: &Theme) -> impl IntoElement {
+fn render_entry(entry: &ConversationEntry, theme: &Theme) -> impl IntoElement {
     match entry.kind {
         EntryKind::UserMessage => div()
             .id(format!("entry-{}", entry.event_id))
@@ -280,7 +287,7 @@ fn render_entry(entry: ConversationEntry, theme: &Theme) -> impl IntoElement {
                     .bg(skin::accent(theme, 135.))
                     .text_color(theme.primary_foreground)
                     .shadow_sm()
-                    .child(entry.text),
+                    .child(SharedString::from(&entry.text)),
             ),
         EntryKind::AssistantMessage => div()
             .id(format!("entry-{}", entry.event_id))
@@ -294,7 +301,7 @@ fn render_entry(entry: ConversationEntry, theme: &Theme) -> impl IntoElement {
                     .w_full()
                     .py_1()
                     .overflow_hidden()
-                    .child(entry.text),
+                    .child(SharedString::from(&entry.text)),
             ),
         EntryKind::ToolCall => div()
             .id(format!("entry-{}", entry.event_id))
@@ -508,7 +515,7 @@ fn render_composer(
 /// and everything after). The first message has no prior event to rewind
 /// to, so its actions hide.
 fn render_user_entry(
-    entry: ConversationEntry,
+    entry: &ConversationEntry,
     can_rewind: bool,
     index: usize,
     cx: &mut Context<Workspace>,
@@ -532,7 +539,7 @@ fn render_user_entry(
                 .bg(skin::accent(theme, 135.))
                 .text_color(theme.primary_foreground)
                 .shadow_sm()
-                .child(entry.text),
+                .child(SharedString::from(&entry.text)),
         );
     if can_rewind {
         bubble = bubble.child(
@@ -619,6 +626,33 @@ fn model_picker_label(vm: &crate::view_model::WorkspaceState) -> String {
     }
 }
 
+/// One row in the flattened model menu: section headers, providers, models,
+/// and thinking levels share a fixed height so `uniform_list` only builds
+/// the visible slice instead of rebuilding every row on each frame.
+enum ModelMenuRow {
+    /// Section label; `divider` draws the separator line above it.
+    Header { label: &'static str, divider: bool },
+    /// Non-interactive note row.
+    Hint(&'static str),
+    /// One enabled provider from settings.
+    Provider {
+        id: String,
+        name: String,
+        selected: bool,
+    },
+    /// One configured model of the selected provider.
+    Model { id: String, selected: bool },
+    /// One reasoning-effort level.
+    Reasoning {
+        level: &'static str,
+        label: String,
+        selected: bool,
+    },
+}
+
+/// Fixed row height that keeps the virtualized menu uniform.
+const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(30.);
+
 /// The model picker dropdown, pinned above the composer: provider rows and
 /// the selected provider's configured models.
 pub(super) fn render_model_menu_layer(
@@ -662,7 +696,7 @@ pub(super) fn render_model_menu_layer(
                         .iter()
                         .find(|provider| provider.id == *provider_id)
                 })
-                .map(|provider| provider.models.iter().take(64).cloned().collect::<Vec<_>>())
+                .map(|provider| provider.models.clone())
         })
         .unwrap_or_default();
     let selected_reasoning = workspace
@@ -671,8 +705,61 @@ pub(super) fn render_model_menu_layer(
         .as_ref()
         .and_then(|settings| settings.reasoning.clone())
         .unwrap_or_else(|| "default".to_owned());
-    let providers_empty = providers.is_empty();
-    let models_empty = models.is_empty();
+
+    let mut rows: Vec<ModelMenuRow> = vec![ModelMenuRow::Header {
+        label: "PROVIDER",
+        divider: false,
+    }];
+    if providers.is_empty() {
+        rows.push(ModelMenuRow::Hint(
+            "No enabled providers — add one in Settings \u{2192} Models",
+        ));
+    } else {
+        rows.extend(
+            providers
+                .into_iter()
+                .map(|(id, name)| ModelMenuRow::Provider {
+                    selected: Some(&id) == selected_provider.as_ref(),
+                    id,
+                    name,
+                }),
+        );
+    }
+    if !models.is_empty() {
+        rows.push(ModelMenuRow::Header {
+            label: "MODEL",
+            divider: true,
+        });
+        rows.extend(models.into_iter().map(|id| ModelMenuRow::Model {
+            selected: Some(&id) == selected_model.as_ref(),
+            id,
+        }));
+    }
+    rows.push(ModelMenuRow::Header {
+        label: "THINKING",
+        divider: true,
+    });
+    rows.extend(
+        ["default", "low", "medium", "high"].map(|level| ModelMenuRow::Reasoning {
+            selected: level == selected_reasoning,
+            label: match level {
+                "low" => "Low \u{b7} brief".to_owned(),
+                "medium" => "Medium \u{b7} balanced".to_owned(),
+                "high" => "High \u{b7} deep".to_owned(),
+                other => format!("{other} \u{b7} provider default"),
+            },
+            level,
+        }),
+    );
+
+    let rows = std::rc::Rc::new(rows);
+    let weak = cx.weak_entity();
+    let list = gpui_kit::uniform_list("model-menu-rows", rows.len(), move |range, _window, cx| {
+        let theme = cx.theme();
+        range
+            .map(|index| model_menu_row(&rows[index], &weak, theme))
+            .collect()
+    });
     div()
         .id("model-menu-layer")
         .absolute()
@@ -694,8 +781,6 @@ pub(super) fn render_model_menu_layer(
                 .bottom(px(88.))
                 .right(px(16.))
                 .w(px(330.))
-                .max_h(px(420.))
-                .overflow_y_scroll()
                 .rounded(px(14.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
@@ -703,107 +788,98 @@ pub(super) fn render_model_menu_layer(
                 .text_color(theme.popover_foreground)
                 .shadow_lg()
                 .p_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .opacity(0.6)
-                        .px_2()
-                        .pt_1()
-                        .child("PROVIDER"),
-                )
-                .children(providers.into_iter().map(|(id, name)| {
-                    let selected = Some(&id) == selected_provider.as_ref();
-                    menu_row(
-                        format!("provider-{id}"),
-                        name,
-                        selected,
-                        cx.listener(move |workspace, _, _, cx| {
-                            workspace.on_select_provider(&id, cx);
-                        }),
-                        cx,
-                    )
-                }))
-                .when(providers_empty, |this| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .opacity(0.5)
-                            .px_2()
-                            .child("No enabled providers — add one in Settings \u{2192} Models"),
-                    )
-                })
-                .when(!models_empty, |this| {
-                    this.child(
-                        div()
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .mt_1()
-                            .pt_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .opacity(0.6)
-                                    .px_2()
-                                    .pb_1()
-                                    .child("MODEL"),
-                            ),
-                    )
-                    .children(models.into_iter().map(|id| {
-                        let selected = Some(&id) == selected_model.as_ref();
-                        let label = id.clone();
-                        menu_row(
-                            format!("model-{id}"),
-                            label,
-                            selected,
-                            cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_select_model(&id, cx);
-                            }),
-                            cx,
-                        )
-                    }))
-                })
-                .child(
-                    div()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .mt_1()
-                        .pt_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                .opacity(0.6)
-                                .px_2()
-                                .pb_1()
-                                .child("THINKING"),
-                        ),
-                )
-                .children(["default", "low", "medium", "high"].map(|level| {
-                    let selected = level == selected_reasoning;
-                    let label = match level {
-                        "low" => "Low \u{b7} brief".to_owned(),
-                        "medium" => "Medium \u{b7} balanced".to_owned(),
-                        "high" => "High \u{b7} deep".to_owned(),
-                        other => format!("{other} \u{b7} provider default"),
-                    };
-                    let level = level.to_owned();
-                    menu_row(
-                        format!("reasoning-{level}"),
-                        label,
-                        selected,
-                        cx.listener(move |workspace, _, _, cx| {
-                            workspace.on_select_reasoning(&level, cx);
-                        }),
-                        cx,
-                    )
-                })),
+                .child(list.w_full().max_h(px(404.))),
         )
         .into_any_element()
+}
+
+/// Renders one visible row of the virtualized model menu.
+fn model_menu_row(
+    row: &ModelMenuRow,
+    weak: &gpui_kit::WeakEntity<Workspace>,
+    theme: &Theme,
+) -> gpui_kit::AnyElement {
+    match row {
+        ModelMenuRow::Header { label, divider } => div()
+            .id(format!("model-menu-header-{label}"))
+            .h(MENU_ROW_HEIGHT)
+            .flex()
+            .flex_row()
+            .items_center()
+            .px_2()
+            .when(*divider, |this| {
+                this.border_t_1().border_color(theme.border)
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .opacity(0.6)
+                    .child(*label),
+            )
+            .into_any_element(),
+        ModelMenuRow::Hint(text) => div()
+            .id("model-menu-empty")
+            .h(MENU_ROW_HEIGHT)
+            .flex()
+            .flex_row()
+            .items_center()
+            .px_2()
+            .child(div().text_xs().opacity(0.5).child(*text))
+            .into_any_element(),
+        ModelMenuRow::Provider { id, name, selected } => {
+            let provider_id = id.clone();
+            let weak = weak.clone();
+            menu_row(
+                format!("provider-{id}"),
+                name.clone(),
+                *selected,
+                move |_, _, cx| {
+                    let _ = weak.update(cx, |workspace, cx| {
+                        workspace.on_select_provider(&provider_id, cx);
+                    });
+                },
+                theme,
+            )
+            .into_any_element()
+        }
+        ModelMenuRow::Model { id, selected } => {
+            let model_id = id.clone();
+            let weak = weak.clone();
+            menu_row(
+                format!("model-{id}"),
+                id.clone(),
+                *selected,
+                move |_, _, cx| {
+                    let _ = weak.update(cx, |workspace, cx| {
+                        workspace.on_select_model(&model_id, cx);
+                    });
+                },
+                theme,
+            )
+            .into_any_element()
+        }
+        ModelMenuRow::Reasoning {
+            level,
+            label,
+            selected,
+        } => {
+            let level = *level;
+            let weak = weak.clone();
+            menu_row(
+                format!("reasoning-{level}"),
+                label.clone(),
+                *selected,
+                move |_, _, cx| {
+                    let _ = weak.update(cx, |workspace, cx| {
+                        workspace.on_select_reasoning(level, cx);
+                    });
+                },
+                theme,
+            )
+            .into_any_element()
+        }
+    }
 }
 
 fn menu_row(
@@ -811,18 +887,17 @@ fn menu_row(
     label: String,
     selected: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
-    cx: &Context<Workspace>,
+    theme: &Theme,
 ) -> impl IntoElement {
-    let theme = cx.theme();
     div()
         .id(id)
+        .h(MENU_ROW_HEIGHT)
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
         .gap_2()
         .px_2()
-        .py(px(5.))
         .rounded_md()
         .text_sm()
         .cursor_pointer()
@@ -894,7 +969,7 @@ pub(super) fn render_mention_layer(
                         cx.listener(move |workspace, _, window, cx| {
                             workspace.on_accept_mention(insert.clone(), window, cx);
                         }),
-                        cx,
+                        cx.theme(),
                     )
                 })),
         )

@@ -46,8 +46,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::view_model::{ActiveConversation, ConversationEntry, EntryKind, SessionSummary};
 
-/// Bound for streaming chat events buffered toward the UI.
-const EVENT_QUEUE: usize = 512;
+// The event channel is unbounded on purpose: `Sender::send` never blocks,
+// so a slow or stalled UI frame can never freeze the single-threaded core
+// runtime mid-turn. The UI drains with `try_recv` on a fixed poll tick and
+// already collapses the queue per pass, so the unbounded queue only ever
+// holds at most one interval's worth of events.
 
 /// A request from the UI to the core thread.
 #[derive(Debug)]
@@ -316,8 +319,8 @@ pub enum BridgeReply {
     Settings(Result<(AppSettings, AuthorityRevision, Vec<String>, Vec<String>), String>),
     /// Settings save result: the new revision.
     SettingsSaved(Result<AuthorityRevision, String>),
-    /// Provider key save result.
-    ProviderKeySaved(Result<(), String>),
+    /// Provider key save result: refreshed key-id lists (providers, MCP).
+    ProviderKeySaved(Result<(Vec<String>, Vec<String>), String>),
     /// Chat turn acceptance; streaming continues over the event channel.
     ChatStarted(Result<(), String>),
     /// Web search result list.
@@ -396,7 +399,7 @@ impl CoreBridge {
     #[must_use]
     pub fn start(home: HomeLayout) -> (Self, mpsc::Receiver<BridgeEvent>) {
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (event_tx, event_rx) = mpsc::sync_channel(EVENT_QUEUE);
+        let (event_tx, event_rx) = mpsc::channel();
         let worker = std::thread::Builder::new()
             .name("mcode-core".into())
             .spawn(move || run_core(home, command_rx, event_tx))
@@ -508,7 +511,7 @@ static ASK_ROUTER: std::sync::OnceLock<AskRouter> = std::sync::OnceLock::new();
 fn run_core(
     home: HomeLayout,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<WithReply>,
-    events: mpsc::SyncSender<BridgeEvent>,
+    events: mpsc::Sender<BridgeEvent>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -526,13 +529,36 @@ fn run_core(
         }
     };
     runtime.block_on(async move {
-        // The state lives behind one Arc: `SessionService` retires its
-        // publication when a clone is dropped, so clones must share one
-        // instance instead of duplicating it.
+        // The state lives behind one Arc: `SessionService` clones share the
+        // actor and fence, and only the last drop retires the publication,
+        // so per-turn tasks may hold clones freely.
         // Subagent worktree leases from a crashed process are recovered
-        // before any new turn can run.
-        recover_task_worktrees(&home);
-        let state = Arc::new(CoreState::new(home));
+        // before any new turn can run; the git subprocess calls are blocking,
+        // so they run off the core thread.
+        let recovery_home = home.clone();
+        let _ = tokio::task::spawn_blocking(move || recover_task_worktrees(&recovery_home)).await;
+        // The catalog cache is a multi-megabyte document; parse it off the
+        // core thread so startup does not stall the command loop.
+        let cached = tokio::task::spawn_blocking({
+            let home = home.clone();
+            move || mcode_catalog::current(&home)
+        })
+        .await
+        .unwrap_or_else(|_| mcode_catalog::CachedCatalog {
+            document: mcode_catalog::bundled().clone(),
+            fetched_at: 0,
+            etag: None,
+        });
+        // `CoreState::new` reads the durable UI state and starts the session
+        // actor (a blocking startup handshake); build it off the core thread.
+        let state_home = home.clone();
+        let Ok(state) =
+            tokio::task::spawn_blocking(move || CoreState::new(state_home, cached)).await
+        else {
+            eprintln!("mcode-desktop: core state failed to initialize");
+            return;
+        };
+        let state = Arc::new(state);
         spawn_catalog_refresh(state.clone(), events.clone());
         spawn_update_check(state.clone(), events.clone());
         while let Some(with_reply) = commands.recv().await {
@@ -600,10 +626,15 @@ fn run_core(
                     });
                 }
                 command => {
-                    let outcome = handle(&state, &command).await;
-                    if with_reply.reply.send(outcome).is_err() {
-                        continue;
-                    }
+                    // Handlers perform storage and config I/O; running them
+                    // inline would serialize the command loop behind every
+                    // await and every synchronous file operation.
+                    let task_state = state.clone();
+                    let reply = with_reply.reply;
+                    tokio::spawn(async move {
+                        let outcome = handle(&task_state, &command).await;
+                        let _ = reply.send(outcome);
+                    });
                 }
             }
         }
@@ -624,8 +655,7 @@ struct CoreState {
 }
 
 impl CoreState {
-    fn new(home: HomeLayout) -> Self {
-        let cached = mcode_catalog::current(&home);
+    fn new(home: HomeLayout, cached: CachedCatalog) -> Self {
         // Session→project bindings survive restarts through the durable UI
         // state; seed the in-memory map so tool working directories resolve
         // before the desktop re-binds anything.
@@ -666,7 +696,7 @@ const UPDATE_USER_AGENT: &str = concat!("mcode-updates/", env!("CARGO_PKG_VERSIO
 /// Refreshes the provider catalog and reports a successful swap.
 async fn refresh_catalog(
     state: &CoreState,
-    events: &mpsc::SyncSender<BridgeEvent>,
+    events: &mpsc::Sender<BridgeEvent>,
     force: bool,
 ) -> BridgeReply {
     let settings = match read_app_settings(&state.home) {
@@ -700,16 +730,18 @@ async fn refresh_catalog(
 }
 
 /// One background catalog refresh shortly after startup.
-fn spawn_catalog_refresh(state: Arc<CoreState>, events: mpsc::SyncSender<BridgeEvent>) {
+fn spawn_catalog_refresh(state: Arc<CoreState>, events: mpsc::Sender<BridgeEvent>) {
     tokio::spawn(async move {
         refresh_catalog(&state, &events, false).await;
     });
 }
 
 /// One background update check shortly after startup.
-fn spawn_update_check(state: Arc<CoreState>, events: mpsc::SyncSender<BridgeEvent>) {
+fn spawn_update_check(state: Arc<CoreState>, events: mpsc::Sender<BridgeEvent>) {
     tokio::spawn(async move {
-        let Ok(ui_state) = read_ui_state(&state.home) else {
+        let home = state.home.clone();
+        let Ok(Ok(ui_state)) = tokio::task::spawn_blocking(move || read_ui_state(&home)).await
+        else {
             return;
         };
         if !ui_state.auto_update {
@@ -765,10 +797,22 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
     }
 }
 
+/// Runs one synchronous storage/config step off the core runtime thread.
+/// File locks, staged writes, and directory walks must never run inline:
+/// the bridge runtime is single-threaded, so any blocking syscall freezes
+/// every queued command and in-flight turn.
+async fn blocking<T: Send + 'static>(
+    step: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(step)
+        .await
+        .map_err(|error| format!("background task failed: {error}"))?
+}
+
 async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(
-            inspect_summaries(&state.service, &state.home)
+            inspect_summaries(&state.service, state.home.clone())
                 .await
                 .map_err(render_error),
         ),
@@ -797,15 +841,32 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 .await
                 .map_err(render_error),
         ),
-        BridgeCommand::LoadSettings => BridgeReply::Settings(load_settings(&state.home)),
+        BridgeCommand::LoadSettings => {
+            let home = state.home.clone();
+            BridgeReply::Settings(blocking(move || load_settings(&home)).await)
+        }
         BridgeCommand::SaveSettings {
             expected_revision,
             settings,
-        } => BridgeReply::SettingsSaved(save_settings(&state.home, *expected_revision, settings)),
+        } => {
+            let home = state.home.clone();
+            let settings = settings.clone();
+            let expected_revision = *expected_revision;
+            BridgeReply::SettingsSaved(
+                blocking(move || save_settings(&home, expected_revision, &settings)).await,
+            )
+        }
         BridgeCommand::SaveProviderKey {
             provider_id,
             api_key,
-        } => BridgeReply::ProviderKeySaved(save_provider_key(&state.home, provider_id, api_key)),
+        } => {
+            let home = state.home.clone();
+            let provider_id = provider_id.clone();
+            let api_key = api_key.clone();
+            BridgeReply::ProviderKeySaved(
+                blocking(move || save_provider_key(&home, &provider_id, &api_key)).await,
+            )
+        }
         BridgeCommand::StartCopilotSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(
             "device sign-in runs as a concurrent task".to_owned(),
         )),
@@ -815,16 +876,27 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::WebSearch { query } => {
             BridgeReply::WebSearched(web_search(&state.home, query).await)
         }
-        BridgeCommand::SearchProjectFiles { session_id, query } => BridgeReply::ProjectFiles(Ok(
-            search_project_files(&state.project_dir(session_id), query),
-        )),
+        BridgeCommand::SearchProjectFiles { session_id, query } => {
+            let root = state.project_dir(session_id);
+            let query = query.clone();
+            BridgeReply::ProjectFiles(
+                blocking(move || Ok(search_project_files(&root, &query))).await,
+            )
+        }
         BridgeCommand::McpListTools { server_id } => {
             BridgeReply::McpTools(mcp_list_tools(&state.home, server_id).await)
         }
-        BridgeCommand::RollbackWorkspace { session_id } => BridgeReply::RolledBack(
-            mcode_config::rollback_session(&state.home, session_id)
-                .map_err(|error| render_config_error(&error)),
-        ),
+        BridgeCommand::RollbackWorkspace { session_id } => {
+            let home = state.home.clone();
+            let session_id = session_id.clone();
+            BridgeReply::RolledBack(
+                blocking(move || {
+                    mcode_config::rollback_session(&home, &session_id)
+                        .map_err(|error| render_config_error(&error))
+                })
+                .await,
+            )
+        }
         BridgeCommand::RecallMessage {
             session,
             branch,
@@ -850,20 +922,22 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             }
         }
         BridgeCommand::DeleteSession { session_id } => {
-            BridgeReply::SessionDeleted(delete_session(&state.home, session_id))
+            let home = state.home.clone();
+            let session_id = session_id.clone();
+            BridgeReply::SessionDeleted(blocking(move || delete_session(&home, &session_id)).await)
         }
         BridgeCommand::RemoveRecent { project } => {
-            let mut ui_state = match read_ui_state(&state.home) {
-                Ok(ui_state) => ui_state,
-                Err(error) => {
-                    return BridgeReply::UiStateSaved(Err(render_config_error(&error)));
-                }
-            };
-            ui_state.remove_recent(project);
-            match replace_ui_state(&state.home, &ui_state) {
-                Ok(()) => BridgeReply::UiStateSaved(Ok(())),
-                Err(error) => BridgeReply::UiStateSaved(Err(render_config_error(&error))),
-            }
+            let home = state.home.clone();
+            let project = project.clone();
+            BridgeReply::UiStateSaved(
+                blocking(move || {
+                    let mut ui_state =
+                        read_ui_state(&home).map_err(|error| render_config_error(&error))?;
+                    ui_state.remove_recent(&project);
+                    replace_ui_state(&home, &ui_state).map_err(|error| render_config_error(&error))
+                })
+                .await,
+            )
         }
         BridgeCommand::ExportData { path } => {
             let home = state.home.clone();
@@ -886,7 +960,23 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {
-            BridgeReply::Resources(list_resources(state, session_id))
+            let home = state.home.clone();
+            let workspace = state.project_dir(session_id);
+            BridgeReply::Resources(
+                blocking(move || {
+                    let files = mcode_config::discover_resources(&home, &workspace);
+                    Ok(files
+                        .iter()
+                        .map(|file| {
+                            (
+                                file.name.clone(),
+                                file.path.as_os_str().to_string_lossy().into_owned(),
+                            )
+                        })
+                        .collect())
+                })
+                .await,
+            )
         }
         BridgeCommand::AskAnswer {
             session_id,
@@ -900,12 +990,23 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 document: Arc::new(mcode_catalog::bundled().clone()),
                 fetched_at: 0,
             }))),
-        BridgeCommand::LoadUiState => BridgeReply::UiState(
-            read_ui_state(&state.home).map_err(|error| render_config_error(&error)),
-        ),
-        BridgeCommand::SaveUiState { state: ui_state } => BridgeReply::UiStateSaved(
-            replace_ui_state(&state.home, ui_state).map_err(|error| render_config_error(&error)),
-        ),
+        BridgeCommand::LoadUiState => {
+            let home = state.home.clone();
+            BridgeReply::UiState(
+                blocking(move || read_ui_state(&home).map_err(|error| render_config_error(&error)))
+                    .await,
+            )
+        }
+        BridgeCommand::SaveUiState { state: ui_state } => {
+            let home = state.home.clone();
+            let ui_state = ui_state.clone();
+            BridgeReply::UiStateSaved(
+                blocking(move || {
+                    replace_ui_state(&home, &ui_state).map_err(|error| render_config_error(&error))
+                })
+                .await,
+            )
+        }
         BridgeCommand::SetProjectDir { session_id, path } => {
             BridgeReply::ProjectSet(set_project_dir(state, session_id, path.as_deref()))
         }
@@ -934,21 +1035,6 @@ fn set_project_dir(state: &CoreState, session_id: &str, path: Option<&str>) -> R
         .expect("projects")
         .insert(session_id.to_owned(), directory);
     Ok(())
-}
-
-/// Discovers prompt resources for one session workspace.
-fn list_resources(state: &CoreState, session_id: &str) -> Result<Vec<(String, String)>, String> {
-    let workspace = state.project_dir(session_id);
-    let files = mcode_config::discover_resources(&state.home, &workspace);
-    Ok(files
-        .iter()
-        .map(|file| {
-            (
-                file.name.clone(),
-                file.path.as_os_str().to_string_lossy().into_owned(),
-            )
-        })
-        .collect())
 }
 
 /// Lists tools of one enabled MCP server over stdio or HTTP.
@@ -1107,17 +1193,7 @@ fn load_settings(
     .map_err(|()| "stored settings failed validation".to_owned())?
     .unwrap_or(AuthorityRevision::ABSENT);
     let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
-    let mut provider_keys = Vec::new();
-    let mut mcp_keys = Vec::new();
-    for id in secrets.provider_ids() {
-        if let Some(server_id) = id.strip_prefix("mcp-") {
-            if !server_id.is_empty() {
-                mcp_keys.push(server_id.to_owned());
-            }
-        } else {
-            provider_keys.push(id.to_owned());
-        }
-    }
+    let (provider_keys, mcp_keys) = split_key_ids(&secrets);
     Ok((settings, revision, provider_keys, mcp_keys))
 }
 
@@ -1153,9 +1229,12 @@ fn render_config_error(error: &mcode_config::ConfigError) -> String {
 /// title; the listing itself never fails on one bad session.
 async fn inspect_summaries(
     service: &SessionService,
-    home: &HomeLayout,
+    home: HomeLayout,
 ) -> Result<Vec<SessionSummary>, SessionError> {
-    let snapshots = session::inspect_sessions(home)?;
+    // Directory walk stays off the core runtime thread.
+    let snapshots = tokio::task::spawn_blocking(move || session::inspect_sessions(&home))
+        .await
+        .map_err(|_| SessionError::Unavailable)??;
     let mut summaries = Vec::with_capacity(snapshots.len());
     for snapshot in snapshots {
         let Some(root) = snapshot.branches.first() else {
@@ -1457,7 +1536,7 @@ async fn send_message(
         ConversationEntry {
             event_id: event_id.as_str().to_owned(),
             kind: EntryKind::UserMessage,
-            text: text.to_owned(),
+            text: text.into(),
             call_id: None,
         },
     ))
@@ -1489,8 +1568,29 @@ fn render_error(error: SessionError) -> String {
     }
 }
 
-/// Stores or clears one provider key under the secret-store CAS.
-fn save_provider_key(home: &HomeLayout, provider_id: &str, api_key: &str) -> Result<(), String> {
+/// Splits stored secret ids into provider and MCP key markers.
+fn split_key_ids(secrets: &mcode_config::ProviderSecrets) -> (Vec<String>, Vec<String>) {
+    let mut provider_keys = Vec::new();
+    let mut mcp_keys = Vec::new();
+    for id in secrets.provider_ids() {
+        if let Some(server_id) = id.strip_prefix("mcp-") {
+            if !server_id.is_empty() {
+                mcp_keys.push(server_id.to_owned());
+            }
+        } else {
+            provider_keys.push(id.to_owned());
+        }
+    }
+    (provider_keys, mcp_keys)
+}
+
+/// Stores or clears one provider key under the secret-store CAS, returning
+/// the refreshed key-id lists so the UI updates its markers in place.
+fn save_provider_key(
+    home: &HomeLayout,
+    provider_id: &str,
+    api_key: &str,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
     let expected = mcode_config::read_owned_file(
         home,
@@ -1505,7 +1605,7 @@ fn save_provider_key(home: &HomeLayout, provider_id: &str, api_key: &str) -> Res
     let updated = secrets.with_key(provider_id, (!api_key.is_empty()).then_some(api_key));
     replace_provider_secrets(home, expected, &updated)
         .map_err(|error| render_config_error(&error))?;
-    Ok(())
+    Ok(split_key_ids(&updated))
 }
 
 fn secrets_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
@@ -1528,7 +1628,7 @@ fn secrets_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
 /// finishes the sign-in (or reports failure) over the event channel.
 async fn copilot_sign_in(
     state: Arc<CoreState>,
-    events: mpsc::SyncSender<BridgeEvent>,
+    events: mpsc::Sender<BridgeEvent>,
     models: Vec<String>,
 ) -> BridgeReply {
     let client = match http_client(UPDATE_USER_AGENT) {
@@ -1696,7 +1796,7 @@ fn open_browser(url: &str) {
 #[allow(clippy::too_many_arguments)]
 async fn chat_turn(
     state: Arc<CoreState>,
-    events: mpsc::SyncSender<BridgeEvent>,
+    events: mpsc::Sender<BridgeEvent>,
     session: SessionId,
     branch: BranchId,
     expected_head: HeadStamp,
@@ -1725,10 +1825,54 @@ async fn chat_turn(
     }
 }
 
+/// Loads the provider row and its stored key for one turn. Saves dispatched
+/// alongside the turn run as concurrent tasks, so a just-added provider may
+/// not have reached the disk yet — the read settles with a short retry.
+async fn turn_credentials(
+    home: &HomeLayout,
+    provider_id: &str,
+) -> Result<(AppSettings, ProviderSettings, String), String> {
+    let mut last_error = "provider not found or disabled in settings".to_owned();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+        let settings = match read_app_settings(home) {
+            Ok(settings) => settings,
+            Err(error) => {
+                last_error = render_config_error(&error);
+                continue;
+            }
+        };
+        let Some(index) = settings
+            .providers
+            .iter()
+            .position(|provider| provider.id == provider_id && provider.enabled)
+        else {
+            last_error = "provider not found or disabled in settings".to_owned();
+            continue;
+        };
+        let secrets = match read_provider_secrets(home) {
+            Ok(secrets) => secrets,
+            Err(error) => {
+                last_error = render_config_error(&error);
+                continue;
+            }
+        };
+        let Some(key) = secrets.key(provider_id) else {
+            last_error = "provider API key is not set".to_owned();
+            continue;
+        };
+        let provider = settings.providers[index].clone();
+        return Ok((settings, provider, key.to_owned()));
+    }
+    Err(last_error)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_turn(
     state: &CoreState,
-    events: &mpsc::SyncSender<BridgeEvent>,
+    events: &mpsc::Sender<BridgeEvent>,
     session_id: &str,
     session: SessionId,
     branch: BranchId,
@@ -1738,17 +1882,10 @@ async fn run_chat_turn(
     cwd: PathBuf,
 ) -> Result<(), String> {
     let home = &state.home;
-    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
-    let provider = settings
-        .providers
-        .iter()
-        .find(|provider| provider.id == provider_id && provider.enabled)
-        .ok_or_else(|| "provider not found or disabled in settings".to_owned())?;
-    let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
-    let stored_key = secrets
-        .key(provider_id)
-        .ok_or_else(|| "provider API key is not set".to_owned())?
-        .to_owned();
+    // Settings and keys are written by concurrently dispatched save
+    // commands; a provider added moments ago may not have landed on disk
+    // yet, so the lookup retries briefly before failing the turn.
+    let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     // Copilot stores its long-lived OAuth token where other providers keep
     // an API key; each turn exchanges it for a short-lived bearer.
     let (bearer, extra_headers) = if provider.base_url.contains("githubcopilot.com") {
@@ -1761,14 +1898,18 @@ async fn run_chat_turn(
         (stored_key, Vec::new())
     };
     let mut resolved =
-        ResolvedProvider::resolve(provider, model, &bearer, &settings.effective_user_agent())
+        ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;
     resolved.headers.extend(extra_headers);
     let transport = ReqwestTransport::new().map_err(|_| "HTTP transport unavailable".to_owned())?;
     let wire = WireProvider::new(resolved.clone(), Arc::new(transport));
 
     // The tool working directory is the bound project (created on demand).
-    std::fs::create_dir_all(&cwd).map_err(|error| format!("workspace dir: {error}"))?;
+    let cwd_for_mkdir = cwd.clone();
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(&cwd_for_mkdir))
+        .await
+        .map_err(|error| format!("workspace dir task: {error}"))?
+        .map_err(|error| format!("workspace dir: {error}"))?;
     // Replay history is rebuilt from the ledger's typed events: display
     // entries flatten tool traffic into text, which breaks the
     // tool_use/tool_result pairing providers validate.
@@ -1894,15 +2035,27 @@ package installs) — never to search, read, or write files.",
     let checkpoint_session = session_id.to_owned();
     let hooks = HookRunner::default().with_before_tool(move |tool, args| {
         // Mutating file tools snapshot their target before dispatch; a
-        // relative path resolves against the turn's working directory.
-        if !matches!(tool, "write" | "edit") {
-            return;
+        // relative path resolves against the turn's working directory. The
+        // copy is file I/O, so it runs on the blocking pool rather than the
+        // single-threaded core executor.
+        let raw_path = matches!(tool, "write" | "edit")
+            .then(|| {
+                args.get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .flatten();
+        let checkpoint_home = checkpoint_home.clone();
+        let checkpoint_cwd = checkpoint_cwd.clone();
+        let checkpoint_session = checkpoint_session.clone();
+        async move {
+            let Some(raw_path) = raw_path else { return };
+            let path = checkpoint_cwd.join(raw_path);
+            let _ = tokio::task::spawn_blocking(move || {
+                mcode_config::checkpoint_file(&checkpoint_home, &checkpoint_session, &path)
+            })
+            .await;
         }
-        let Some(raw_path) = args.get("path").and_then(serde_json::Value::as_str) else {
-            return;
-        };
-        let path = checkpoint_cwd.join(raw_path);
-        let _ = mcode_config::checkpoint_file(&checkpoint_home, &checkpoint_session, &path);
     });
     let cancel = CancellationToken::new();
     let mut config = AgentConfig::new().with_system_prompt(system_prompt);
@@ -2197,7 +2350,7 @@ impl HeadWriter {
 /// Host channel forwarding `ask_user` waits through the UI event stream.
 struct BridgeAskChannel {
     session_id: String,
-    events: mpsc::SyncSender<BridgeEvent>,
+    events: mpsc::Sender<BridgeEvent>,
     answer: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<Vec<String>>>>,
 }
 
@@ -2248,7 +2401,7 @@ impl mcode_tools::builtin::AskChannel for BridgeAskChannel {
 
 /// Persists `todo_write` payloads and mirrors them to the UI.
 struct BridgeTodoStore {
-    events: mpsc::SyncSender<BridgeEvent>,
+    events: mpsc::Sender<BridgeEvent>,
     session_id: String,
     writer: HeadWriter,
     home: HomeLayout,
@@ -2350,7 +2503,7 @@ fn project_replayed_entry(
                 ConversationEntry {
                     event_id: event.event_id.as_str().to_owned(),
                     kind: EntryKind::UserMessage,
-                    text: decode_text(payload),
+                    text: decode_text(payload).into(),
                     call_id: None,
                 }
             }
@@ -2365,7 +2518,7 @@ fn project_replayed_entry(
             ConversationEntry {
                 event_id: event.event_id.as_str().to_owned(),
                 kind: EntryKind::ToolCall,
-                text: name.to_owned(),
+                text: name.into(),
                 call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
             }
         }
@@ -2373,7 +2526,7 @@ fn project_replayed_entry(
         EventKind::Task => ConversationEntry {
             event_id: event.event_id.as_str().to_owned(),
             kind: EntryKind::Usage,
-            text: String::new(),
+            text: "".into(),
             call_id: None,
         },
     }
@@ -2399,7 +2552,7 @@ fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry {
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::Usage,
-        text,
+        text: text.into(),
         call_id: None,
     }
 }
@@ -2426,9 +2579,9 @@ fn project_tool_result(event_id: &str, payload: &[u8]) -> ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::ToolResult,
         text: if result.is_error {
-            format!("failed: {text}")
+            format!("failed: {text}").into()
         } else {
-            text
+            text.into()
         },
         call_id: Some(result.tool_call_id),
     }
@@ -2454,7 +2607,7 @@ fn project_assistant_from(event_id: &str, payload: &[u8]) -> ConversationEntry {
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::AssistantMessage,
-        text,
+        text: text.into(),
         call_id: None,
     }
 }
@@ -2786,10 +2939,15 @@ impl mcode_tools::builtin::TaskHost for BridgeTaskHost {
             permit = semaphore.acquire() => permit.map_err(|_| fail("task slots closed".to_owned()))?,
             _ = cancel.cancelled() => return Err(fail("task cancelled".to_owned())),
         };
+        // `git worktree` runs as a blocking subprocess; it must not execute
+        // on the single-threaded core runtime.
         let lease = if request.worktree {
-            match WorktreeLease::acquire(&self.home, &self.cwd) {
-                Ok(lease) => Some(lease),
-                Err(message) => return Err(fail(message)),
+            let home = self.home.clone();
+            let cwd = self.cwd.clone();
+            match tokio::task::spawn_blocking(move || WorktreeLease::acquire(&home, &cwd)).await {
+                Ok(Ok(lease)) => Some(lease),
+                Ok(Err(message)) => return Err(fail(message)),
+                Err(error) => return Err(fail(format!("worktree task failed: {error}"))),
             }
         } else {
             None
@@ -2798,7 +2956,7 @@ impl mcode_tools::builtin::TaskHost for BridgeTaskHost {
             .drive_subagent(&request, progress, cancel, lease.as_ref())
             .await;
         if let Some(lease) = lease {
-            lease.release();
+            let _ = tokio::task::spawn_blocking(move || lease.release()).await;
         }
         drop(permit);
         result
@@ -2838,22 +2996,31 @@ impl BridgeTaskHost {
         let run_dir_for_hooks = run_dir.clone();
         let run_home = self.home.clone();
         let hooks = HookRunner::default().with_before_tool(move |tool, args| {
-            if !matches!(tool, "write" | "edit") {
-                return;
+            let raw_path = matches!(tool, "write" | "edit")
+                .then(|| {
+                    args.get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .flatten();
+            let run_home = run_home.clone();
+            let run_dir = run_dir_for_hooks.clone();
+            async move {
+                let Some(raw_path) = raw_path else { return };
+                // Subagent writes snapshot into a side checkpoint store so
+                // the parent session's rollback surface stays unchanged.
+                let session = format!("task-{}", std::process::id());
+                let path = std::path::PathBuf::from(raw_path);
+                let absolute = if path.is_absolute() {
+                    path
+                } else {
+                    run_dir.join(path)
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    mcode_config::checkpoint_file(&run_home, &session, &absolute)
+                })
+                .await;
             }
-            let Some(raw_path) = args.get("path").and_then(serde_json::Value::as_str) else {
-                return;
-            };
-            // Subagent writes snapshot into a side checkpoint store so the
-            // parent session's rollback surface stays unchanged.
-            let session = format!("task-{}", std::process::id());
-            let path = std::path::PathBuf::from(raw_path);
-            let absolute = if path.is_absolute() {
-                path
-            } else {
-                run_dir_for_hooks.join(path)
-            };
-            let _ = mcode_config::checkpoint_file(&run_home, &session, &absolute);
         });
 
         let child_cancel = CancellationToken::new();
@@ -3081,6 +3248,171 @@ mod tests {
         panic!("stream ended without a terminal event");
     }
 
+    /// Full tool-call round trip over a live endpoint on a
+    /// `current_thread` runtime — the same executor topology the bridge
+    /// uses. The session actor, checkpoint hook, tool dispatch, and ledger
+    /// writes all run exactly as in production, so any synchronous blocking
+    /// left in the path would deadlock this test and trip the timeout.
+    ///
+    /// Configure a compatible endpoint with env vars and run explicitly:
+    /// `MCODE_E2E_BASE_URL=http://host:port MCODE_E2E_API_KEY=… \
+    ///  MCODE_E2E_MODEL=glm-5.3-flash MCODE_E2E_KIND=anthropic-messages \
+    ///  cargo test -p mcode-desktop -- --ignored live_gateway`
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "needs MCODE_E2E_BASE_URL and MCODE_E2E_API_KEY for a live endpoint"]
+    async fn live_gateway_tool_call_round_trip() {
+        let Ok(base_url) = std::env::var("MCODE_E2E_BASE_URL") else {
+            eprintln!("MCODE_E2E_BASE_URL unset; skipping live gateway test");
+            return;
+        };
+        let Ok(api_key) = std::env::var("MCODE_E2E_API_KEY") else {
+            eprintln!("MCODE_E2E_API_KEY unset; skipping live gateway test");
+            return;
+        };
+        let model =
+            std::env::var("MCODE_E2E_MODEL").unwrap_or_else(|_| "glm-5.3-flash".to_owned());
+        let kind = std::env::var("MCODE_E2E_KIND")
+            .unwrap_or_else(|_| "anthropic-messages".to_owned());
+
+        let (_parent, layout) = home();
+        let provider = ProviderSettings {
+            id: "e2e".to_owned(),
+            kind,
+            base_url,
+            models: vec![model.clone()],
+            enabled: true,
+        };
+        let resolved = ResolvedProvider::resolve(&provider, &model, &api_key, "mcode-e2e")
+            .expect("resolve");
+        let transport = ReqwestTransport::new().expect("transport");
+        let wire = WireProvider::new(resolved, Arc::new(transport));
+
+        let registry = ToolRegistry::new();
+        mcode_tools::register_builtins(&registry);
+
+        let service = tokio::task::spawn_blocking({
+            let layout = layout.clone();
+            move || SessionService::new(&layout)
+        })
+        .await
+        .expect("service start");
+        let created = service.create().await.expect("session created");
+        let session = created.session_id;
+        let branch = created.branch_id;
+
+        let cwd = layout.root().join("project");
+        std::fs::create_dir_all(&cwd).expect("project dir");
+
+        let prompt_text = "Use the write tool to create the file hello-e2e.txt \
+                           containing exactly the text hi. Then reply with the word DONE.";
+        let (head_text, _entry) =
+            send_message(&service, &session, &branch, &HeadStamp::Empty, prompt_text)
+                .await
+                .expect("prompt committed");
+        let head = HeadStamp::Event(
+            mcode_session::session::SessionEventId::parse(&head_text).expect("head id"),
+        );
+        let writer = HeadWriter::new(service.clone(), session.clone(), branch.clone(), head);
+
+        let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
+        let checkpoint_home = layout.clone();
+        let checkpoint_cwd = cwd.clone();
+        let checkpoint_session = session.as_str().to_owned();
+        let hooks = HookRunner::default().with_before_tool(move |tool, args| {
+            let raw_path = matches!(tool, "write" | "edit")
+                .then(|| {
+                    args.get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .flatten();
+            let checkpoint_home = checkpoint_home.clone();
+            let checkpoint_cwd = checkpoint_cwd.clone();
+            let checkpoint_session = checkpoint_session.clone();
+            async move {
+                let Some(raw_path) = raw_path else { return };
+                let path = checkpoint_cwd.join(raw_path);
+                let _ = tokio::task::spawn_blocking(move || {
+                    mcode_config::checkpoint_file(&checkpoint_home, &checkpoint_session, &path)
+                })
+                .await;
+            }
+        });
+
+        // Ledger pump: mirror run_chat_turn's ordering guarantees —
+        // ToolCall commits before its ToolResult, the assistant message
+        // commits at TurnEnded.
+        let pump_writer = writer.clone();
+        let pump = tokio::spawn(async move {
+            let mut pending: Option<mcode_core::AssistantMessage> = None;
+            let mut tools = 0usize;
+            loop {
+                match agent_rx.recv().await {
+                    Ok(mcode_core::events::AgentEvent::ToolStarted { call_id, name }) => {
+                        pump_writer
+                            .open_call(&call_id.to_string(), &name)
+                            .await
+                            .expect("tool call opened");
+                        tools += 1;
+                    }
+                    Ok(mcode_core::events::AgentEvent::ToolCompleted {
+                        call_id,
+                        result,
+                    }) => {
+                        let payload = serde_json::to_vec(&result).expect("result encodes");
+                        pump_writer
+                            .close_call(call_id.as_str(), &payload)
+                            .await
+                            .expect("tool result committed");
+                    }
+                    Ok(mcode_core::events::AgentEvent::MessageAdded(Message::Assistant(
+                        message,
+                    ))) => {
+                        pending = Some(message);
+                    }
+                    Ok(mcode_core::events::AgentEvent::TurnEnded(_)) => {
+                        let message = pending.take().expect("assistant message committed");
+                        let payload = serde_json::to_vec(&message).expect("message encodes");
+                        pump_writer
+                            .write(EventKind::Message, &payload)
+                            .await
+                            .expect("assistant message committed");
+                        return tools;
+                    }
+                    Ok(_) => {}
+                    Err(_) => return tools,
+                }
+            }
+        });
+
+        let mut agent = Agent::new(AgentConfig::new().with_system_prompt(
+            "You are a coding agent. Use the provided tools for file work.",
+        ));
+        let cancel = CancellationToken::new();
+        let env = mcode_agent::TurnEnv::new(&wire, &registry, &hooks)
+            .with_cancel(cancel)
+            .with_events(agent_tx)
+            .with_cwd(cwd.clone());
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            agent.prompt(Message::User(mcode_core::UserMessage::text(prompt_text)), &env),
+        )
+        .await
+        .expect("turn completed within the timeout — a hang means a blocking call remains");
+        outcome.expect("model turn succeeded");
+
+        let tools = tokio::time::timeout(std::time::Duration::from_secs(10), pump)
+            .await
+            .expect("ledger pump drained")
+            .expect("pump task finished");
+        assert!(tools > 0, "the model issued at least one tool call");
+        assert_eq!(
+            std::fs::read_to_string(cwd.join("hello-e2e.txt")).expect("tool wrote the file"),
+            "hi"
+        );
+        service.clone().shutdown().await;
+    }
+
     #[test]
     fn worktree_lease_acquires_and_releases() {
         let (_parent, layout) = home();
@@ -3279,7 +3611,7 @@ mod tests {
             .expect("test runtime")
             .block_on(async {
                 let (parent, layout) = home();
-                let state = CoreState::new(layout.clone());
+                let state = CoreState::new(layout.clone(), mcode_catalog::current(&layout));
                 upsert_copilot_provider(&state, &["gpt-x".to_owned(), "claude-y".to_owned()])
                     .expect("first upsert");
                 let settings = read_app_settings(&layout).expect("settings");
@@ -3410,7 +3742,7 @@ mod tests {
         };
         let conversation = conversation.expect("conversation");
         assert_eq!(conversation.entries.len(), 1);
-        assert_eq!(conversation.entries[0].text, "hello core");
+        assert_eq!(conversation.entries[0].text.as_ref(), "hello core");
         assert_eq!(conversation.head, head);
 
         let BridgeReply::Settings(settings) = drive(&bridge, BridgeCommand::LoadSettings) else {
@@ -3445,7 +3777,9 @@ mod tests {
         ) else {
             panic!("key reply");
         };
-        saved.expect("key saved");
+        let (provider_keys, mcp_keys) = saved.expect("key saved");
+        assert_eq!(provider_keys, vec!["openai-main".to_owned()]);
+        assert!(mcp_keys.is_empty());
 
         let BridgeReply::Settings(reloaded) = drive(&bridge, BridgeCommand::LoadSettings) else {
             panic!("reloaded reply");

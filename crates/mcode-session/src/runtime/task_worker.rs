@@ -105,13 +105,28 @@ impl<A: PackTaskActor> TaskActorClient<A> {
     pub(crate) fn start(actor: A) -> Self {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let live = Arc::new(Mutex::new(HashMap::new()));
-        let worker = tokio::spawn(run_worker(
-            actor,
-            receiver,
-            sender.clone(),
-            Arc::clone(&live),
-        ))
-        .abort_handle();
+        // The actor's invoke/pull bodies are synchronous storage work
+        // (advisory locks, staged writes, fsync, rename). Spawning the
+        // worker on the caller's runtime would run that I/O on the shared
+        // core executor and stall every other task, so it gets a dedicated
+        // thread with its own single-threaded runtime. The abort handle is
+        // handed back so `shutdown` keeps its cancellation semantics.
+        let worker_sender = sender.clone();
+        let worker_live = Arc::clone(&live);
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("mcode-session-actor".to_owned())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("session actor runtime");
+                let task = runtime.spawn(run_worker(actor, receiver, worker_sender, worker_live));
+                let _ = ready_tx.send(task.abort_handle());
+                let _ = runtime.block_on(task);
+            })
+            .expect("session actor thread");
+        let worker = ready_rx.recv().expect("session actor worker handle");
         Self {
             sender,
             worker,
@@ -190,6 +205,21 @@ impl<A: PackTaskActor> TaskActorClient<A> {
             close.close();
         }
     }
+
+    /// Closes every live operation and aborts the worker; idempotent.
+    pub(crate) fn shutdown(&self) {
+        let live = self
+            .live
+            .lock()
+            .expect("task actor live-operation lock")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for close in live {
+            close.close();
+        }
+        self.worker.abort();
+    }
 }
 
 impl TaskCloseSignal {
@@ -261,17 +291,7 @@ impl TaskOperationAdmission {
 
 impl<A: PackTaskActor> Drop for TaskActorClient<A> {
     fn drop(&mut self) {
-        let live = self
-            .live
-            .lock()
-            .expect("task actor live-operation lock")
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for close in live {
-            close.close();
-        }
-        self.worker.abort();
+        self.shutdown();
     }
 }
 

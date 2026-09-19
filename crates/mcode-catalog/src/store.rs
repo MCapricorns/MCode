@@ -122,6 +122,34 @@ fn write_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+/// Runs a blocking catalog step off the async runtime: cache IO and the
+/// multi-megabyte document parse/serialize would otherwise freeze every
+/// queued command on the single-threaded core runtime.
+async fn blocking<T: Send + 'static>(
+    step: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(step)
+        .await
+        .map_err(|error| format!("catalog task failed: {error}"))?
+}
+
+async fn load_current(home: &HomeLayout) -> CachedCatalog {
+    let home = home.clone();
+    blocking(move || Ok(current(&home)))
+        .await
+        .unwrap_or_else(|_| CachedCatalog {
+            document: bundled().clone(),
+            fetched_at: 0,
+            etag: None,
+        })
+}
+
+async fn store_cache(home: &HomeLayout, cache: &CachedCatalog) -> Result<(), String> {
+    let home = home.clone();
+    let cache = cache.clone();
+    blocking(move || write_cache(&home, &cache)).await
+}
+
 /// Runs one refresh against the cloud catalog.
 ///
 /// `force` bypasses the freshness window. Network failures and parse
@@ -133,7 +161,7 @@ pub async fn refresh(
     force: bool,
     max_age_secs: u64,
 ) -> RefreshOutcome {
-    let existing = current(home);
+    let existing = load_current(home).await;
     let age = unix_now().saturating_sub(existing.fetched_at);
     if existing.fetched_at > 0 && !force && age < max_age_secs {
         return RefreshOutcome::Fresh(existing);
@@ -161,7 +189,7 @@ pub async fn refresh(
             etag,
             ..existing
         };
-        if let Err(message) = write_cache(home, &refreshed) {
+        if let Err(message) = store_cache(home, &refreshed).await {
             return RefreshOutcome::Unavailable(message);
         }
         return RefreshOutcome::NotModified(refreshed);
@@ -178,7 +206,10 @@ pub async fn refresh(
         Ok(_) => return RefreshOutcome::Unavailable("catalog document oversized".to_owned()),
         Err(error) => return RefreshOutcome::Unavailable(format!("catalog read failed: {error}")),
     };
-    let document = parse_models_dev(&bytes);
+    let document = match blocking(move || Ok(parse_models_dev(&bytes))).await {
+        Ok(document) => document,
+        Err(message) => return RefreshOutcome::Unavailable(message),
+    };
     if document.providers.is_empty() {
         return RefreshOutcome::Unavailable("catalog document had no usable providers".to_owned());
     }
@@ -191,7 +222,7 @@ pub async fn refresh(
         fetched_at: unix_now(),
         etag,
     };
-    if let Err(message) = write_cache(home, &refreshed) {
+    if let Err(message) = store_cache(home, &refreshed).await {
         return RefreshOutcome::Unavailable(message);
     }
     RefreshOutcome::Updated(refreshed)

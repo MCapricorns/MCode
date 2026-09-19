@@ -12,6 +12,8 @@
 //!   block the action ([`GateResult::Block`]).
 
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Outcome of a [`HookRunner::gate`] call.
@@ -58,7 +60,11 @@ pub enum HookEvent {
 /// passes except when tests install [`HookRunner::with_test_gate`], which
 /// may rewrite arguments or block.
 type TestGate = Arc<dyn Fn(&mut Value) -> GateResult + Send + Sync>;
-type BeforeToolObserver = Arc<dyn Fn(&str, &Value) + Send + Sync>;
+/// The observer clones what it needs while invoked and returns a future;
+/// asynchronous observers may offload blocking work (file snapshots) onto
+/// `spawn_blocking` instead of stalling the calling executor.
+type BeforeToolFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type BeforeToolObserver = Arc<dyn Fn(&str, &Value) -> BeforeToolFuture + Send + Sync>;
 
 pub struct HookRunner {
     test_gate: Option<TestGate>,
@@ -74,26 +80,36 @@ impl HookRunner {
         }
     }
 
-    /// Installs a synchronous observer fired after tool-call admission and
-    /// argument validation, immediately before dispatch. Observer panics
-    /// are contained and never affect the turn.
-    pub fn with_before_tool(
+    /// Installs an observer fired after tool-call admission and argument
+    /// validation, immediately before dispatch. The observer returns a
+    /// future that is awaited before the tool runs; panics — during the
+    /// call or while polling — are contained and never affect the turn.
+    pub fn with_before_tool<Fut>(
         mut self,
-        observer: impl Fn(&str, &Value) + Send + Sync + 'static,
-    ) -> Self {
-        self.before_tool = Some(Arc::new(observer));
+        observer: impl Fn(&str, &Value) -> Fut + Send + Sync + 'static,
+    ) -> Self
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.before_tool = Some(Arc::new(move |tool, args| Box::pin(observer(tool, args))));
         self
     }
 
     /// Fires the before-tool observer, if installed.
-    pub fn observe_before_tool(&self, tool: &str, args: &Value) {
-        if let Some(observer) = &self.before_tool {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                observer(tool, args);
-            }));
-            if outcome.is_err() {
-                eprintln!("mcode-agent: before_tool observer panicked (contained)");
-            }
+    pub async fn observe_before_tool(&self, tool: &str, args: &Value) {
+        let Some(observer) = &self.before_tool else {
+            return;
+        };
+        let Ok(future) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(tool, args)))
+        else {
+            eprintln!("mcode-agent: before_tool observer panicked (contained)");
+            return;
+        };
+        // Polling is isolated through a task so an observer panic unwinds
+        // into a JoinError instead of the dispatch path.
+        if tokio::spawn(future).await.is_err() {
+            eprintln!("mcode-agent: before_tool observer panicked (contained)");
         }
     }
 

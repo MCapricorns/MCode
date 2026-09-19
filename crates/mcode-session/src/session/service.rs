@@ -28,14 +28,27 @@ const DEFAULT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The first-party session service.
 ///
-/// The service is cheap to construct and owns one serialized actor; dropping
-/// it retires the publication, closes live operations, and aborts the
-/// worker. Use [`SessionService::shutdown`] to additionally await quiescence
-/// before reclaiming the store.
+/// The service is cheap to construct and owns one serialized actor; clones
+/// share one inner owner, so dropping an individual clone is harmless —
+/// only the last drop retires the publication, closes live operations, and
+/// aborts the worker. Use [`SessionService::shutdown`] to additionally
+/// await quiescence before reclaiming the store.
 #[derive(Clone)]
 pub struct SessionService {
-    client: Option<TaskActorClient<SessionActor>>,
+    inner: Arc<ServiceInner>,
+}
+
+/// Shared owner behind every `SessionService` clone.
+struct ServiceInner {
+    client: TaskActorClient<SessionActor>,
     fence: Arc<GenerationFence>,
+}
+
+impl Drop for ServiceInner {
+    fn drop(&mut self) {
+        self.fence.mark_retired();
+        self.fence.close_publication();
+    }
 }
 
 impl SessionService {
@@ -51,14 +64,13 @@ impl SessionService {
         let actor = SessionActor::new(home.clone(), Arc::clone(&fence));
         let client = TaskActorClient::start(actor);
         Self {
-            client: Some(client),
-            fence,
+            inner: Arc::new(ServiceInner { client, fence }),
         }
     }
 
-    /// Returns the actor client, rejecting use after [`SessionService::shutdown`].
+    /// Returns the actor client.
     fn client(&self) -> &TaskActorClient<SessionActor> {
-        self.client.as_ref().expect("session service not shut down")
+        &self.inner.client
     }
 
     /// Creates a fresh session with a Host-minted root branch.
@@ -291,12 +303,13 @@ impl SessionService {
 
     /// Retires the publication, closes live operations, and awaits drain.
     ///
-    /// After this call the service rejects every further operation.
-    pub async fn shutdown(mut self) {
-        self.fence.mark_retired();
-        self.client = None;
-        self.fence.wait_drained().await;
-        self.fence.close_publication();
+    /// After this call the service rejects every further operation; other
+    /// clones observe the same retirement because the fence is shared.
+    pub async fn shutdown(self) {
+        self.inner.fence.mark_retired();
+        self.inner.client.shutdown();
+        self.inner.fence.wait_drained().await;
+        self.inner.fence.close_publication();
     }
 
     async fn run(&self, request: SessionRequest) -> Result<SessionResult, SessionError> {
@@ -331,17 +344,41 @@ impl SessionService {
     }
 }
 
-impl Drop for SessionService {
-    fn drop(&mut self) {
-        self.fence.mark_retired();
-        self.fence.close_publication();
-    }
-}
-
 fn map_task_error(error: TaskActorError<SessionTaskError>) -> SessionError {
     match error {
         TaskActorError::UnknownOperation | TaskActorError::Unavailable => SessionError::Unavailable,
         TaskActorError::Pack(SessionTaskError::Admission) => SessionError::Limit,
         TaskActorError::Pack(SessionTaskError::Storage) => SessionError::Unavailable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mcode_config::HomeLayout;
+
+    use super::{SessionError, SessionService};
+
+    fn home() -> (tempfile::TempDir, HomeLayout) {
+        let parent = tempfile::tempdir().expect("parent");
+        let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
+        (parent, layout)
+    }
+
+    #[tokio::test]
+    async fn dropped_clone_keeps_the_service_available() {
+        let (_parent, layout) = home();
+        let service = SessionService::new(&layout);
+        drop(service.clone());
+        service.create().await.expect("session created");
+    }
+
+    #[tokio::test]
+    async fn shutdown_retires_every_clone() {
+        let (_parent, layout) = home();
+        let service = SessionService::new(&layout);
+        let survivor = service.clone();
+        service.shutdown().await;
+        let error = survivor.create().await.expect_err("shutdown rejects");
+        assert_eq!(error, SessionError::Unavailable);
     }
 }

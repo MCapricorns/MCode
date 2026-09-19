@@ -4006,24 +4006,34 @@ where
     #[cfg(test)]
     let live_handles = start.live_handles.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let worker = InterruptibleWorker::spawn(
-        move || {
-            start.apply(&function_cancel);
-            if function_cancel.is_cancelled() {
-                return Err(ToolError::Execution(
-                    "cancelled before completion".to_owned(),
-                ));
-            }
-            function(function_cancel)
-        },
-        tx,
-        worker_cancel.clone(),
-        force_interrupt_setup_failure,
-        #[cfg(test)]
-        live_workers,
-        #[cfg(test)]
-        live_handles,
-    )?;
+    // The spawn handshake (`startup_rx.recv`) is a blocking wait on the
+    // supervisor thread; running it inline would stall the calling runtime
+    // whenever thread startup is slow.
+    let spawn_cancel = worker_cancel.clone();
+    let worker = tokio::task::spawn_blocking(move || {
+        InterruptibleWorker::spawn(
+            move || {
+                start.apply(&function_cancel);
+                if function_cancel.is_cancelled() {
+                    return Err(ToolError::Execution(
+                        "cancelled before completion".to_owned(),
+                    ));
+                }
+                function(function_cancel)
+            },
+            tx,
+            spawn_cancel,
+            force_interrupt_setup_failure,
+            #[cfg(test)]
+            live_workers,
+            #[cfg(test)]
+            live_handles,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ToolError::Execution(format!("{label} worker spawn task failed: {error}"))
+    })??;
     let deadline_wait = async {
         match deadline {
             Some(deadline) => tokio::time::sleep_until(deadline.into()).await,

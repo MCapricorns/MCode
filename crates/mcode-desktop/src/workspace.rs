@@ -411,8 +411,17 @@ impl Workspace {
             BridgeReply::SettingsSaved(Ok(revision)) => {
                 self.apply_action(DesktopAction::SettingsSaved(revision.get()), cx);
             }
-            BridgeReply::ProviderKeySaved(Ok(())) => {
-                self.dispatch(BridgeCommand::LoadSettings, cx);
+            BridgeReply::ProviderKeySaved(Ok((provider_keys, mcp_keys))) => {
+                // Refresh the key markers in place: reloading settings here
+                // would race the concurrently running settings save and wipe
+                // the just-added provider (and any other unsaved edits).
+                self.apply_action(
+                    DesktopAction::ProviderKeySaved {
+                        provider_keys,
+                        mcp_keys,
+                    },
+                    cx,
+                );
             }
             BridgeReply::ChatStarted(Ok(())) => {}
             // Web search is a model tool now; UI-initiated replies are ignored.
@@ -692,7 +701,7 @@ impl Workspace {
         let expected_head = parse_head(&conversation.head);
         let to_event = conversation.entries[index - 1].event_id.clone();
         let edit = if edit {
-            Some(conversation.entries[index].text.clone())
+            Some(conversation.entries[index].text.to_string())
         } else {
             None
         };

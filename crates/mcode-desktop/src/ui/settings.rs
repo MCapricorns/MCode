@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 
 use super::{ellipsis, skin};
-use crate::view_model::{DesktopAction, SettingsSection, UpdateState};
+use crate::view_model::{DesktopAction, MainView, SettingsSection, UpdateState};
 use crate::workspace::Workspace;
 
 pub(super) fn render_settings_view(
@@ -56,9 +56,26 @@ pub(super) fn render_settings_view(
                 .border_color(theme.border)
                 .child(
                     div()
-                        .text_lg()
-                        .font_weight(gpui_kit::FontWeight::BOLD)
-                        .child("Settings"),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            Button::new("settings-back")
+                                .icon(IconName::ArrowLeft)
+                                .label("Back")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_main_view(MainView::Chat, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_lg()
+                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                .child("Settings"),
+                        ),
                 )
                 .child(div().flex().flex_row().items_center().gap_2().when_some(
                     header_meta,
@@ -417,9 +434,6 @@ fn render_models_section(
             {
                 continue;
             }
-            if preset_rows.len() >= 60 {
-                break;
-            }
             preset_rows.push((
                 provider.id.clone(),
                 provider.name.clone(),
@@ -428,10 +442,30 @@ fn render_models_section(
             ));
         }
     }
-    let preset_row_elements: Vec<AnyElement> = preset_rows
-        .into_iter()
-        .map(|(id, name, kind, models)| preset_row(id, name, kind, models, cx).into_any_element())
-        .collect();
+    // Virtualized: the catalog lists every known provider, so only the
+    // visible slice gets rows and click handlers.
+    let preset_rows = std::rc::Rc::new(preset_rows);
+    let preset_list_weak = cx.weak_entity();
+    let preset_list = gpui_kit::uniform_list(
+        "preset-catalog-list",
+        preset_rows.len(),
+        move |range, _window, cx| {
+            let theme = cx.theme();
+            range
+                .map(|index| {
+                    let (id, name, kind, models) = &preset_rows[index];
+                    preset_row(
+                        id.clone(),
+                        name.clone(),
+                        kind.clone(),
+                        *models,
+                        &preset_list_weak,
+                        theme,
+                    )
+                })
+                .collect()
+        },
+    );
 
     let theme = cx.theme();
     let providers_empty = provider_row_elements.is_empty();
@@ -462,16 +496,7 @@ fn render_models_section(
                 .pt_1()
                 .child(div().text_xs().opacity(0.7).child("Add from catalog"))
                 .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
-                .child(
-                    div()
-                        .id("preset-catalog-list")
-                        .max_h(px(240.))
-                        .overflow_y_scroll()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .children(preset_row_elements),
-                )
+                .child(preset_list.w_full().max_h(px(240.)))
                 .into_any_element(),
             preset_form_element,
             provider_form_element,
@@ -560,23 +585,27 @@ fn provider_row(
         .into_any_element()
 }
 
+/// One visible row of the virtualized preset catalog list. Fixed height via
+/// `PRESET_ROW_HEIGHT` keeps `uniform_list` measurements uniform.
 fn preset_row(
     id: String,
     name: String,
     kind: String,
     models: usize,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    let theme = cx.theme();
+    weak: &gpui_kit::WeakEntity<Workspace>,
+    theme: &Theme,
+) -> AnyElement {
+    let weak = weak.clone();
     div()
         .id(format!("preset-row-{id}"))
+        .h(PRESET_ROW_HEIGHT)
         .flex()
         .flex_row()
         .items_center()
         .gap_2()
         .px_2()
-        .py(px(5.))
         .rounded_md()
+        .overflow_hidden()
         .hover(|this| this.bg(theme.secondary))
         .child(
             div()
@@ -598,13 +627,54 @@ fn preset_row(
                 .label("Add")
                 .small()
                 .outline()
-                .on_click({
-                    let id = id.clone();
-                    cx.listener(move |workspace, _, _, cx| {
+                .on_click(move |_, _, cx| {
+                    let _ = weak.update(cx, |workspace, cx| {
                         workspace.on_open_preset(&id, cx);
-                    })
+                    });
                 }),
         )
+        .into_any_element()
+}
+
+/// Fixed row height for the virtualized preset catalog list.
+const PRESET_ROW_HEIGHT: gpui_kit::Pixels = px(48.);
+
+/// One visible row of the virtualized preset model checklist.
+fn preset_model_row(
+    model: &str,
+    selected: bool,
+    weak: &gpui_kit::WeakEntity<Workspace>,
+    theme: &Theme,
+) -> AnyElement {
+    let model_id = model.to_owned();
+    let weak = weak.clone();
+    div()
+        .id(format!("preset-model-{model}"))
+        .h(px(28.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_2()
+        .rounded_md()
+        .text_sm()
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.secondary))
+        .on_click(move |_, _, cx| {
+            let _ = weak.update(cx, |workspace, cx| {
+                workspace.apply_action(DesktopAction::PresetModelToggled(model_id.clone()), cx);
+            });
+        })
+        .child(model.to_owned())
+        .when(selected, |this| {
+            this.child(
+                Icon::new(IconName::Check)
+                    .xsmall()
+                    .text_color(theme.primary),
+            )
+        })
+        .into_any_element()
 }
 
 /// The expanded preset form: model picker plus the API key input.
@@ -622,12 +692,7 @@ fn render_preset_form(
         return div().into_any_element();
     };
     let name = preset.name.clone();
-    let models: Vec<String> = preset
-        .models
-        .iter()
-        .take(64)
-        .map(|model| model.id.clone())
-        .collect();
+    let models: Vec<String> = preset.models.iter().map(|model| model.id.clone()).collect();
     let checked: Vec<String> = workspace.vm().preset_models.clone();
     let selection_label = match checked.len() {
         0 => models.first().cloned().unwrap_or_default(),
@@ -670,52 +735,36 @@ fn render_preset_form(
                         })),
                 )
                 .when(menu_open, |this| {
+                    // Virtualized: providers can carry hundreds of models, so
+                    // only the visible slice gets rows and click handlers.
+                    let models = std::rc::Rc::new(models);
+                    let checked = std::rc::Rc::new(checked);
+                    let weak = cx.weak_entity();
                     this.child(
-                        div()
-                            .id("preset-model-list")
-                            .max_h(px(180.))
-                            .overflow_y_scroll()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.background)
-                            .p_1()
-                            .flex()
-                            .flex_col()
-                            .gap_px()
-                            .children(models.into_iter().map(|model| {
-                                let selected = checked.contains(&model);
-                                let model_for_click = model.clone();
-                                div()
-                                    .id(format!("preset-model-{model}"))
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .text_sm()
-                                    .cursor_pointer()
-                                    .hover(|this| this.bg(theme.secondary))
-                                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                                        workspace.apply_action(
-                                            DesktopAction::PresetModelToggled(
-                                                model_for_click.clone(),
-                                            ),
-                                            cx,
-                                        );
-                                    }))
-                                    .child(model)
-                                    .when(selected, |this| {
-                                        this.child(
-                                            Icon::new(IconName::Check)
-                                                .xsmall()
-                                                .text_color(theme.primary),
+                        gpui_kit::uniform_list(
+                            "preset-model-list",
+                            models.len(),
+                            move |range, _window, cx| {
+                                let theme = cx.theme();
+                                range
+                                    .map(|index| {
+                                        let model = &models[index];
+                                        preset_model_row(
+                                            model,
+                                            checked.contains(model),
+                                            &weak,
+                                            theme,
                                         )
                                     })
-                            })),
+                                    .collect()
+                            },
+                        )
+                        .w_full()
+                        .max_h(px(180.))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.background),
                     )
                 }),
         )

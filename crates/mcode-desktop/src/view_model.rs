@@ -44,8 +44,9 @@ pub struct ConversationEntry {
     pub event_id: String,
     /// Rendering class.
     pub kind: EntryKind,
-    /// Display text (already lossy-decoded).
-    pub text: String,
+    /// Display text (already lossy-decoded). Shared so the render pass can
+    /// hand entries to elements without copying the transcript every frame.
+    pub text: Arc<str>,
     /// Call identity for tool entries.
     pub call_id: Option<String>,
 }
@@ -510,7 +511,12 @@ pub enum DesktopAction {
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
-    ProviderKeySaved(Vec<String>),
+    ProviderKeySaved {
+        /// Provider ids with a stored key.
+        provider_keys: Vec<String>,
+        /// MCP server ids with a stored key.
+        mcp_keys: Vec<String>,
+    },
     /// Incremental assistant text from the active model turn.
     ChatDelta(String),
     /// Incremental assistant reasoning from the active model turn.
@@ -679,7 +685,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.entries.push(ConversationEntry {
                     event_id: format!("call-{call_id}"),
                     kind: EntryKind::ToolCall,
-                    text: name,
+                    text: name.into(),
                     call_id: Some(call_id),
                 });
             }
@@ -820,9 +826,13 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.effective_user_agent = settings.to_settings().effective_user_agent();
             }
         }
-        DesktopAction::ProviderKeySaved(keyed_ids) => {
+        DesktopAction::ProviderKeySaved {
+            provider_keys,
+            mcp_keys,
+        } => {
             if let Some(settings) = state.settings.as_mut() {
-                settings.providers_with_keys = keyed_ids;
+                settings.providers_with_keys = provider_keys;
+                settings.mcp_with_keys = mcp_keys;
             }
         }
         DesktopAction::SettingsMcpAdded(server) => {
@@ -1026,13 +1036,13 @@ pub fn project_entry(
     use mcode_session::session::EventKind;
     ConversationEntry {
         event_id: event.event_id.as_str().to_owned(),
+        text: text.into(),
         kind: match event.kind {
             EventKind::Message => EntryKind::UserMessage,
             EventKind::ToolCall => EntryKind::ToolCall,
             EventKind::ToolResult => EntryKind::ToolResult,
             EventKind::Usage | EventKind::Task => EntryKind::Usage,
         },
-        text,
         call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
     }
 }
@@ -1140,7 +1150,7 @@ mod tests {
                 entry: ConversationEntry {
                     event_id: "evt1-1".to_owned(),
                     kind: EntryKind::UserMessage,
-                    text: "hello".to_owned(),
+                    text: "hello".into(),
                     call_id: None,
                 },
             },
@@ -1207,6 +1217,42 @@ mod tests {
         assert_eq!(settings.revision, 3);
         assert!(!settings.dirty);
         assert!(!settings.saving);
+    }
+
+    #[test]
+    fn key_save_reply_updates_markers_without_touching_rows() {
+        let mut state = WorkspaceState::default();
+        let settings =
+            SettingsState::from_settings(&mcode_config::AppSettings::default(), 0, Vec::new());
+        reduce(&mut state, DesktopAction::SettingsLoaded(settings));
+
+        // A freshly added provider sits dirty in the editor while its key
+        // save is in flight; the reply must not wipe the row.
+        reduce(
+            &mut state,
+            DesktopAction::SettingsProviderAdded(mcode_config::ProviderSettings {
+                id: "openai-main".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://api.openai.com/v1".to_owned(),
+                models: vec!["gpt-x".to_owned()],
+                enabled: true,
+            }),
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ProviderKeySaved {
+                provider_keys: vec!["openai-main".to_owned()],
+                mcp_keys: vec!["fs".to_owned()],
+            },
+        );
+        let settings = state.settings.as_ref().expect("settings");
+        assert_eq!(settings.providers.len(), 1, "row survives the key reply");
+        assert!(
+            settings.dirty,
+            "dirty edits are not clobbered by the key reply"
+        );
+        assert_eq!(settings.providers_with_keys, vec!["openai-main"]);
+        assert_eq!(settings.mcp_with_keys, vec!["fs"]);
     }
 
     #[test]
@@ -1290,7 +1336,7 @@ mod tests {
                 entry: ConversationEntry {
                     event_id: "evt1-x".to_owned(),
                     kind: EntryKind::AssistantMessage,
-                    text: "hello".to_owned(),
+                    text: "hello".into(),
                     call_id: None,
                 },
             },
