@@ -299,7 +299,7 @@ pub fn replace_todo_document(
             serde_json::to_value(&document.tasks)
                 .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?,
         );
-        let mut bytes = serde_json::to_vec(&wire)
+        let mut bytes = serde_json::to_vec_pretty(&wire)
             .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
         bytes.push(b'\n');
         published = Some(revision);

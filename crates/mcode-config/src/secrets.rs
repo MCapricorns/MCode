@@ -135,7 +135,7 @@ pub fn replace_provider_secrets(
             keys.insert(id.clone(), key.clone().into());
         }
         document.insert("providerKeys".into(), keys.into());
-        let mut bytes = serde_json::to_vec(&document)
+        let mut bytes = serde_json::to_vec_pretty(&document)
             .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
         bytes.push(b'\n');
         if bytes.len() > MAX_SECRETS_BYTES {

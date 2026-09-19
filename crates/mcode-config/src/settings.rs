@@ -410,7 +410,7 @@ pub fn replace_app_settings(
             revision: revision.get(),
             settings,
         };
-        let mut bytes = serde_json::to_vec(&document)
+        let mut bytes = serde_json::to_vec_pretty(&document)
             .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
         bytes.push(b'\n');
         if bytes.len() > MAX_SETTINGS_BYTES {
