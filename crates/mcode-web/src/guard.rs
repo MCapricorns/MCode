@@ -130,17 +130,15 @@ pub fn sanitize_remote_text(value: &str) -> String {
     while index < chars.len() {
         let current = chars[index];
         match current {
-            '\u{1b}' => {
-                match chars.get(index + 1).copied() {
-                    Some('[') => index = skip_csi(&chars, index + 2),
-                    Some(']') => index = skip_osc(&chars, index + 2),
-                    Some('P' | 'X' | '^' | '_') => {
-                        index = skip_control_string(&chars, index + 2);
-                    }
-                    Some(_) => index += 2,
-                    None => index += 1,
+            '\u{1b}' => match chars.get(index + 1).copied() {
+                Some('[') => index = skip_csi(&chars, index + 2),
+                Some(']') => index = skip_osc(&chars, index + 2),
+                Some('P' | 'X' | '^' | '_') => {
+                    index = skip_control_string(&chars, index + 2);
                 }
-            }
+                Some(_) => index += 2,
+                None => index += 1,
+            },
             '\u{9b}' => index = skip_csi(&chars, index + 1),
             '\u{9d}' => index = skip_osc(&chars, index + 1),
             '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => {

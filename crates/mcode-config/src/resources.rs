@@ -49,7 +49,11 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
     };
     push("AGENTS.md", workspace_root.join("AGENTS.md"), false);
     push("MCODE.md", workspace_root.join("MCODE.md"), false);
-    push("AGENTS.md", workspace_root.join(".mcode").join("agents.md"), false);
+    push(
+        "AGENTS.md",
+        workspace_root.join(".mcode").join("agents.md"),
+        false,
+    );
     push("AGENTS.md", home.root().join("AGENTS.md"), true);
     files
 }
@@ -134,7 +138,10 @@ mod tests {
         let files = discover_resources(&home, &workspace);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "AGENTS.md");
-        assert!(files[0].path.ends_with(r".mcodegents.md") || files[0].path.ends_with(".mcode/agents.md"));
+        assert!(
+            files[0].path.ends_with(r".mcodegents.md")
+                || files[0].path.ends_with(".mcode/agents.md")
+        );
     }
 
     #[test]
