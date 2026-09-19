@@ -87,6 +87,7 @@ MCode 是一个 GPUI 桌面应用(Windows/macOS),没有其他前端:
 - [x] feat:composer `@` 文件索引(bridge 有界项目内搜索,跳 VCS/依赖目录,最短路径优先)与 `/` 命令菜单(/new、/settings)(e255740)。
 - [x] fix:CI tools-contract 挂 —— rustfmt 版本漂移钉 toolchain 1.98.1(5eddf97);非中文代码页 runner 上 pwsh 管道输出把 CJK 折叠成 `??`,用户脚本序言(using/param)后插一行 `[Console]::OutputEncoding=UTF8`,输出恒为 UTF-8(18fb31c)。
 - [x] feat:皮肤升级 —— skin.rs 统一环境渐变/磨砂玻璃面板/菜单 scrim/品牌渐变气泡,用户气泡框收窄;composer 露出 Thinking 循环切换 chip(9b2cc5c)。
+- [x] feat:OAuth 供应商 —— catalog 解锁 GitHub Copilot 设备码预设(auth=device-code,钉 api.githubcopilot.com,快照重生成 + 缓存版本 2);providers 增设备码客户端(Copilot CLI 公共 client_id,免 secret);desktop 设置页 Sign in with GitHub(浏览器自动打开 + 用户码面板),桥接存 OAuth token 入秘密库并 upsert 供应商行,回合内换短效 Copilot bearer;x.ai 本就为 openai-completions API-Key 预设(65ec7f7/670095a/613bc5e)。
 
 依赖主线:`T9 -> T10 -> T11 -> T12`;T13–T15 依赖 T11;T16+ 依赖 T12。
 
