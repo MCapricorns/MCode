@@ -26,9 +26,13 @@ ENDPOINT_FIXES = {
     "perplexity": ("openai-completions", "https://api.perplexity.ai"),
 }
 
+# Providers that authenticate with an OAuth device flow instead of a pasted
+# API key; the settings UI renders a sign-in button for these.
+DEVICE_CODE_PROVIDERS = {"github-copilot"}
+
 # Providers excluded from presets: cloud consoles with non-portable auth
-# (cloud SDKs, OAuth device flows) rather than a plain API key.
-EXCLUDED_PROVIDERS = {"github-copilot"}
+# (cloud SDKs) rather than a plain API key or a supported OAuth flow.
+EXCLUDED_PROVIDERS = set()
 
 
 def resolve_wire(provider_id: str, raw: dict) -> tuple[str, str] | None:
@@ -43,6 +47,9 @@ def resolve_wire(provider_id: str, raw: dict) -> tuple[str, str] | None:
         return None
     else:
         kind = "openai-completions"
+    if provider_id == "github-copilot":
+        # The chat completions host; models.dev lists the console host.
+        return (kind, "https://api.githubcopilot.com")
     if api.startswith("https://"):
         return (kind, api)
     fix = ENDPOINT_FIXES.get(provider_id)
@@ -111,7 +118,7 @@ def build_provider(provider_id: str, raw: dict) -> dict | None:
             models.append(built)
     if not models:
         return None
-    return {
+    provider = {
         "id": provider_id,
         "name": clean_text(raw.get("name"), provider_id) or provider_id,
         "kind": kind,
@@ -119,6 +126,9 @@ def build_provider(provider_id: str, raw: dict) -> dict | None:
         "doc": clean_text(raw.get("doc")) or None,
         "models": models,
     }
+    if provider_id in DEVICE_CODE_PROVIDERS:
+        provider["auth"] = "device-code"
+    return provider
 
 
 def main() -> int:

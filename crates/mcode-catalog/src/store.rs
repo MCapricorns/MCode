@@ -17,8 +17,10 @@ use crate::{CatalogDocument, parse_snapshot};
 pub const CATALOG_CACHE_PATH: &str = "catalog-cache.json";
 /// Maximum encoded cache size.
 pub const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
-/// Cache format version.
-pub const CACHE_FORMAT_VERSION: u32 = 1;
+/// Cache format version. Bumped to 2 when the snapshot gained OAuth
+/// (`auth`) provider presets, so pre-Copilot caches fall back to the
+/// bundled baseline instead of hiding the sign-in flow.
+pub const CACHE_FORMAT_VERSION: u32 = 2;
 /// Cache kind tag.
 pub const CACHE_KIND: &str = "mcode-catalog-cache";
 /// Maximum cloud document size accepted.

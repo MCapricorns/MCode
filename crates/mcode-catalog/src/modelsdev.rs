@@ -3,12 +3,13 @@
 //! The cloud document is normalized into the same compact schema as the
 //! vendored snapshot: only providers MCode can serve (anthropic-messages or
 //! OpenAI-compatible endpoints) are kept, first-party labs without a
-//! published `api` field are filled from a pinned endpoint table, and
-//! console-auth vendors (cloud SDKs, OAuth flows) are excluded.
+//! published `api` field are filled from a pinned endpoint table, and cloud
+//! SDK consoles (bedrock/vertex/azure/google) are excluded. OAuth device-code
+//! vendors such as `github-copilot` are kept with an `auth` marker.
 use serde::Deserialize;
 
 use crate::{
-    CatalogDocument, CatalogModel, CatalogProvider, KIND_ANTHROPIC_MESSAGES,
+    AUTH_DEVICE_CODE, CatalogDocument, CatalogModel, CatalogProvider, KIND_ANTHROPIC_MESSAGES,
     KIND_OPENAI_COMPLETIONS, clean_text, normalize, valid_provider_id,
 };
 
@@ -26,17 +27,27 @@ fn endpoint_fix(provider_id: &str) -> Option<(&'static str, &'static str)> {
         "xai" => Some((KIND_OPENAI_COMPLETIONS, "https://api.x.ai/v1")),
         "cerebras" => Some((KIND_OPENAI_COMPLETIONS, "https://api.cerebras.ai/v1")),
         "perplexity" => Some((KIND_OPENAI_COMPLETIONS, "https://api.perplexity.ai")),
+        "github-copilot" => Some((KIND_OPENAI_COMPLETIONS, "https://api.githubcopilot.com")),
         _ => None,
     }
 }
 
-/// Providers excluded from presets: their credentials are not portable API
-/// keys (cloud SDKs, OAuth device flows).
-fn excluded(provider_id: &str, npm: &str) -> bool {
-    provider_id == "github-copilot"
-        || ["bedrock", "vertex", "azure", "google"]
-            .iter()
-            .any(|token| npm.contains(token))
+/// Providers that authenticate with an OAuth device flow instead of a pasted
+/// API key; the settings UI renders a sign-in button for these.
+fn device_code_auth(provider_id: &str) -> &'static str {
+    if provider_id == "github-copilot" {
+        AUTH_DEVICE_CODE
+    } else {
+        ""
+    }
+}
+
+/// Providers excluded from presets: their credentials are cloud SDK consoles
+/// rather than a portable API key or a supported OAuth flow.
+fn excluded(npm: &str) -> bool {
+    ["bedrock", "vertex", "azure", "google"]
+        .iter()
+        .any(|token| npm.contains(token))
 }
 
 #[derive(Deserialize, Default)]
@@ -91,20 +102,30 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
     };
     let mut providers = Vec::new();
     for (provider_id, entry) in raw {
-        if !valid_provider_id(&provider_id) || excluded(&provider_id, &entry.npm) {
+        if !valid_provider_id(&provider_id) || excluded(&entry.npm) {
             continue;
         }
-        let (kind, base_url) = if entry.npm.contains("anthropic") {
-            (KIND_ANTHROPIC_MESSAGES, entry.api.as_str())
-        } else {
-            (KIND_OPENAI_COMPLETIONS, entry.api.as_str())
-        };
-        let (kind, base_url) = match clean_text(base_url) {
-            Some(base) if base.starts_with("https://") => (kind.to_owned(), base),
-            _ => match endpoint_fix(&provider_id) {
+        let auth = device_code_auth(&provider_id).to_owned();
+        // A device-code vendor always uses the pinned chat endpoint, never
+        // whatever console URL the cloud document happens to carry.
+        let (kind, base_url) = if !auth.is_empty() {
+            match endpoint_fix(&provider_id) {
                 Some((kind, base)) => (kind.to_owned(), base.to_owned()),
                 None => continue,
-            },
+            }
+        } else {
+            let (kind, api) = if entry.npm.contains("anthropic") {
+                (KIND_ANTHROPIC_MESSAGES, entry.api.clone())
+            } else {
+                (KIND_OPENAI_COMPLETIONS, entry.api.clone())
+            };
+            match clean_text(&api) {
+                Some(base) if base.starts_with("https://") => (kind.to_owned(), base),
+                _ => match endpoint_fix(&provider_id) {
+                    Some((kind, base)) => (kind.to_owned(), base.to_owned()),
+                    None => continue,
+                },
+            }
         };
         let mut models = Vec::new();
         for (model_id, model) in entry.models {
@@ -132,9 +153,10 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
         providers.push(CatalogProvider {
             id: provider_id,
             name: clean_text(&entry.name).unwrap_or_else(|| "provider".to_owned()),
-            kind: kind.to_owned(),
+            kind,
             base_url,
             doc: clean_text(&entry.doc).filter(|doc| doc.starts_with("https://")),
+            auth,
             models,
         });
     }
@@ -197,5 +219,27 @@ mod tests {
     fn malformed_documents_yield_an_empty_catalog() {
         assert!(parse_models_dev(b"not json").providers.is_empty());
         assert!(parse_models_dev(b"[]").providers.is_empty());
+    }
+
+    #[test]
+    fn copilot_keeps_pinned_endpoint_and_marks_device_code_auth() {
+        let raw = br#"{
+            "github-copilot": {"npm": "@ai-sdk/openai-compatible",
+                "api": "https://console.example.com", "name": "GitHub Copilot",
+                "models": {"gpt-x": {"name": "GPT X", "tool_call": true}}}
+        }"#;
+        let document = parse_models_dev(raw);
+        let copilot = document.provider("github-copilot").expect("copilot preset");
+        assert_eq!(copilot.kind, KIND_OPENAI_COMPLETIONS);
+        assert_eq!(copilot.base_url, "https://api.githubcopilot.com");
+        assert_eq!(copilot.auth, AUTH_DEVICE_CODE);
+        assert!(copilot.models.iter().all(|model| model.tool_call));
+        // Plain vendors keep defaulting to a pasted API key.
+        let vanilla = parse_models_dev(
+            br#"{"acme": {"npm": "@ai-sdk/openai-compatible",
+                "api": "https://api.acme.dev/v1", "name": "Acme",
+                "models": {"m1": {}}}}"#,
+        );
+        assert_eq!(vanilla.provider("acme").expect("acme").auth, "");
     }
 }

@@ -21,6 +21,11 @@ pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
 /// Wire protocol: OpenAI Chat Completions.
 pub const KIND_OPENAI_COMPLETIONS: &str = "openai-completions";
 
+/// Auth: a pasted API key stored in the secret vault (default).
+pub const AUTH_API_KEY: &str = "";
+/// Auth: an OAuth device-code sign-in (GitHub Copilot).
+pub const AUTH_DEVICE_CODE: &str = "device-code";
+
 /// Upper bound for provider entries in one catalog.
 pub const MAX_PROVIDERS: usize = 1024;
 /// Upper bound for model entries in one provider.
@@ -66,6 +71,10 @@ pub struct CatalogProvider {
     pub base_url: String,
     /// Documentation URL, when published.
     pub doc: Option<String>,
+    /// Credential mode: `""` (default) pastes an API key; `device-code`
+    /// signs in with an OAuth device flow.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub auth: String,
     /// Model presets, sorted by id.
     pub models: Vec<CatalogModel>,
 }
@@ -78,6 +87,7 @@ impl Default for CatalogProvider {
             kind: KIND_OPENAI_COMPLETIONS.to_owned(),
             base_url: String::new(),
             doc: None,
+            auth: String::new(),
             models: Vec::new(),
         }
     }
@@ -207,6 +217,7 @@ mod tests {
                 kind: KIND_OPENAI_COMPLETIONS.to_owned(),
                 base_url: "https://b.example.com/v1".to_owned(),
                 doc: None,
+                auth: String::new(),
                 models: vec![CatalogModel {
                     id: "m2".to_owned(),
                     name: "  ".to_owned(),
@@ -219,6 +230,7 @@ mod tests {
                 kind: KIND_OPENAI_COMPLETIONS.to_owned(),
                 base_url: "https://x.example.com".to_owned(),
                 doc: None,
+                auth: String::new(),
                 models: vec![CatalogModel::default()],
             },
             CatalogProvider {
@@ -227,6 +239,7 @@ mod tests {
                 kind: KIND_OPENAI_COMPLETIONS.to_owned(),
                 base_url: "https://a.example.com".to_owned(),
                 doc: None,
+                auth: String::new(),
                 models: Vec::new(),
             },
             CatalogProvider {
@@ -235,6 +248,7 @@ mod tests {
                 kind: "unknown".to_owned(),
                 base_url: "https://c.example.com".to_owned(),
                 doc: None,
+                auth: String::new(),
                 models: vec![CatalogModel::default()],
             },
         ]);
