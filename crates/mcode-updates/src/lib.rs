@@ -329,14 +329,13 @@ pub fn apply_and_restart(prepared: &PreparedUpdate) -> Result<(), String> {
     };
     std::fs::write(&script_path, script).map_err(|error| format!("updater script: {error}"))?;
 
-    if cfg!(windows) {
-        spawn_windows_updater(&script_path)?;
-    } else {
-        Command::new("/bin/sh")
-            .arg(&script_path)
-            .spawn()
-            .map_err(|error| format!("updater spawn: {error}"))?;
-    }
+    #[cfg(windows)]
+    spawn_windows_updater(&script_path)?;
+    #[cfg(not(windows))]
+    Command::new("/bin/sh")
+        .arg(&script_path)
+        .spawn()
+        .map_err(|error| format!("updater spawn: {error}"))?;
     Ok(())
 }
 
