@@ -273,9 +273,7 @@ pub struct WorkspaceState {
     /// A send is in flight.
     pub sending: bool,
     /// Selected right-panel tab.
-    pub context_tab: ContextTab,
     /// Latest web search results.
-    pub web_results: Vec<mcode_web::SearchResult>,
     /// Per-server tool names from the last listing, keyed by server id.
     pub mcp_tools: Vec<(String, Vec<String>)>,
     /// Prompt resources for the open session: (name, path).
@@ -354,7 +352,6 @@ pub enum DesktopAction {
     /// A request failed.
     Failed(String),
     /// Switch the right-panel tab.
-    ShowContextTab(ContextTab),
     /// Settings loaded from the core.
     SettingsLoaded(SettingsState),
     /// The settings editor changed the User-Agent.
@@ -420,7 +417,6 @@ pub enum DesktopAction {
     /// The model turn failed without committing anything.
     ChatFailed(String),
     /// Web search completed.
-    WebSearched(Vec<mcode_web::SearchResult>),
     /// Toggle light/dark theme.
     ToggleTheme,
     /// Clear the surfaced error.
@@ -607,7 +603,6 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.error = Some(message);
             state.sending = false;
         }
-        DesktopAction::ShowContextTab(tab) => state.context_tab = tab,
         DesktopAction::SettingsLoaded(settings) => {
             let dark = settings.theme != "light";
             state.settings = Some(settings);
@@ -686,7 +681,6 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.providers_with_keys = keyed_ids;
             }
         }
-        DesktopAction::WebSearched(results) => state.web_results = results,
         DesktopAction::SettingsMcpAdded(server) => {
             if let Some(settings) = state.settings.as_mut()
                 && settings.mcp_servers.len() < mcode_config::MAX_MCP_SERVERS

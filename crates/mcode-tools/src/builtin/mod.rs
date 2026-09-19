@@ -16,6 +16,7 @@ pub mod read;
 pub mod shell;
 pub mod task;
 pub mod todo;
+pub mod web;
 pub mod write;
 
 pub use ask::{AskAnswer, AskChannel, AskQuestion, AskTool, user_dismissed};
@@ -27,6 +28,7 @@ pub use read::ReadTool;
 pub use shell::ShellTool;
 pub use task::{SubagentRequest, TaskHost, TaskTool};
 pub use todo::{TodoStore, TodoWireTask, TodoWriteTool};
+pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
 pub use write::WriteTool;
 
 use std::sync::Arc;

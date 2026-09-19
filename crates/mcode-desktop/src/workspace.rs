@@ -11,7 +11,7 @@ use mcode_session::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{
-    ContextTab, DesktopAction, MainView, SettingsState, UpdateState, WorkspaceState, reduce,
+    DesktopAction, MainView, SettingsState, UpdateState, WorkspaceState, reduce,
 };
 
 /// Window chrome bounds for the first window.
@@ -62,7 +62,6 @@ pub struct Workspace {
     mcp_key_input: Option<Entity<InputState>>,
     preset_key_input: Option<Entity<InputState>>,
     preset_search_input: Option<Entity<InputState>>,
-    web_query_input: Option<Entity<InputState>>,
     ask_input: Option<Entity<InputState>>,
     pending_project: Option<String>,
     pending_catalog_refresh: bool,
@@ -94,7 +93,6 @@ impl Workspace {
             mcp_key_input: None,
             preset_key_input: None,
             preset_search_input: None,
-            web_query_input: None,
             ask_input: None,
             pending_project: None,
             pending_catalog_refresh: false,
@@ -365,9 +363,8 @@ impl Workspace {
                 self.dispatch(BridgeCommand::LoadSettings, cx);
             }
             BridgeReply::ChatStarted(Ok(())) => {}
-            BridgeReply::WebSearched(Ok(results)) => {
-                self.apply_action(DesktopAction::WebSearched(results), cx);
-            }
+            // Web search is a model tool now; UI-initiated replies are ignored.
+            BridgeReply::WebSearched(_) => {}
             BridgeReply::McpTools(Ok((server_id, tools))) => {
                 self.apply_action(DesktopAction::McpToolsListed { server_id, tools }, cx);
             }
@@ -452,7 +449,6 @@ impl Workspace {
             | BridgeReply::SettingsSaved(Err(message))
             | BridgeReply::ProviderKeySaved(Err(message))
             | BridgeReply::ChatStarted(Err(message))
-            | BridgeReply::WebSearched(Err(message))
             | BridgeReply::McpTools(Err(message))
             | BridgeReply::RolledBack(Err(message))
             | BridgeReply::Resources(Err(message))
@@ -614,10 +610,6 @@ impl Workspace {
         if !draft.trim().is_empty() && !self.vm.sending {
             self.send(draft, window, cx);
         }
-    }
-
-    pub(super) fn on_show_tab(&mut self, tab: ContextTab, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ShowContextTab(tab), cx);
     }
 
     /// Switches the main area between chat and settings.
@@ -874,30 +866,6 @@ impl Workspace {
         );
     }
 
-    pub(super) fn on_rollback(&mut self, cx: &mut Context<Workspace>) {
-        let Some(conversation) = self.vm.active.clone() else {
-            return;
-        };
-        self.dispatch(
-            BridgeCommand::RollbackWorkspace {
-                session_id: conversation.session_id,
-            },
-            cx,
-        );
-    }
-
-    pub(super) fn on_web_search(&mut self, query: &str, cx: &mut Context<Workspace>) {
-        if query.trim().is_empty() {
-            return;
-        }
-        self.dispatch(
-            BridgeCommand::WebSearch {
-                query: query.trim().to_owned(),
-            },
-            cx,
-        );
-    }
-
     pub(super) fn on_dismiss_error(&mut self, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::DismissError, cx);
     }
@@ -941,29 +909,6 @@ impl Workspace {
             self.ua_sync_pending = false;
         }
         input
-    }
-
-    pub(super) fn web_query_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Workspace>,
-    ) -> Entity<InputState> {
-        self.web_query_input
-            .get_or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search the web…"))
-            })
-            .clone()
-    }
-
-    pub(super) fn on_web_search_run(&mut self, cx: &mut Context<Workspace>) {
-        let Some(input) = self.web_query_input.clone() else {
-            return;
-        };
-        let query = input.read(cx).value().trim().to_owned();
-        if query.is_empty() {
-            return;
-        }
-        self.on_web_search(&query, cx);
     }
 
     pub(super) fn provider_form(

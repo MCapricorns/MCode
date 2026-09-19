@@ -893,6 +893,15 @@ async fn mcp_list_tools(
 ///
 /// Runs on the caller's runtime; never builds a nested one.
 async fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>, String> {
+    let client = web_client(home)?;
+    client
+        .search(query, 8, tokio_util::sync::CancellationToken::new())
+        .await
+        .map_err(|error| format!("search failed: {error}"))
+}
+
+/// Builds the web client for the enabled backend.
+fn web_client(home: &HomeLayout) -> Result<mcode_web::WebClient, String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let backend = settings
         .web
@@ -902,12 +911,60 @@ async fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>,
         .ok_or_else(|| "no enabled search backend — add one in Settings".to_owned())?;
     let transport = mcode_web::reqwest_transport::ReqwestWebTransport::new()
         .map_err(|_| "web transport unavailable".to_owned())?;
-    let client = mcode_web::WebClient::new(&backend.endpoint, std::sync::Arc::new(transport))
-        .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())?;
-    client
-        .search(query, 8, tokio_util::sync::CancellationToken::new())
-        .await
-        .map_err(|error| format!("search failed: {error}"))
+    mcode_web::WebClient::new(&backend.endpoint, std::sync::Arc::new(transport))
+        .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())
+}
+
+/// Host channel for the model's web tools: the same bounded client the
+/// settings page configures.
+struct BridgeWebHost {
+    home: HomeLayout,
+}
+
+#[async_trait::async_trait]
+impl mcode_tools::builtin::WebHost for BridgeWebHost {
+    async fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<mcode_tools::builtin::WebHit>, mcode_tools::ToolError> {
+        let fail = |message: String| mcode_tools::ToolError::Execution(message);
+        let client = web_client(&self.home).map_err(fail)?;
+        let results = client
+            .search(query, max_results, cancel.clone())
+            .await
+            .map_err(|error| fail(format!("search failed: {error}")))?;
+        Ok(results
+            .into_iter()
+            .map(|result| mcode_tools::builtin::WebHit {
+                url: result.url,
+                title: result.title,
+                snippet: result.snippet,
+            })
+            .collect())
+    }
+
+    async fn fetch_content(
+        &self,
+        urls: &[String],
+        cancel: &CancellationToken,
+    ) -> Result<Vec<mcode_tools::builtin::WebPage>, mcode_tools::ToolError> {
+        let fail = |message: String| mcode_tools::ToolError::Execution(message);
+        let client = web_client(&self.home).map_err(fail)?;
+        let pages = client
+            .contents(urls, cancel.clone())
+            .await
+            .map_err(|error| fail(format!("fetch failed: {error}")))?;
+        Ok(pages
+            .into_iter()
+            .map(|page| mcode_tools::builtin::WebPage {
+                url: page.url,
+                content: page.content,
+                truncated: page.truncated,
+            })
+            .collect())
+    }
 }
 
 fn load_settings(
@@ -1264,6 +1321,15 @@ async fn run_chat_turn(
                 cwd: cwd.clone(),
             },
         ))));
+        // The model's web tools ride the same settings-configured backend.
+        let web_host: Arc<dyn mcode_tools::builtin::WebHost> =
+            Arc::new(BridgeWebHost { home: home.clone() });
+        registry.register(Arc::new(mcode_tools::builtin::WebSearchTool::new(
+            web_host.clone(),
+        )));
+        registry.register(Arc::new(mcode_tools::builtin::FetchContentTool::new(
+            web_host,
+        )));
         // todo_write persists the plan and appends a durable Task event.
         let todo_events = events.clone();
         let todo_session = session_id.to_owned();
@@ -2179,6 +2245,15 @@ impl BridgeTaskHost {
         let registry = Arc::new({
             let registry = ToolRegistry::new();
             mcode_tools::register_builtins(&registry);
+            let web_host: Arc<dyn mcode_tools::builtin::WebHost> = Arc::new(BridgeWebHost {
+                home: self.home.clone(),
+            });
+            registry.register(Arc::new(mcode_tools::builtin::WebSearchTool::new(
+                web_host.clone(),
+            )));
+            registry.register(Arc::new(mcode_tools::builtin::FetchContentTool::new(
+                web_host,
+            )));
             registry
         });
         let run_dir_for_hooks = run_dir.clone();
