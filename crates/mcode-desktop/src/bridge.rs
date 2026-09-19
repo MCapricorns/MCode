@@ -29,6 +29,7 @@ use mcode_config::{
     read_ui_state, replace_app_settings, replace_provider_secrets, replace_ui_state,
 };
 use mcode_core::Message;
+use mcode_provider_api::{Provider as _, Request, StreamEvent};
 use mcode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
 use mcode_session::session::{
     self, BranchId, EventKind, HeadStamp, SessionCallId, SessionError, SessionId, SessionService,
@@ -1193,6 +1194,10 @@ async fn run_chat_turn(
     let usage_enabled = settings.usage.enabled;
     let usage_provider = provider_id.to_owned();
     let usage_model = model.to_owned();
+    let head_stamp_text = match &expected_head {
+        HeadStamp::Empty => "empty".to_owned(),
+        HeadStamp::Event(event) => event.as_str().to_owned(),
+    };
     let writer = HeadWriter::new(
         state.service.clone(),
         session.clone(),
@@ -1239,6 +1244,20 @@ async fn run_chat_turn(
     // session_id is borrowed by the checkpoint closure and later moved into
     // the pump; give each its own copy.
     let session_id = session_id.to_owned();
+
+    // Re-estimate the context before every provider request; when the history
+    // is large, replace its head with a durable summary (atomic checkpoint,
+    // ledger untouched). Compaction failures degrade to the full history.
+    let history = compact_history(
+        home,
+        &wire,
+        model,
+        &session_id,
+        branch.as_str(),
+        &head_stamp_text,
+        history,
+    )
+    .await;
 
     let resources = mcode_config::discover_resources(home, &cwd);
     let mut system_prompt = String::from(
@@ -1694,10 +1713,268 @@ fn project_assistant_from(event_id: &str, payload: &[u8]) -> ConversationEntry {
     }
 }
 
+// ---- compaction (T21) ----
+
+/// Estimated tokens that trigger compaction before a provider request.
+const COMPACTION_THRESHOLD_TOKENS: usize = 48_000;
+/// Verbatim messages kept after the summary.
+const COMPACTION_TAIL_MESSAGES: usize = 8;
+/// Wall budget for the summarization child completion.
+const COMPACTION_SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+/// Largest transcript handed to the summarizer (characters).
+const COMPACTION_TRANSCRIPT_CAP_CHARS: usize = 300_000;
+/// Largest one-message excerpt inside the transcript.
+const COMPACTION_EXCERPT_CHARS: usize = 4_000;
+
+/// Rough token estimate of one message's text content.
+fn message_tokens(message: &Message) -> usize {
+    mcode_config::estimate_tokens(&message_text(message))
+}
+
+/// Flattens one message to plain text for estimation and transcripts.
+fn message_text(message: &Message) -> String {
+    let blocks: Vec<&str> = match message {
+        Message::User(user) => user
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                mcode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect(),
+        Message::Assistant(assistant) => assistant
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                mcode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    blocks.join("")
+}
+
+/// Splits history into (summarize, keep) when its estimate exceeds the
+/// threshold; `None` means no compaction is due.
+fn compaction_split(history: &[Message]) -> Option<(&[Message], &[Message])> {
+    let estimate: usize = history.iter().map(message_tokens).sum();
+    if estimate <= COMPACTION_THRESHOLD_TOKENS || history.len() <= COMPACTION_TAIL_MESSAGES {
+        return None;
+    }
+    let split = history.len() - COMPACTION_TAIL_MESSAGES;
+    Some((&history[..split], &history[split..]))
+}
+
+/// Renders the head messages (plus any prior summary) into a transcript for
+/// the summarizer, tail-capped to keep the child request bounded.
+fn compaction_transcript(prior_summary: Option<&str>, head: &[Message]) -> String {
+    let mut transcript = String::new();
+    if let Some(summary) = prior_summary {
+        transcript.push_str("Summary of the earlier conversation:\n");
+        transcript.push_str(summary);
+        transcript.push_str("\n\n");
+    }
+    for message in head {
+        let role = match message {
+            Message::User(_) => "user",
+            Message::Assistant(_) => "assistant",
+            _ => "system",
+        };
+        let text = message_text(message);
+        let cut = text
+            .char_indices()
+            .nth(COMPACTION_EXCERPT_CHARS)
+            .map(|(index, _)| index)
+            .unwrap_or(text.len());
+        transcript.push_str(&format!("[{role}] {}\n\n", &text[..cut]));
+    }
+    let count = transcript.chars().count();
+    if count > COMPACTION_TRANSCRIPT_CAP_CHARS {
+        let skip = transcript
+            .char_indices()
+            .nth(count - COMPACTION_TRANSCRIPT_CAP_CHARS)
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        format!("...earlier content elided...\n{}", &transcript[skip..])
+    } else {
+        transcript
+    }
+}
+
+/// Runs the summarization child completion on the turn's provider.
+async fn summarize_transcript(wire: &WireProvider, transcript: &str) -> Result<String, String> {
+    let request = Request::new()
+        .with_system_prompt(
+            "You maintain a running summary of a coding-agent conversation. \
+Preserve the user's goals, decisions made, files and paths touched, commands \
+run, open tasks, and unresolved errors. Be dense and factual; no preamble.",
+        )
+        .with_message(Message::User(mcode_core::UserMessage::text(format!(
+            "Summarize the following conversation for continuation:\n\n{transcript}"
+        ))));
+    let cancel = CancellationToken::new();
+    let mut stream = wire
+        .stream(&request, cancel)
+        .await
+        .map_err(|error| format!("summary request failed: {error:?}"))?;
+    let mut summary = String::new();
+    loop {
+        let Some(event) = stream.next().await else {
+            return Err("summary stream ended without completion".to_owned());
+        };
+        match event {
+            StreamEvent::TextDelta(delta) => summary.push_str(&delta),
+            StreamEvent::Done { .. } => break,
+            StreamEvent::Error(error) => return Err(format!("summary stream failed: {error:?}")),
+            _ => {}
+        }
+    }
+    let chars: Vec<char> = summary.chars().collect();
+    if chars.len() > mcode_config::MAX_SUMMARY_CHARS {
+        summary = chars[..mcode_config::MAX_SUMMARY_CHARS].iter().collect();
+    }
+    if summary.trim().is_empty() {
+        return Err("summary was empty".to_owned());
+    }
+    Ok(summary)
+}
+
+/// Compacts history before a provider request. The ledger is untouched: the
+/// durable checkpoint only narrows what this and later turns send. Any
+/// failure degrades to the full history.
+async fn compact_history(
+    home: &mcode_config::HomeLayout,
+    wire: &WireProvider,
+    model: &str,
+    session_id: &str,
+    branch_id: &str,
+    head: &str,
+    history: Vec<Message>,
+) -> Vec<Message> {
+    let Some((head_messages, tail)) = compaction_split(&history) else {
+        return history;
+    };
+    // A prior checkpoint for the same branch folds its summary into the
+    // transcript so the child consolidates instead of re-reading everything.
+    let prior = mcode_config::read_compaction(home, session_id)
+        .ok()
+        .flatten()
+        .filter(|checkpoint| checkpoint.branch_id == branch_id);
+    let prior_summary = prior.as_ref().map(|checkpoint| checkpoint.summary.as_str());
+    let transcript = compaction_transcript(prior_summary, head_messages);
+    let summarized = tokio::time::timeout(
+        COMPACTION_SUMMARY_TIMEOUT,
+        summarize_transcript(wire, &transcript),
+    )
+    .await;
+    let summary = match summarized {
+        Ok(Ok(summary)) => summary,
+        Ok(Err(message)) => {
+            eprintln!("[mcode-compaction] skipped: {message}");
+            return history;
+        }
+        Err(_) => {
+            eprintln!("[mcode-compaction] skipped: summary timed out");
+            return history;
+        }
+    };
+    let checkpoint = mcode_config::CompactionCheckpoint {
+        format_version: mcode_config::COMPACTION_FORMAT_VERSION,
+        kind: mcode_config::COMPACTION_KIND.to_owned(),
+        session_id: session_id.to_owned(),
+        branch_id: branch_id.to_owned(),
+        covered_head: head.to_owned(),
+        covered_messages: head_messages.len(),
+        summary: summary.clone(),
+        model: model.to_owned(),
+        created_at_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default(),
+    };
+    if let Err(error) = mcode_config::write_compaction(home, session_id, &checkpoint) {
+        eprintln!("[mcode-compaction] checkpoint write failed: {error:?}");
+        return history;
+    }
+    let mut compacted = Vec::with_capacity(tail.len() + 1);
+    compacted.push(Message::User(mcode_core::UserMessage::text(format!(
+        "Summary of the conversation so far (earlier events compacted):\n\n{summary}"
+    ))));
+    compacted.extend(tail.iter().cloned());
+    compacted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mcode_session::session::EventKind;
+
+    fn user_msg(text: &str) -> Message {
+        Message::User(mcode_core::UserMessage::text(text))
+    }
+
+    fn assistant_msg(text: &str) -> Message {
+        Message::Assistant(mcode_core::AssistantMessage {
+            blocks: vec![mcode_core::ContentBlock::Text(mcode_core::TextBlock::new(
+                text,
+            ))],
+            usage: None,
+            stop_reason: mcode_core::StopReason::Stop,
+        })
+    }
+
+    #[test]
+    fn compaction_split_skips_small_history() {
+        let history: Vec<Message> = (0..20)
+            .map(|index| user_msg(&format!("message {index}")))
+            .collect();
+        assert!(compaction_split(&history).is_none());
+    }
+
+    #[test]
+    fn compaction_split_keeps_tail_verbatim() {
+        let history: Vec<Message> = (0..40)
+            .map(|index| {
+                let text = format!("message {index}: {}", "x".repeat(6_000));
+                if index % 2 == 0 {
+                    user_msg(&text)
+                } else {
+                    assistant_msg(&text)
+                }
+            })
+            .collect();
+        let (head, tail) = compaction_split(&history).expect("compaction due");
+        assert_eq!(head.len(), 40 - COMPACTION_TAIL_MESSAGES);
+        assert_eq!(tail.len(), COMPACTION_TAIL_MESSAGES);
+    }
+
+    #[test]
+    fn compaction_split_never_drops_everything() {
+        let history: Vec<Message> = (0..4)
+            .map(|index| user_msg(&format!("huge {index}: {}", "x".repeat(100_000))))
+            .collect();
+        assert!(compaction_split(&history).is_none());
+    }
+
+    #[test]
+    fn compaction_transcript_includes_prior_summary_and_roles() {
+        let head = vec![user_msg("hello"), assistant_msg("hi there")];
+        let transcript = compaction_transcript(Some("prior digest"), &head);
+        assert!(transcript.contains("prior digest"));
+        assert!(transcript.contains("[user] hello"));
+        assert!(transcript.contains("[assistant] hi there"));
+    }
+
+    #[test]
+    fn compaction_transcript_caps_total_chars() {
+        let head: Vec<Message> = (0..200)
+            .map(|index| user_msg(&format!("{index}: {}", "y".repeat(4_000))))
+            .collect();
+        let transcript = compaction_transcript(None, &head);
+        assert!(transcript.starts_with("...earlier content elided..."));
+        assert!(transcript.chars().count() <= COMPACTION_TRANSCRIPT_CAP_CHARS + 64);
+    }
 
     fn home() -> (tempfile::TempDir, HomeLayout) {
         let parent = tempfile::tempdir().expect("parent");

@@ -19,6 +19,7 @@
 
 mod authority;
 mod checkpoints;
+mod compaction;
 mod error;
 mod home;
 mod host_vault;
@@ -44,6 +45,10 @@ pub use checkpoints::{
     list_checkpoints, rollback_session,
 };
 #[doc(inline)]
+pub use compaction::{
+    COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,
+    estimate_tokens, read_compaction, write_compaction,
+};
 pub use error::{ConfigError, ConfigErrorKind};
 pub use home::{HomeEnv, HomeLayout, MCODE_DIR_NAME, MCODE_HOME_ENV, PluginFamily};
 #[doc(inline)]
