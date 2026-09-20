@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generates crates/mcode-desktop/assets/icon.ico for MCode.
 
-Pure-python rasterizer: no PIL/imaging dependency. Draws the M-mark (white
-stroke "M" over an indigo->violet gradient rounded square) with 4x
-supersampling, then packs a multi-size .ico (uncompressed BMP entries for
-16/24/32/48 px, PNG entry for 256 px) that Windows loads as resource id 1.
+Pure-python rasterizer: no PIL/imaging dependency. Draws the M-mark (black
+stroke "M" over a white rounded square — matching the in-app logo tiles)
+with 4x supersampling, then packs a multi-size .ico (uncompressed BMP
+entries for 16/24/32/48 px, PNG entry for 256 px) that Windows loads as
+resource id 1.
 """
 
 import struct
@@ -53,8 +54,8 @@ def render(size):
     cx = cy = MASTER / 2
     hw = hh = MASTER / 2 - 8  # 8px outer margin
     radius = 58
-    top = (79, 70, 229)  # indigo-600
-    bottom = (124, 58, 237)  # violet-600
+    top = (255, 255, 255)  # white tile
+    bottom = (255, 255, 255)  # white tile
     for py in range(size):
         row = bytearray()
         for px in range(size):
@@ -71,7 +72,7 @@ def render(size):
                         cg = top[1] + (bottom[1] - top[1]) * t
                         cb = top[2] + (bottom[2] - top[2]) * t
                         if m_distance(x, y) <= half_stroke:
-                            cr = cg = cb = 255.0
+                            cr = cg = cb = 0.0
                         acc[0] += cr
                         acc[1] += cg
                         acc[2] += cb

@@ -81,7 +81,7 @@ struct AdmissionCounters {
 
 fn reserve(counter: &AtomicUsize, maximum: usize) -> bool {
     counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             current.checked_add(1).filter(|next| *next <= maximum)
         })
         .is_ok()

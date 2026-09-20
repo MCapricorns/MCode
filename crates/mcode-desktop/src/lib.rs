@@ -7,6 +7,7 @@
 //! credential ever reaches this crate's render code.
 pub mod bridge;
 pub mod export;
+pub mod mcp_tools;
 pub mod ui;
 pub mod view_model;
 pub mod workspace;

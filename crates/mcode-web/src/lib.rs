@@ -59,7 +59,8 @@ pub enum WebError {
 /// Outbound POST seam for the web client.
 #[async_trait::async_trait]
 pub trait WebTransport: Send + Sync + 'static {
-    /// Posts a JSON body and returns the raw response bytes.
+    /// Posts a JSON body with an optional bearer key and returns the raw
+    /// response bytes.
     ///
     /// # Errors
     ///
@@ -67,6 +68,7 @@ pub trait WebTransport: Send + Sync + 'static {
     async fn post_json(
         &self,
         endpoint: &str,
+        bearer: Option<&str>,
         body: &[u8],
         timeout: Duration,
         cancel: CancellationToken,
@@ -77,29 +79,40 @@ pub trait WebTransport: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct WebClient {
     endpoint: String,
+    bearer: Option<String>,
     transport: Arc<dyn WebTransport>,
     timeout: Duration,
 }
 
 impl WebClient {
     /// Creates one client over an https backend endpoint from settings.
+    /// `bearer` rides every request as the Authorization header.
     ///
     /// # Errors
     ///
     /// Returns [`WebError::Blocked`] when the endpoint itself violates the
     /// URL policy.
-    pub fn new(endpoint: &str, transport: Arc<dyn WebTransport>) -> Result<Self, WebError> {
+    pub fn new(
+        endpoint: &str,
+        bearer: Option<String>,
+        transport: Arc<dyn WebTransport>,
+    ) -> Result<Self, WebError> {
         if !guard::is_fetchable_url(endpoint) {
             return Err(WebError::Blocked);
         }
         Ok(Self {
             endpoint: endpoint.trim_end_matches('/').to_owned(),
+            bearer: bearer.filter(|key| !key.trim().is_empty()),
             transport,
             timeout: Duration::from_secs(guard::DEFAULT_TIMEOUT_SECS),
         })
     }
 
     /// Runs one bounded search.
+    ///
+    /// Wire contract (Querit): `POST /v1/search` with `{"query", "count"}`
+    /// answering `{"results": {"result": [...]}}`; the flat
+    /// `{"results": [...]}` shape is accepted for custom backends.
     ///
     /// # Errors
     ///
@@ -116,20 +129,27 @@ impl WebClient {
         let max_results = max_results.clamp(1, guard::MAX_SEARCH_RESULTS);
         let body = serde_json::to_vec(&serde_json::json!({
             "query": query,
-            "maxResults": max_results,
+            "count": max_results,
         }))
         .map_err(|_| WebError::Protocol)?;
         let raw = self.post("/v1/search", &body, cancel).await?;
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            results: Vec<SearchResult>,
-        }
-        let wire: Wire = serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
-        let results: Vec<SearchResult> = wire
-            .results
-            .into_iter()
+        let payload: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+        let hits = payload["results"]["result"].as_array().or_else(|| {
+            // Custom backends answer with a flat array under `results`.
+            payload["results"].as_array()
+        });
+        let hits = hits.ok_or(WebError::Protocol)?;
+        let results: Vec<SearchResult> = hits
+            .iter()
+            .filter_map(|hit| {
+                let url = hit["url"].as_str()?;
+                Some(SearchResult {
+                    url: url.to_owned(),
+                    title: hit["title"].as_str().unwrap_or(url).to_owned(),
+                    snippet: hit["snippet"].as_str().unwrap_or_default().to_owned(),
+                })
+            })
             .take(max_results)
             .filter(|result| guard::is_fetchable_url(&result.url))
             .map(|mut result| {
@@ -145,6 +165,11 @@ impl WebClient {
     }
 
     /// Fetches bounded page text for the given URLs.
+    ///
+    /// Wire contract (Querit): `POST /v1/contents` with
+    /// `{"urls", "format": "text", "crawlTimeout", "extrasMeta"}` answering
+    /// `{"results": [{url, content}]}`; the `pages` shape is accepted for
+    /// custom backends.
     ///
     /// # Errors
     ///
@@ -162,24 +187,34 @@ impl WebClient {
                 return Err(WebError::Blocked);
             }
         }
-        let body = serde_json::to_vec(&serde_json::json!({ "urls": urls }))
-            .map_err(|_| WebError::Protocol)?;
+        let body = serde_json::to_vec(&serde_json::json!({
+            "urls": urls,
+            "format": "text",
+            "crawlTimeout": 30_000,
+            "extrasMeta": false,
+        }))
+        .map_err(|_| WebError::Protocol)?;
         let raw = self.post("/v1/contents", &body, cancel).await?;
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            pages: Vec<PageContent>,
-        }
-        let wire: Wire = serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+        let pages_wire = payload["results"]
+            .as_array()
+            .or_else(|| payload["pages"].as_array())
+            .ok_or(WebError::Protocol)?;
         let allowed: std::collections::HashSet<&String> = urls.iter().collect();
         let mut total = 0usize;
         let mut pages = Vec::new();
-        for mut page in wire.pages {
-            if !allowed.contains(&page.url) {
+        for wire in pages_wire {
+            let url = wire["url"].as_str().ok_or(WebError::Protocol)?.to_owned();
+            if !allowed.contains(&url) {
                 return Err(WebError::Protocol);
             }
-            page.content = guard::sanitize_remote_text(&page.content);
+            let content = guard::sanitize_remote_text(wire["content"].as_str().unwrap_or_default());
+            let mut page = PageContent {
+                url,
+                content,
+                truncated: wire["truncated"].as_bool().unwrap_or(false),
+            };
             if page.content.chars().count() > guard::MAX_PAGE_BYTES {
                 page.content = page.content.chars().take(guard::MAX_PAGE_BYTES).collect();
                 page.truncated = true;
@@ -207,7 +242,7 @@ impl WebClient {
             () = cancel.cancelled() => return Err(WebError::Cancelled),
             raw = self
                 .transport
-                .post_json(&endpoint, body, self.timeout, cancel.clone()) => raw?,
+                .post_json(&endpoint, self.bearer.as_deref(), body, self.timeout, cancel.clone()) => raw?,
         };
         if raw.len() > guard::MAX_RESPONSE_BYTES {
             return Err(WebError::Protocol);
@@ -225,6 +260,8 @@ mod tests {
     struct MockTransport {
         response: Mutex<Vec<u8>>,
         endpoints: Mutex<Vec<String>>,
+        bearers: Mutex<Vec<Option<String>>>,
+        bodies: Mutex<Vec<Vec<u8>>>,
     }
 
     #[async_trait::async_trait]
@@ -232,7 +269,8 @@ mod tests {
         async fn post_json(
             &self,
             endpoint: &str,
-            _body: &[u8],
+            bearer: Option<&str>,
+            body: &[u8],
             _timeout: Duration,
             _cancel: CancellationToken,
         ) -> Result<Vec<u8>, WebError> {
@@ -240,6 +278,11 @@ mod tests {
                 .lock()
                 .expect("endpoints")
                 .push(endpoint.to_owned());
+            self.bearers
+                .lock()
+                .expect("bearers")
+                .push(bearer.map(str::to_owned));
+            self.bodies.lock().expect("bodies").push(body.to_vec());
             Ok(self.response.lock().expect("response").clone())
         }
     }
@@ -248,20 +291,26 @@ mod tests {
         let transport = Arc::new(MockTransport {
             response: Mutex::new(serde_json::to_vec(&response).expect("encode")),
             endpoints: Mutex::new(Vec::new()),
+            bearers: Mutex::new(Vec::new()),
+            bodies: Mutex::new(Vec::new()),
         });
-        let client =
-            WebClient::new("https://search.example.com", transport.clone()).expect("client");
+        let client = WebClient::new(
+            "https://search.example.com",
+            Some("key-1".to_owned()),
+            transport.clone(),
+        )
+        .expect("client");
         (client, transport)
     }
 
     #[tokio::test]
-    async fn search_returns_bounded_results_and_hits_v1_search() {
+    async fn search_hits_v1_search_with_bearer_and_querit_shape() {
         let (client, transport) = client(serde_json::json!({
-            "results": [
+            "results": {"result": [
                 {"url": "https://docs.example.com/a", "title": "A", "snippet": "first"},
                 {"url": "https://localhost/secret", "title": "bad", "snippet": "filtered"},
                 {"url": "http://insecure.example.com", "title": "bad2", "snippet": "filtered"},
-            ]
+            ]}
         }));
         let results = client
             .search("rust async", 10, CancellationToken::new())
@@ -272,6 +321,45 @@ mod tests {
         assert_eq!(
             transport.endpoints.lock().expect("endpoints")[0],
             "https://search.example.com/v1/search"
+        );
+        assert_eq!(
+            transport.bearers.lock().expect("bearers")[0],
+            Some("key-1".to_owned()),
+            "the API key rides the Authorization header"
+        );
+        let request: serde_json::Value =
+            serde_json::from_slice(&transport.bodies.lock().expect("bodies")[0])
+                .expect("request body");
+        assert_eq!(request["query"], "rust async");
+        assert_eq!(request["count"], 10);
+    }
+
+    #[tokio::test]
+    async fn search_accepts_the_flat_custom_shape_without_a_key() {
+        let transport = Arc::new(MockTransport {
+            response: Mutex::new(
+                serde_json::to_vec(&serde_json::json!({
+                    "results": [
+                        {"url": "https://docs.example.com/a", "title": "A", "snippet": "s"},
+                    ]
+                }))
+                .expect("encode"),
+            ),
+            endpoints: Mutex::new(Vec::new()),
+            bearers: Mutex::new(Vec::new()),
+            bodies: Mutex::new(Vec::new()),
+        });
+        let client =
+            WebClient::new("https://search.example.com", None, transport.clone()).expect("client");
+        let results = client
+            .search("rust", 5, CancellationToken::new())
+            .await
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            transport.bearers.lock().expect("bearers")[0],
+            None,
+            "custom backends run without credentials"
         );
     }
 
@@ -347,9 +435,11 @@ mod tests {
         let transport = Arc::new(MockTransport {
             response: Mutex::new(Vec::new()),
             endpoints: Mutex::new(Vec::new()),
+            bearers: Mutex::new(Vec::new()),
+            bodies: Mutex::new(Vec::new()),
         });
         assert!(matches!(
-            WebClient::new("http://localhost:9000", transport),
+            WebClient::new("http://localhost:9000", None, transport),
             Err(WebError::Blocked)
         ));
     }

@@ -161,6 +161,9 @@ pub struct StreamingReply {
 /// Upper bound kept for one streamed reply before further deltas are dropped.
 pub const MAX_STREAMING_CHARS: usize = 256 * 1024;
 
+/// Failure-message sentinel marking a user-initiated turn cancel.
+pub const CHAT_CANCELLED: &str = "cancelled";
+
 /// The editable settings projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingsState {
@@ -773,7 +776,11 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.streaming = None;
             }
-            state.error = Some(message);
+            // A user-initiated cancel resets the turn without an error
+            // banner; the sentinel travels as the failure message.
+            if message != CHAT_CANCELLED {
+                state.error = Some(message);
+            }
             state.sending = false;
         }
         DesktopAction::Failed(message) => {
@@ -929,7 +936,10 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_projects,
         } => {
             state.recents = recents;
-            state.project_dir = last_project;
+            // The last project stays in the recents list only: a fresh start
+            // with no session open must not claim a project (the composer
+            // shows "Set folder" until the user picks one).
+            let _ = last_project;
             state.session_projects = session_projects;
             state.auto_update = auto_update;
             if selected_provider.is_some() {
@@ -985,9 +995,28 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ModelMenuToggled(open) => state.model_menu_open = open,
         DesktopAction::PresetSearchChanged(text) => state.preset_search = text,
         DesktopAction::ActivePresetChanged(preset) => {
-            state.active_preset = preset;
+            state.active_preset = preset.clone();
             state.preset_model_menu_open = false;
-            state.preset_models = Vec::new();
+            // Opening a provider pre-checks its whole model list (capped by
+            // the settings limit) so every advertised model starts selected
+            // instead of a single default.
+            state.preset_models = preset
+                .as_ref()
+                .and_then(|id| {
+                    state
+                        .catalog
+                        .as_ref()
+                        .and_then(|catalog| catalog.provider(id))
+                })
+                .map(|provider| {
+                    provider
+                        .models
+                        .iter()
+                        .map(|model| model.id.clone())
+                        .take(mcode_config::MAX_MODELS_PER_PROVIDER)
+                        .collect()
+                })
+                .unwrap_or_default();
         }
         DesktopAction::PresetModelToggled(model) => {
             if let Some(position) = state.preset_models.iter().position(|m| *m == model) {
@@ -1374,6 +1403,58 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_preset_pre_checks_its_model_list() {
+        let mut state = WorkspaceState::default();
+        let mut document = mcode_catalog::CatalogDocument::default();
+        document.providers.push(mcode_catalog::CatalogProvider {
+            id: "acme".to_owned(),
+            name: "Acme".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://api.acme.dev/v1".to_owned(),
+            doc: None,
+            auth: String::new(),
+            models: ["m1", "m2", "m3", "m4"]
+                .iter()
+                .map(|id| mcode_catalog::CatalogModel {
+                    id: (*id).to_owned(),
+                    ..mcode_catalog::CatalogModel::default()
+                })
+                .collect(),
+        });
+        state.catalog = Some(std::sync::Arc::new(document));
+
+        reduce(
+            &mut state,
+            DesktopAction::ActivePresetChanged(Some("acme".to_owned())),
+        );
+        assert_eq!(
+            state.preset_models,
+            vec!["m1", "m2", "m3", "m4"],
+            "every advertised model starts checked"
+        );
+
+        reduce(
+            &mut state,
+            DesktopAction::PresetModelToggled("m2".to_owned()),
+        );
+        assert_eq!(state.preset_models.len(), 3);
+
+        // Reopening resets the selection back to the full list.
+        reduce(
+            &mut state,
+            DesktopAction::ActivePresetChanged(Some("acme".to_owned())),
+        );
+        assert_eq!(state.preset_models.len(), 4);
+
+        // An unknown provider id leaves the form empty rather than stale.
+        reduce(
+            &mut state,
+            DesktopAction::ActivePresetChanged(Some("missing".to_owned())),
+        );
+        assert!(state.preset_models.is_empty());
+    }
+
+    #[test]
     fn models_subview_switches_reset_transient_form_state() {
         use crate::view_model::ModelsSubview;
 
@@ -1502,6 +1583,26 @@ mod tests {
                 .is_none()
         );
         assert_eq!(state.error.as_deref(), Some("provider down"));
+        assert!(!state.sending);
+    }
+
+    #[test]
+    fn chat_cancel_resets_the_turn_without_an_error_banner() {
+        let mut state = opened_conversation();
+        reduce(&mut state, DesktopAction::ChatDelta("partial".to_owned()));
+        reduce(
+            &mut state,
+            DesktopAction::ChatFailed(CHAT_CANCELLED.to_owned()),
+        );
+        assert!(
+            state
+                .active
+                .as_ref()
+                .expect("conversation")
+                .streaming
+                .is_none()
+        );
+        assert_eq!(state.error, None, "a cancel is not a failure");
         assert!(!state.sending);
     }
 

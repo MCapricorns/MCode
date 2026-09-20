@@ -227,6 +227,9 @@ impl Default for AppSettings {
         Self {
             user_agent: String::new(),
             providers: Vec::new(),
+            // Empty by default: the bridge falls back to the built-in Querit
+            // backend (https://api.querit.ai, key from QUERIT_API_KEY or the
+            // vault) whenever no backend is enabled here.
             web: WebSettings {
                 backends: Vec::new(),
             },

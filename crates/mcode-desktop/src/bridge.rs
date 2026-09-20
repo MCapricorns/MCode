@@ -38,13 +38,16 @@ use mcode_providers::{
 use mcode_session::session::{
     self, BranchId, EventKind, HeadStamp, SessionCallId, SessionError, SessionId, SessionService,
 };
+use mcode_tools::ToolDyn as _;
 use mcode_tools::ToolRegistry;
 use mcode_updates::{PreparedUpdate, UpdateOffer};
 use mcode_web::SearchResult;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::view_model::{ActiveConversation, ConversationEntry, EntryKind, SessionSummary};
+use super::view_model::{
+    ActiveConversation, CHAT_CANCELLED, ConversationEntry, EntryKind, SessionSummary,
+};
 
 // The event channel is unbounded on purpose: `Sender::send` never blocks,
 // so a slow or stalled UI frame can never freeze the single-threaded core
@@ -105,6 +108,11 @@ pub enum BridgeCommand {
         provider_id: String,
         /// Model id offered by that provider.
         model: String,
+    },
+    /// Abort the in-flight turn of one session (Escape in the chat).
+    CancelChat {
+        /// Session identity spelling.
+        session_id: String,
     },
     /// Run one bounded web search over the enabled backend.
     WebSearch {
@@ -323,6 +331,8 @@ pub enum BridgeReply {
     ProviderKeySaved(Result<(Vec<String>, Vec<String>), String>),
     /// Chat turn acceptance; streaming continues over the event channel.
     ChatStarted(Result<(), String>),
+    /// Chat cancel acceptance; the turn unwinds with a `cancelled` event.
+    ChatCancelled(Result<(), String>),
     /// Web search result list.
     WebSearched(Result<Vec<SearchResult>, String>),
     /// File matches for the composer's `@` mention.
@@ -582,6 +592,23 @@ fn run_core(
                     tokio::spawn(task);
                     let _ = with_reply.reply.send(BridgeReply::ChatStarted(Ok(())));
                 }
+                BridgeCommand::CancelChat { session_id } => {
+                    let reply = with_reply.reply;
+                    let cancels = state.turn_cancels.clone();
+                    tokio::spawn(async move {
+                        let outcome = match cancels.lock() {
+                            Ok(map) => match map.get(&session_id) {
+                                Some(token) => {
+                                    token.cancel();
+                                    Ok(())
+                                }
+                                None => Err("no turn is running for this session".to_owned()),
+                            },
+                            Err(_) => Err("cancel registry locked".to_owned()),
+                        };
+                        let _ = reply.send(BridgeReply::ChatCancelled(outcome));
+                    });
+                }
                 BridgeCommand::RefreshCatalog => {
                     let task_state = state.clone();
                     let task_events = events.clone();
@@ -652,6 +679,8 @@ struct CoreState {
     projects: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Cached short-lived Copilot bearer token and its unix expiry.
     copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
+    /// Live turn cancellation tokens by session id; Escape targets these.
+    turn_cancels: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl CoreState {
@@ -676,6 +705,7 @@ impl CoreState {
             home,
             projects: Arc::new(Mutex::new(projects)),
             copilot: Arc::new(tokio::sync::Mutex::new(None)),
+            turn_cancels: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -794,6 +824,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::CheckUpdate => BridgeReply::UpdateChecked(Err(message)),
         BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
         BridgeCommand::StartCopilotSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
+        BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
     }
 }
 
@@ -872,6 +903,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         )),
         BridgeCommand::ChatTurn { .. } => {
             BridgeReply::ChatStarted(Err("chat turns run as concurrent tasks".to_owned()))
+        }
+        BridgeCommand::CancelChat { .. } => {
+            BridgeReply::ChatCancelled(Err("chat cancels run as concurrent tasks".to_owned()))
         }
         BridgeCommand::WebSearch { query } => {
             BridgeReply::WebSearched(web_search(&state.home, query).await)
@@ -1111,7 +1145,12 @@ async fn web_search(home: &HomeLayout, query: &str) -> Result<Vec<SearchResult>,
         .map_err(|error| format!("search failed: {error}"))
 }
 
-/// Builds the web client for the enabled backend.
+/// Environment variable carrying the Querit API key (pi parity: the pi
+/// agent's querit plugin resolves this env var before its config file).
+const QUERIT_KEY_ENV: &str = "QUERIT_API_KEY";
+
+/// Builds the web client for the enabled backend, falling back to the
+/// built-in Querit endpoint when settings configure none.
 fn web_client(home: &HomeLayout) -> Result<mcode_web::WebClient, String> {
     let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
     let backend = settings
@@ -1119,10 +1158,35 @@ fn web_client(home: &HomeLayout) -> Result<mcode_web::WebClient, String> {
         .backends
         .iter()
         .find(|backend| backend.enabled)
-        .ok_or_else(|| "no enabled search backend — add one in Settings".to_owned())?;
+        .cloned()
+        .unwrap_or_else(|| mcode_config::WebBackendSettings {
+            id: "querit".to_owned(),
+            kind: "querit".to_owned(),
+            endpoint: "https://api.querit.ai".to_owned(),
+            enabled: true,
+        });
+    // The environment wins over the vault so a shared machine setup keeps
+    // working without re-entering the key.
+    let key = std::env::var(QUERIT_KEY_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            read_provider_secrets(home).ok().and_then(|secrets| {
+                secrets
+                    .key(&format!("web-{}", backend.id))
+                    .map(str::to_owned)
+            })
+        });
+    if key.is_none() {
+        return Err(format!(
+            "no API key for the '{}' search backend — set {QUERIT_KEY_ENV} or store one in the vault",
+            backend.id
+        ));
+    }
     let transport = mcode_web::reqwest_transport::ReqwestWebTransport::new()
         .map_err(|_| "web transport unavailable".to_owned())?;
-    mcode_web::WebClient::new(&backend.endpoint, std::sync::Arc::new(transport))
+    mcode_web::WebClient::new(&backend.endpoint, key, std::sync::Arc::new(transport))
         .map_err(|_| "the search backend endpoint violates the URL policy".to_owned())
 }
 
@@ -1337,10 +1401,14 @@ async fn read_branch(
 
 /// Rebuilds the model-facing turn history from committed branch events.
 ///
-/// Assistant messages keep their tool_use blocks (and thinking signatures),
-/// and tool results replay as `Message::ToolResult`, so the wire sequence
-/// stays valid across turns. Usage and task bookkeeping never reach the
-/// provider.
+/// Assistant messages keep their tool_use blocks, and tool results replay as
+/// `Message::ToolResult`, so the wire sequence stays valid across turns.
+/// Thinking blocks are stripped from replay: their signatures are bound to
+/// the model that produced them, and gateways reject a cross-model replay
+/// (an M2 conversation continued on M3 fails with "invalid parameter").
+/// In-turn thinking (same model, same agentic loop) never passes through
+/// here, so tool_use continuation keeps its signatures on the wire.
+/// Usage and task bookkeeping never reach the provider.
 async fn ledger_history(
     service: &SessionService,
     session: &SessionId,
@@ -1364,7 +1432,14 @@ async fn ledger_history(
                     // Assistant messages are typed JSON; a parse miss means
                     // the payload is the user's plain-text message.
                     match serde_json::from_slice::<mcode_core::AssistantMessage>(&loaded.payload) {
-                        Ok(assistant) => history.push(Message::Assistant(assistant)),
+                        Ok(mut assistant) => {
+                            // Signatures are model-bound; replaying them to a
+                            // different model fails provider validation.
+                            assistant.blocks.retain(|block| {
+                                !matches!(block, mcode_core::ContentBlock::Thinking(_))
+                            });
+                            history.push(Message::Assistant(assistant));
+                        }
                         Err(_) => history.push(Message::User(mcode_core::UserMessage::text(
                             decode_text(&loaded.payload),
                         ))),
@@ -1931,6 +2006,10 @@ async fn run_chat_turn(
         branch.clone(),
         expected_head,
     );
+    // MCP servers connect here (spawn + handshake + tools/list): awaited on
+    // the spawned turn task, so command processing never blocks. A server
+    // that fails to connect is skipped, never a failed turn.
+    let mcp_tools = crate::mcp_tools::connect_mcp_tools(home, &settings).await;
     let registry = Arc::new({
         let registry = ToolRegistry::new();
         mcode_tools::register_builtins(&registry);
@@ -1977,6 +2056,14 @@ async fn run_chat_turn(
             home: todo_home,
         });
         registry.register(Arc::new(mcode_tools::builtin::TodoWriteTool::new(store)));
+        // MCP tools ride the same registry; they never shadow an existing
+        // registration (registry.register is last-wins per name).
+        for tool in mcp_tools {
+            let name = tool.spec().name;
+            if registry.get(&name).is_none() {
+                registry.register(tool);
+            }
+        }
         registry
     });
 
@@ -2060,6 +2147,9 @@ package installs) — never to search, read, or write files.",
         }
     });
     let cancel = CancellationToken::new();
+    // Publish the token so an Escape-driven CancelChat can abort this turn;
+    // the guard unpublishes it on every exit path.
+    let _cancel_guard = CancelGuard::register(state.turn_cancels.clone(), &session_id, &cancel);
     let mut config = AgentConfig::new().with_system_prompt(system_prompt);
     if let Some(level) = settings.reasoning_effort.as_deref() {
         let level = match level {
@@ -2162,11 +2252,19 @@ package installs) — never to search, read, or write files.",
                 }
                 mcode_core::events::AgentEvent::MessageAdded(_) => {}
                 mcode_core::events::AgentEvent::TurnStarted => {}
-                mcode_core::events::AgentEvent::TurnEnded(_) => {
+                mcode_core::events::AgentEvent::TurnEnded(outcome) => {
                     let Some(message) = pending_assistant.take() else {
+                        // A cancelled mid-stream turn commits nothing; the
+                        // UI resets quietly on the sentinel message.
+                        let message = if matches!(outcome, mcode_core::events::TurnOutcome::Aborted)
+                        {
+                            CHAT_CANCELLED.to_owned()
+                        } else {
+                            "the turn ended without an assistant message".to_owned()
+                        };
                         let _ = pump_events.send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
-                            message: "the turn ended without an assistant message".to_owned(),
+                            message,
                         });
                         return;
                     };
@@ -2252,6 +2350,38 @@ package installs) — never to search, read, or write files.",
     // The pump emits ChatDone/ChatFailed; wait for it to finish draining.
     let _ = pump.await;
     Ok(())
+}
+
+/// Removes one session's turn token from the cancel registry on scope exit.
+struct CancelGuard {
+    cancels: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
+    session_id: String,
+}
+
+impl CancelGuard {
+    fn register(
+        cancels: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
+        session_id: &str,
+        token: &CancellationToken,
+    ) -> Self {
+        if let Ok(mut map) = cancels.lock() {
+            map.insert(session_id.to_owned(), token.clone());
+        }
+        Self {
+            cancels,
+            session_id: session_id.to_owned(),
+        }
+    }
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        // A contended lock leaks one stale entry; the next turn for the same
+        // session replaces it, so the leak is bounded and harmless.
+        if let Ok(mut map) = self.cancels.try_lock() {
+            map.remove(&self.session_id);
+        }
+    }
 }
 
 /// Shared branch-head writer: the event pump and host-backed tools commit
@@ -3534,6 +3664,66 @@ mod tests {
         match &history[2] {
             Message::ToolResult(result) => assert_eq!(result.tool_call_id, "call-1"),
             other => panic!("expected a tool result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ledger_history_strips_thinking_for_cross_model_replay() {
+        let (_parent, layout) = home();
+        let service = SessionService::new(&layout);
+        let created = service.create().await.expect("session created");
+        let session = created.session_id;
+        let branch = created.branch_id;
+        let writer = HeadWriter::new(
+            service.clone(),
+            session.clone(),
+            branch.clone(),
+            HeadStamp::Empty,
+        );
+        writer
+            .write(EventKind::Message, b"hello")
+            .await
+            .expect("user commit");
+        // A thinking assistant reply carrying a model-bound signature: the
+        // provider rejects replaying it to a different model.
+        let mut thinking = mcode_core::ThinkingBlock::new("let me think");
+        thinking.signature = Some("sig-m2".to_owned());
+        let assistant = mcode_core::AssistantMessage {
+            blocks: vec![
+                mcode_core::ContentBlock::Thinking(thinking),
+                mcode_core::ContentBlock::Text(mcode_core::TextBlock::new("hi there")),
+            ],
+            usage: None,
+            stop_reason: mcode_core::StopReason::Stop,
+        };
+        let last = writer
+            .write(
+                EventKind::Message,
+                &serde_json::to_vec(&assistant).expect("assistant json"),
+            )
+            .await
+            .expect("assistant commit");
+        let head = HeadStamp::Event(
+            mcode_session::session::SessionEventId::parse(&last).expect("head id"),
+        );
+        let history = ledger_history(&service, &session, &branch, &head)
+            .await
+            .expect("history read");
+        match &history[1] {
+            Message::Assistant(replayed) => {
+                assert!(
+                    replayed
+                        .blocks
+                        .iter()
+                        .all(|block| !matches!(block, mcode_core::ContentBlock::Thinking(_))),
+                    "thinking never replays across turns"
+                );
+                assert!(matches!(
+                    &replayed.blocks[0],
+                    mcode_core::ContentBlock::Text(text) if text.text == "hi there"
+                ));
+            }
+            other => panic!("expected an assistant message, got {other:?}"),
         }
     }
 

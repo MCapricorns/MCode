@@ -551,30 +551,32 @@ fn render_models_catalog_page(
             provider.models.len(),
         ));
     }
-    // Virtualized: the catalog lists every known provider, so only the
-    // visible slice gets rows and click handlers.
+    // Plain rows in a bounded scroll area: a virtualized list collapsed to
+    // a sliver inside a height-less container, hiding every provider.
     let preset_rows = std::rc::Rc::new(preset_rows);
     let preset_list_weak = cx.weak_entity();
-    let preset_list = gpui_kit::uniform_list(
-        "preset-catalog-list",
-        preset_rows.len(),
-        move |range, _window, cx| {
-            let theme = cx.theme();
-            range
-                .map(|index| {
-                    let (id, name, kind, models) = &preset_rows[index];
-                    preset_row(
-                        id.clone(),
-                        name.clone(),
-                        kind.clone(),
-                        *models,
-                        &preset_list_weak,
-                        theme,
-                    )
-                })
-                .collect()
-        },
-    );
+    let preset_list_theme = cx.theme();
+    let preset_list = div()
+        .id("preset-catalog-list")
+        .w_full()
+        .min_h(px(320.))
+        .max_h(px(440.))
+        .overflow_y_scroll()
+        .rounded_md()
+        .border_1()
+        .border_color(preset_list_theme.border)
+        .flex()
+        .flex_col()
+        .children(preset_rows.iter().map(|(id, name, kind, models)| {
+            preset_row(
+                id.clone(),
+                name.clone(),
+                kind.clone(),
+                *models,
+                &preset_list_weak,
+                preset_list_theme,
+            )
+        }));
 
     let has_preset = workspace.vm().active_preset.is_some();
     let header = subview_header(
@@ -617,15 +619,7 @@ fn render_models_catalog_page(
                             .flex_col()
                             .gap_2()
                             .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
-                            .child(
-                                preset_list
-                                    .w_full()
-                                    .min_h(px(320.))
-                                    .max_h(px(440.))
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.border),
-                            )
+                            .child(preset_list)
                             .into_any_element(),
                     ],
                 )
@@ -827,10 +821,10 @@ fn render_preset_form(
     let name = preset.name.clone();
     let models: Vec<String> = preset.models.iter().map(|model| model.id.clone()).collect();
     let checked: Vec<String> = workspace.vm().preset_models.clone();
-    let selection_label = match checked.len() {
-        0 => models.first().cloned().unwrap_or_default(),
-        1 => checked[0].clone(),
-        n => format!("{} (+{} more)", checked[0], n - 1),
+    let selection_label = if models.is_empty() {
+        "no models".to_owned()
+    } else {
+        format!("{} of {} models", checked.len(), models.len())
     };
     let menu_open = workspace.vm().preset_model_menu_open;
     let provider_id_owned = provider_id.to_owned();
@@ -856,7 +850,12 @@ fn render_preset_form(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_xs().opacity(0.6).child("Models"))
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.6)
+                        .child("Models — all are selected by default; uncheck what you do not need"),
+                )
                 .child(
                     Button::new("preset-model-chip")
                         .label(selection_label)
@@ -868,36 +867,25 @@ fn render_preset_form(
                         })),
                 )
                 .when(menu_open, |this| {
-                    // Virtualized: providers can carry hundreds of models, so
-                    // only the visible slice gets rows and click handlers.
-                    let models = std::rc::Rc::new(models);
-                    let checked = std::rc::Rc::new(checked);
+                    // Plain rows in a bounded scroll area: a virtualized
+                    // list collapsed to a sliver here, showing one model
+                    // where the provider carries many.
                     let weak = cx.weak_entity();
                     this.child(
-                        gpui_kit::uniform_list(
-                            "preset-model-list",
-                            models.len(),
-                            move |range, _window, cx| {
-                                let theme = cx.theme();
-                                range
-                                    .map(|index| {
-                                        let model = &models[index];
-                                        preset_model_row(
-                                            model,
-                                            checked.contains(model),
-                                            &weak,
-                                            theme,
-                                        )
-                                    })
-                                    .collect()
-                            },
-                        )
-                        .w_full()
-                        .max_h(px(180.))
-                        .rounded_md()
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.background),
+                        div()
+                            .id("preset-model-list")
+                            .w_full()
+                            .max_h(px(240.))
+                            .overflow_y_scroll()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.background)
+                            .flex()
+                            .flex_col()
+                            .children(models.iter().map(|model| {
+                                preset_model_row(model, checked.contains(model), &weak, theme)
+                            })),
                     )
                 }),
         )
@@ -1032,7 +1020,7 @@ fn render_mcp_section(
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
     };
-    let mcp_rows: Vec<(String, String, bool, bool, usize)> = settings
+    let mcp_rows: Vec<(String, String, String, bool, bool, usize)> = settings
         .mcp_servers
         .iter()
         .enumerate()
@@ -1040,6 +1028,11 @@ fn render_mcp_section(
             (
                 server.id.clone(),
                 server.transport.clone(),
+                server
+                    .endpoint
+                    .clone()
+                    .or_else(|| server.command.clone())
+                    .unwrap_or_default(),
                 server.enabled,
                 settings.mcp_with_keys.iter().any(|id| id == &server.id),
                 index,
@@ -1066,72 +1059,81 @@ fn render_mcp_section(
     let key_input = workspace.mcp_key_input(window, cx);
     let mcp_row_elements: Vec<AnyElement> = mcp_rows
         .into_iter()
-        .map(|(id, transport, enabled, keyed, index)| {
-            mcp_row(id, transport, enabled, keyed, index, cx)
+        .map(|(id, transport, endpoint, enabled, keyed, index)| {
+            mcp_row(id, transport, endpoint, enabled, keyed, index, cx)
         })
         .collect();
 
     let theme = cx.theme();
     let mcp_empty = mcp_row_elements.is_empty();
     let has_catalog = !catalog_row_elements.is_empty();
-    settings_card(
-        "mcp",
-        "MCP servers",
-        Some(
-            "Stdio or Streamable-HTTP tool servers. Enabled servers join the agent's \
-             toolset next turn.",
-        ),
-        theme,
-        vec![
-            div()
-                .when(mcp_empty, |this| {
-                    this.child(div().text_xs().opacity(0.5).child("No MCP servers yet"))
-                })
-                .children(mcp_row_elements)
-                .into_any_element(),
-            div()
-                .when(has_catalog, |this| {
-                    this.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .p_2()
-                            .rounded_md()
-                            .bg(theme.secondary)
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .opacity(0.7)
-                                    .child("Built-in catalog — paste a key, then Add"),
-                            )
-                            .children(catalog_row_elements),
-                    )
-                })
-                .child(
+    div()
+        .id("mcp-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(settings_card(
+            "mcp",
+            "MCP servers",
+            Some(
+                "Stdio or Streamable-HTTP tool servers. Enabled servers connect at \
+                 the start of the next turn and their tools join the agent's toolset.",
+            ),
+            theme,
+            vec![
+                div()
+                    .when(mcp_empty, |this| {
+                        this.child(div().text_xs().opacity(0.5).child("No MCP servers yet"))
+                    })
+                    .children(mcp_row_elements)
+                    .into_any_element(),
+            ],
+        ))
+        .when(has_catalog, |this| {
+            this.child(settings_card(
+                "mcp-catalog",
+                "Built-in catalog",
+                Some("Paste a key for the server you need, then Add."),
+                theme,
+                vec![
                     div()
-                        .id("mcp-key-row")
                         .flex()
                         .flex_col()
                         .gap_1()
+                        .children(catalog_row_elements)
                         .child(
                             div()
-                                .text_xs()
-                                .opacity(0.6)
-                                .child("Key for the built-in catalog server above"),
+                                .id("mcp-key-row")
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .pt_2()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .opacity(0.6)
+                                        .child("Key for the built-in server above"),
+                                )
+                                .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
                         )
-                        .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
-                )
-                .into_any_element(),
-            mcp_form_element,
-        ],
-    )
-    .into_any_element()
+                        .into_any_element(),
+                ],
+            ))
+        })
+        .child(settings_card(
+            "mcp-add",
+            "Add custom server",
+            Some("A stdio command or an https endpoint speaking Streamable HTTP."),
+            theme,
+            vec![mcp_form_element],
+        ))
+        .into_any_element()
 }
 
 fn mcp_row(
     id: String,
     transport: String,
+    endpoint: String,
     enabled: bool,
     keyed: bool,
     index: usize,
@@ -1160,10 +1162,16 @@ fn mcp_row(
                         .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(id.clone()),
                 )
-                .child(div().text_xs().opacity(0.6).child(format!(
-                    "{transport} \u{b7} {}",
-                    if keyed { "key stored" } else { "no key" }
-                ))),
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.6)
+                        .overflow_hidden()
+                        .child(format!(
+                            "{transport} \u{b7} {endpoint} \u{b7} {}",
+                            if keyed { "key stored" } else { "no key" }
+                        )),
+                ),
         )
         .child(
             Switch::new(format!("mcp-toggle-{id}"))
@@ -1245,7 +1253,7 @@ fn render_web_section(
         return div().into_any_element();
     };
     let backend_form_element = render_backend_form(workspace, window, cx);
-    let backend_rows: Vec<(String, String, bool, usize)> = settings
+    let backend_rows: Vec<(String, String, String, bool, usize)> = settings
         .web_backends
         .iter()
         .enumerate()
@@ -1253,6 +1261,7 @@ fn render_web_section(
             (
                 backend.id.clone(),
                 backend.kind.clone(),
+                backend.endpoint.clone(),
                 backend.enabled,
                 index,
             )
@@ -1260,36 +1269,58 @@ fn render_web_section(
         .collect();
     let backend_row_elements: Vec<AnyElement> = backend_rows
         .into_iter()
-        .map(|(id, kind, enabled, index)| backend_row(id, kind, enabled, index, cx))
+        .map(|(id, kind, endpoint, enabled, index)| {
+            backend_row(id, kind, endpoint, enabled, index, cx)
+        })
         .collect();
     let theme = cx.theme();
     let backends_empty = backend_row_elements.is_empty();
-    settings_card(
-        "web",
-        "Web search",
-        Some("One enabled backend powers the Web panel."),
-        theme,
-        vec![
-            div()
-                .when(backends_empty, |this| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .opacity(0.5)
-                            .child("No backends yet — add one below"),
-                    )
-                })
-                .children(backend_row_elements)
-                .into_any_element(),
-            backend_form_element,
-        ],
-    )
-    .into_any_element()
+    div()
+        .id("web-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(settings_card(
+            "web",
+            "Web search",
+            Some(
+                "Querit works out of the box: the key comes from the QUERIT_API_KEY \
+                 environment variable (or the vault entry web-<id>) and \
+                 https://api.querit.ai is the built-in backend whenever no custom \
+                 backend below is enabled.",
+            ),
+            theme,
+            vec![
+                div()
+                    .when(backends_empty, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .opacity(0.5)
+                                .child("Using the built-in Querit backend"),
+                        )
+                    })
+                    .children(backend_row_elements)
+                    .into_any_element(),
+            ],
+        ))
+        .child(settings_card(
+            "web-add",
+            "Add custom backend",
+            Some(
+                "A Querit-compatible endpoint (POST /v1/search, POST /v1/contents) \
+                 overrides the built-in default while enabled.",
+            ),
+            theme,
+            vec![backend_form_element],
+        ))
+        .into_any_element()
 }
 
 fn backend_row(
     id: String,
     kind: String,
+    endpoint: String,
     enabled: bool,
     index: usize,
     cx: &Context<Workspace>,
@@ -1317,7 +1348,13 @@ fn backend_row(
                         .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(id.clone()),
                 )
-                .child(div().text_xs().opacity(0.6).child(kind)),
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.6)
+                        .overflow_hidden()
+                        .child(format!("{kind} \u{b7} {endpoint}")),
+                ),
         )
         .child(
             Switch::new(format!("backend-toggle-{id}"))

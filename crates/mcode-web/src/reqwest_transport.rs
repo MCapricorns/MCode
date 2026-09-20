@@ -33,16 +33,21 @@ impl WebTransport for ReqwestWebTransport {
     async fn post_json(
         &self,
         endpoint: &str,
+        bearer: Option<&str>,
         body: &[u8],
         timeout: Duration,
         cancel: CancellationToken,
     ) -> Result<Vec<u8>, WebError> {
-        let request = self
+        let mut request = self
             .client
             .post(endpoint)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "application/json")
             .timeout(timeout)
             .body(body.to_vec());
+        if let Some(key) = bearer {
+            request = request.bearer_auth(key);
+        }
         let response = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(WebError::Cancelled),

@@ -38,12 +38,10 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     // The custom titlebar owns dragging and window controls, so the system
     // titlebar is hidden (`appears_transparent`).
     let mut options = gpui_kit::component::TitleBar::window_options();
-    // Open maximized: gpui's Windows platform can size a freshly created
-    // window with a stale scale after a system scale change (e.g. 125% ->
-    // 150%), clipping the right and bottom of the UI, while an OS-driven
-    // maximize sizes the window correctly at every scale. WINDOW_BOUNDS is
-    // the restore size once the user un-maximizes.
-    options.window_bounds = Some(WindowBounds::Maximized(WINDOW_BOUNDS));
+    // Open as a regular window at the default bounds: the maximize-on-open
+    // workaround for gpui's stale-scale sizing is retired by user request
+    // (DPI edge cases accepted); the user can maximize manually.
+    options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
     options.window_min_size = Some(size(px(960.), px(560.)));
     if let Some(titlebar) = options.titlebar.as_mut() {
         titlebar.title = Some("MCode".into());
@@ -79,6 +77,9 @@ pub struct Workspace {
     mention_query: Option<String>,
     pending_catalog_refresh: bool,
     runtime_ticks: u64,
+    /// Keeps the conversation column glued to the newest entry while a turn
+    /// streams; without it new content grows below the fold.
+    conversation_scroll: gpui_kit::ScrollHandle,
 }
 
 impl Workspace {
@@ -115,6 +116,7 @@ impl Workspace {
             mention_query: None,
             pending_catalog_refresh: false,
             runtime_ticks: 0,
+            conversation_scroll: gpui_kit::ScrollHandle::new(),
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -305,8 +307,28 @@ impl Workspace {
     }
 
     pub(super) fn apply_action(&mut self, action: DesktopAction, cx: &mut Context<Self>) {
+        let grew = matches!(
+            action,
+            DesktopAction::MessageSent { .. }
+                | DesktopAction::ChatDelta(_)
+                | DesktopAction::ChatThinkingDelta(_)
+                | DesktopAction::ToolStarted { .. }
+                | DesktopAction::ToolResultAppended(_)
+                | DesktopAction::ChatDone { .. }
+                | DesktopAction::UsageRecorded { .. }
+        );
         reduce(&mut self.vm, action);
+        // Transcript-growing actions keep the conversation scrolled to the
+        // newest content, the way chat clients behave while streaming.
+        if self.vm.view == MainView::Chat && grew {
+            self.conversation_scroll.scroll_to_bottom();
+        }
         cx.notify();
+    }
+
+    /// The conversation column's scroll handle.
+    pub(super) fn conversation_scroll_handle(&self) -> &gpui_kit::ScrollHandle {
+        &self.conversation_scroll
     }
 
     fn dispatch(&self, command: BridgeCommand, cx: &mut Context<Self>) {
@@ -439,6 +461,9 @@ impl Workspace {
                 );
             }
             BridgeReply::ChatStarted(Ok(())) => {}
+            // The turn unwinds over the event channel; the reply itself
+            // carries no state.
+            BridgeReply::ChatCancelled(_) => {}
             // Web search is a model tool now; UI-initiated replies are ignored.
             BridgeReply::WebSearched(_) => {}
             BridgeReply::McpTools(Ok((server_id, tools))) => {
@@ -910,6 +935,18 @@ impl Workspace {
         if !dismissed && self.vm.view == MainView::Settings {
             self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
         }
+        if !dismissed && self.vm.sending {
+            // Escape aborts the in-flight turn; the bridge answers with a
+            // `cancelled` failure event that resets the sending state.
+            if let Some(conversation) = self.vm.active.as_ref() {
+                self.dispatch(
+                    BridgeCommand::CancelChat {
+                        session_id: conversation.session_id.clone(),
+                    },
+                    cx,
+                );
+            }
+        }
     }
 
     pub(super) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -934,6 +971,27 @@ impl Workspace {
     }
 
     pub(super) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
+        // Picking a catalog model the provider row does not carry yet appends
+        // it to the row: turn resolution validates against that list, so an
+        // unpersisted selection would silently fall back to the first model.
+        let mut appended = false;
+        if let Some(settings) = self.vm.settings.as_mut() {
+            let provider = settings
+                .providers
+                .iter_mut()
+                .find(|provider| Some(&provider.id) == self.vm.selected_provider.as_ref());
+            if let Some(provider) = provider {
+                let known = provider.models.iter().any(|model| model == model_id);
+                if !known && provider.models.len() < mcode_config::MAX_MODELS_PER_PROVIDER {
+                    provider.models.push(model_id.to_owned());
+                    settings.dirty = true;
+                    appended = true;
+                }
+            }
+        }
+        if appended {
+            self.on_save_settings(cx);
+        }
         self.apply_action(DesktopAction::ModelSelected(model_id.to_owned()), cx);
         self.persist_ui_state(cx);
     }

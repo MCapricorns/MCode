@@ -205,7 +205,7 @@ impl GenerationFence {
     fn release(&self) {
         let previous = self
             .state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (generation_activity_count(active) > 0)
                     .then(|| active - GENERATION_ACTIVITY_INCREMENT)
             })

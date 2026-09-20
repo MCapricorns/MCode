@@ -47,6 +47,7 @@ pub(super) fn render_chat(
             .map(|streaming| render_streaming_entry(streaming, cx.theme()).into_any_element());
         (show_welcome, elements, streaming_element)
     };
+    let scroll_handle = workspace.conversation_scroll_handle().clone();
     div()
         .id("chat")
         .flex_1()
@@ -60,6 +61,7 @@ pub(super) fn render_chat(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&scroll_handle)
                 .flex()
                 .flex_col()
                 .child(
@@ -79,6 +81,20 @@ pub(super) fn render_chat(
                         .children(entry_elements)
                         .when_some(streaming_element, |this, streaming| this.child(streaming)),
                 ),
+        )
+        // The model menu docks in-flow right above the composer: an
+        // absolutely positioned overlay landed outside the visible window on
+        // mis-scaled displays, and a docked panel cannot be clipped away.
+        .when(workspace.vm().model_menu_open, |this| {
+            this.child(render_model_menu(workspace, cx))
+        })
+        .when(
+            workspace
+                .vm()
+                .mention
+                .as_ref()
+                .is_some_and(|mention| !mention.items.is_empty()),
+            |this| this.child(render_mention_layer(workspace, cx)),
         )
         .child(render_composer(workspace, _window, cx))
         .into_any_element()
@@ -131,14 +147,16 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_3()
-        .py(px(48.))
+        .gap_2()
+        .py(px(64.))
         .child(
             div()
                 .id("welcome-logo")
-                .size(px(52.))
+                .size(px(56.))
                 .rounded(px(14.))
-                .bg(skin::accent(theme, 135.))
+                // Same tile as the title bar: white background, black M —
+                // the accent purple made the hero look like another brand.
+                .bg(theme.primary)
                 .text_color(theme.primary_foreground)
                 .shadow_lg()
                 .flex()
@@ -150,22 +168,38 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         )
         .child(
             div()
+                .id("welcome-title")
                 .text_xl()
                 .font_weight(gpui_kit::FontWeight::BOLD)
                 .child("MCode"),
         )
         .child(
             div()
+                .id("welcome-tagline")
                 .text_sm()
                 .opacity(0.6)
-                .child("A coding agent for your desktop. Pick a project or just start chatting."),
+                .child("A coding agent for your desktop."),
         )
         .child(
             div()
+                .id("welcome-hint")
+                .text_xs()
+                .opacity(0.45)
+                .max_w(rems(38.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_0()
+                .child("Open a project folder so the agent can read and edit files,")
+                .child("or just start chatting — tools stay available everywhere."),
+        )
+        .child(
+            div()
+                .id("welcome-actions")
                 .flex()
                 .flex_row()
                 .gap_2()
-                .mt_2()
+                .mt_4()
                 .child(
                     Button::new("welcome-open-project")
                         .icon(IconName::FolderOpen)
@@ -189,7 +223,7 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             this.child(
                 div()
                     .id("welcome-recents")
-                    .mt_4()
+                    .mt_6()
                     .w(px(440.))
                     .flex()
                     .flex_col()
@@ -636,8 +670,7 @@ fn model_picker_label(vm: &crate::view_model::WorkspaceState) -> String {
 }
 
 /// One row in the flattened model menu: section headers, providers, models,
-/// and thinking levels share a fixed height so `uniform_list` only builds
-/// the visible slice instead of rebuilding every row on each frame.
+/// and thinking levels share a fixed height so the panel reads as one grid.
 enum ModelMenuRow {
     /// Section label; `divider` draws the separator line above it.
     Header { label: &'static str, divider: bool },
@@ -659,12 +692,14 @@ enum ModelMenuRow {
     },
 }
 
-/// Fixed row height that keeps the virtualized menu uniform.
+/// Fixed row height that keeps the menu rows visually uniform.
 const MENU_ROW_HEIGHT: gpui_kit::Pixels = px(30.);
 
-/// The model picker dropdown, pinned above the composer: provider rows and
-/// the selected provider's configured models.
-pub(super) fn render_model_menu_layer(
+/// The model picker panel, docked in-flow above the composer: provider rows
+/// and the selected provider's configured models. Plain rows in a bounded
+/// scroll area — a virtualized list collapsed to a sliver inside a
+/// height-less container, hiding the menu behind the window edge.
+pub(super) fn render_model_menu(
     workspace: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -692,7 +727,7 @@ pub(super) fn render_model_menu_layer(
                 .collect()
         })
         .unwrap_or_default();
-    let models: Vec<String> = selected_provider
+    let configured_models: Vec<String> = selected_provider
         .as_deref()
         .and_then(|provider_id| {
             workspace
@@ -708,6 +743,33 @@ pub(super) fn render_model_menu_layer(
                 .map(|provider| provider.models.clone())
         })
         .unwrap_or_default();
+    // Providers offer far more models than the configured subset; the
+    // catalog list is the menu, with any configured-but-uncataloged ids
+    // appended so nothing the user saved disappears.
+    let models: Vec<String> = selected_provider
+        .as_deref()
+        .and_then(|provider_id| {
+            workspace
+                .vm()
+                .catalog
+                .as_ref()
+                .and_then(|catalog| catalog.provider(provider_id))
+        })
+        .map(|provider| {
+            let mut all: Vec<String> = provider
+                .models
+                .iter()
+                .map(|model| model.id.clone())
+                .collect();
+            for model in &configured_models {
+                if !all.contains(model) {
+                    all.push(model.clone());
+                }
+            }
+            all.truncate(mcode_config::MAX_MODELS_PER_PROVIDER);
+            all
+        })
+        .unwrap_or(configured_models);
     let selected_reasoning = workspace
         .vm()
         .settings
@@ -765,35 +827,18 @@ pub(super) fn render_model_menu_layer(
         );
     }
 
-    let rows = std::rc::Rc::new(rows);
     let weak = cx.weak_entity();
-    let list = gpui_kit::uniform_list("model-menu-rows", rows.len(), move |range, _window, cx| {
-        let theme = cx.theme();
-        range
-            .map(|index| model_menu_row(&rows[index], &weak, theme))
-            .collect()
-    });
     div()
         .id("model-menu-layer")
-        .absolute()
-        .inset_0()
-        .child(
-            div()
-                .id("model-menu-backdrop")
-                .absolute()
-                .size_full()
-                .bg(skin::scrim(theme))
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_toggle_model_menu(false, cx);
-                })),
-        )
+        .w_full()
+        .px_4()
+        .pb_1()
         .child(
             div()
                 .id("model-menu")
-                .absolute()
-                .bottom(px(88.))
-                .right(px(16.))
-                .w(px(330.))
+                .mx_auto()
+                .w_full()
+                .max_w(rems(46.))
                 .rounded(px(14.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
@@ -801,7 +846,11 @@ pub(super) fn render_model_menu_layer(
                 .text_color(theme.popover_foreground)
                 .shadow_lg()
                 .p_2()
-                .child(list.w_full().max_h(px(404.))),
+                .max_h(px(420.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .children(rows.iter().map(|row| model_menu_row(row, &weak, theme))),
         )
         .into_any_element()
 }
@@ -926,7 +975,8 @@ fn menu_row(
         })
 }
 
-/// The `@` file and `/` command autocomplete popover above the composer.
+/// The `@` file and `/` command autocomplete panel, docked in-flow above
+/// the composer like the model menu.
 pub(super) fn render_mention_layer(
     workspace: &mut Workspace,
     cx: &mut Context<Workspace>,
@@ -943,26 +993,15 @@ pub(super) fn render_mention_layer(
     };
     div()
         .id("mention-layer")
-        .absolute()
-        .inset_0()
-        .child(
-            // Transparent click-catcher: any click outside the popover
-            // dismisses the menu instead of falling through or dead-ending.
-            div()
-                .id("mention-backdrop")
-                .absolute()
-                .size_full()
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.apply_action(crate::view_model::DesktopAction::MentionDismissed, cx);
-                })),
-        )
+        .w_full()
+        .px_4()
+        .pb_1()
         .child(
             div()
                 .id("mention-menu")
-                .absolute()
-                .bottom(px(120.))
-                .left(px(16.))
-                .w(px(420.))
+                .mx_auto()
+                .w_full()
+                .max_w(rems(46.))
                 .max_h(px(300.))
                 .overflow_y_scroll()
                 .rounded(px(14.))

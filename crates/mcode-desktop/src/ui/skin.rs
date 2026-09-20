@@ -26,18 +26,16 @@ pub(super) fn hue_shift(color: Hsla, degrees: f32) -> Hsla {
 }
 
 /// The ambient gradient painted behind the whole window content: the theme
-/// background easing toward a brand tint.
+/// background easing into a hue-shifted brand glow, giving the layout
+/// visible depth in both appearances.
 pub(super) fn ambient(theme: &Theme) -> Background {
     let dark = is_dark(theme);
-    let tint = mix(
-        theme.background,
-        theme.primary,
-        if dark { 0.22 } else { 0.12 },
-    );
+    let strength = if dark { 0.26 } else { 0.14 };
+    let glow = mix(theme.background, hue_shift(theme.primary, 26.), strength);
     linear_gradient(
-        160.,
+        150.,
         linear_color_stop(theme.background, 0.),
-        linear_color_stop(tint, 1.),
+        linear_color_stop(glow, 1.),
     )
 }
 
@@ -48,10 +46,10 @@ pub(super) fn glass(theme: &Theme) -> Hsla {
     let base = mix(
         theme.background,
         theme.foreground,
-        if dark { 0.05 } else { 0.03 },
+        if dark { 0.06 } else { 0.04 },
     );
     Hsla {
-        a: if dark { 0.70 } else { 0.80 },
+        a: if dark { 0.72 } else { 0.82 },
         ..base
     }
 }
@@ -59,9 +57,9 @@ pub(super) fn glass(theme: &Theme) -> Hsla {
 /// Frosted sidebar fill, slightly tinted toward the brand color.
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(theme.sidebar, theme.primary, if dark { 0.12 } else { 0.05 });
+    let base = mix(theme.sidebar, theme.primary, if dark { 0.14 } else { 0.06 });
     Hsla {
-        a: if dark { 0.55 } else { 0.72 },
+        a: if dark { 0.58 } else { 0.74 },
         ..base
     }
 }
@@ -72,10 +70,10 @@ pub(super) fn glass_border(theme: &Theme) -> Hsla {
     let base = mix(
         theme.border,
         theme.foreground,
-        if dark { 0.12 } else { 0.05 },
+        if dark { 0.14 } else { 0.06 },
     );
     Hsla {
-        a: if dark { 0.5 } else { 0.65 },
+        a: if dark { 0.55 } else { 0.7 },
         ..base
     }
 }
@@ -83,8 +81,8 @@ pub(super) fn glass_border(theme: &Theme) -> Hsla {
 /// Near-opaque frosted popover fill that keeps menu text readable while the
 /// scrimmed app shows through at the edges.
 pub(super) fn popover(theme: &Theme) -> Hsla {
-    let base = mix(theme.popover, theme.background, 0.2);
-    Hsla { a: 0.94, ..base }
+    let base = mix(theme.popover, theme.primary, 0.04);
+    Hsla { a: 0.95, ..base }
 }
 
 /// Scrim drawn over the app behind an open menu layer.
@@ -96,11 +94,12 @@ pub(super) fn scrim(theme: &Theme) -> Hsla {
     }
 }
 
-/// Brand gradient for the user bubble, welcome logo, and hero accents.
+/// Brand gradient for the user bubble, welcome logo, and hero accents: a
+/// wider hue sweep than a plain fade for a richer finish.
 pub(super) fn accent(theme: &Theme, angle: f32) -> Background {
     linear_gradient(
         angle,
         linear_color_stop(theme.primary, 0.),
-        linear_color_stop(hue_shift(theme.primary, 45.), 1.),
+        linear_color_stop(hue_shift(theme.primary, 58.), 1.),
     )
 }
