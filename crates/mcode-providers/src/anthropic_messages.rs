@@ -173,6 +173,10 @@ pub(crate) struct MessagesReducer {
     stop_reason: Option<StopReason>,
     message_stopped: bool,
     terminal_sent: bool,
+    /// Extracts `<tool_call>` markup some endpoints stream as plain text.
+    xml: crate::xml_tool_calls::XmlToolCallParser,
+    /// Counter for synthetic ids minted by the XML filter.
+    xml_calls: usize,
 }
 
 impl MessagesReducer {
@@ -190,6 +194,18 @@ impl MessagesReducer {
 
     fn assemble(&mut self) -> StreamEvent {
         self.terminal_sent = true;
+        // Trailing text still held by the XML filter joins the message.
+        for piece in self.xml.finish() {
+            if let crate::xml_tool_calls::XmlPiece::Text(text) = piece {
+                match self.blocks.get_mut(self.current) {
+                    Some(BlockAccumulator::Text { text: block }) => block.push_str(&text),
+                    _ if !text.is_empty() => {
+                        self.blocks.push(BlockAccumulator::Text { text });
+                    }
+                    _ => {}
+                }
+            }
+        }
         let mut blocks = Vec::new();
         for block in &self.blocks {
             match block {
@@ -217,6 +233,17 @@ impl MessagesReducer {
                 BlockAccumulator::Empty => {}
             }
         }
+        // XML-filtered calls arrive with an `end_turn` stop reason; any
+        // dispatched call set must read as tool use (length stays).
+        let has_calls = self
+            .blocks
+            .iter()
+            .any(|block| matches!(block, BlockAccumulator::ToolUse { .. }));
+        let stop_reason = if has_calls && self.stop_reason != Some(StopReason::Length) {
+            StopReason::ToolUse
+        } else {
+            self.stop_reason.unwrap_or(StopReason::Stop)
+        };
         StreamEvent::Done {
             message: AssistantMessage {
                 blocks,
@@ -225,7 +252,7 @@ impl MessagesReducer {
                     output_tokens: self.output_tokens,
                     cache_read_tokens: self.cache_read_tokens,
                 }),
-                stop_reason: self.stop_reason.unwrap_or(StopReason::Stop),
+                stop_reason,
             },
         }
     }
@@ -273,17 +300,39 @@ impl FrameReducer for MessagesReducer {
                 let delta = &event["delta"];
                 match delta["type"].as_str().unwrap_or_default() {
                     "text_delta" => {
-                        if let BlockAccumulator::Text { text } = self
-                            .blocks
-                            .get_mut(self.current)
-                            .unwrap_or(&mut BlockAccumulator::Empty)
-                        {
-                            let part = delta["text"].as_str().unwrap_or_default();
-                            text.push_str(part);
-                            if !part.is_empty() {
-                                return vec![StreamEvent::TextDelta(part.to_owned())];
+                        let part = delta["text"].as_str().unwrap_or_default();
+                        if part.is_empty() {
+                            return Vec::new();
+                        }
+                        let mut events = Vec::new();
+                        for piece in self.xml.feed(part) {
+                            match piece {
+                                crate::xml_tool_calls::XmlPiece::Text(text) => {
+                                    if let BlockAccumulator::Text { text: block } = self
+                                        .blocks
+                                        .get_mut(self.current)
+                                        .unwrap_or(&mut BlockAccumulator::Empty)
+                                    {
+                                        block.push_str(&text);
+                                    }
+                                    events.push(StreamEvent::TextDelta(text));
+                                }
+                                crate::xml_tool_calls::XmlPiece::ToolCall { name, arguments } => {
+                                    self.xml_calls += 1;
+                                    let id = format!("toolu-xml-{}", self.xml_calls);
+                                    events.push(StreamEvent::ToolCallDelta {
+                                        id: id.clone(),
+                                        partial_json: arguments.clone(),
+                                    });
+                                    self.blocks.push(BlockAccumulator::ToolUse {
+                                        id,
+                                        name,
+                                        arguments,
+                                    });
+                                }
                             }
                         }
+                        return events;
                     }
                     "thinking_delta" => {
                         if let BlockAccumulator::Thinking { text, .. } = self
@@ -502,5 +551,41 @@ mod tests {
 
         let mut early = MessagesReducer::new();
         assert!(matches!(early.finish(), StreamEvent::Error(_)));
+    }
+
+    #[test]
+    fn xml_tool_call_text_becomes_a_real_tool_call() {
+        let mut reducer = MessagesReducer::new();
+        let mut events = Vec::new();
+        for data in [
+            json!({"type": "content_block_start", "index": 0,
+                   "content_block": {"type": "text"}}).to_string(),
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": "checking. <tool_call>{\"name\": \"web_search\","}}).to_string(),
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": " \"arguments\": {\"query\": \"rust\"}}</tool_call> found it"}}).to_string(),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}).to_string(),
+            json!({"type": "message_stop"}).to_string(),
+        ] {
+            events.extend(reducer.feed(&data));
+        }
+        assert!(
+            matches!(&events[0], StreamEvent::TextDelta(t) if t == "checking. "),
+            "text before the call streams normally"
+        );
+        let StreamEvent::Done { message } = events.pop().expect("terminal") else {
+            panic!("done required");
+        };
+        // end_turn is overridden because the assembled message carries calls.
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+        assert!(
+            matches!(&message.blocks[0], ContentBlock::Text(t) if t.text == "checking.  found it")
+        );
+        let ContentBlock::ToolCall(call) = &message.blocks[1] else {
+            panic!("tool call second: {:?}", message.blocks);
+        };
+        assert_eq!(call.name, "web_search");
+        assert_eq!(call.arguments, json!({"query": "rust"}));
+        assert!(call.id.starts_with("toolu-xml-"));
     }
 }

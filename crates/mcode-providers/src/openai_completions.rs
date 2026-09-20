@@ -167,6 +167,10 @@ pub(crate) struct CompletionsReducer {
     usage: Option<Usage>,
     stop_reason: Option<StopReason>,
     terminal_sent: bool,
+    /// Extracts `<tool_call>` markup some endpoints stream as plain text.
+    xml: crate::xml_tool_calls::XmlToolCallParser,
+    /// Counter for synthetic ids minted by the XML filter.
+    xml_calls: usize,
 }
 
 impl CompletionsReducer {
@@ -175,7 +179,12 @@ impl CompletionsReducer {
         Self::default()
     }
 
-    fn assemble(&self) -> StreamEvent {
+    fn assemble(&mut self) -> StreamEvent {
+        for piece in self.xml.finish() {
+            if let crate::xml_tool_calls::XmlPiece::Text(text) = piece {
+                self.text.push_str(&text);
+            }
+        }
         let mut blocks = Vec::new();
         if !self.thinking.is_empty() {
             blocks.push(ContentBlock::Thinking(mcode_core::ThinkingBlock::new(
@@ -196,12 +205,46 @@ impl CompletionsReducer {
                 arguments,
             )));
         }
+        // XML-filtered calls arrive without a `tool_calls` finish reason;
+        // any dispatched call set must read as tool use (length stays).
+        let stop_reason =
+            if !self.tool_calls.is_empty() && self.stop_reason != Some(StopReason::Length) {
+                StopReason::ToolUse
+            } else {
+                self.stop_reason.unwrap_or(StopReason::Stop)
+            };
         StreamEvent::Done {
             message: mcode_core::AssistantMessage {
                 blocks,
                 usage: self.usage,
-                stop_reason: self.stop_reason.unwrap_or(StopReason::Stop),
+                stop_reason,
             },
+        }
+    }
+
+    /// Runs one streamed content fragment through the XML tool-call filter.
+    fn absorb_text(&mut self, text: &str, events: &mut Vec<StreamEvent>) {
+        for piece in self.xml.feed(text) {
+            match piece {
+                crate::xml_tool_calls::XmlPiece::Text(text) => {
+                    self.text.push_str(&text);
+                    events.push(StreamEvent::TextDelta(text));
+                }
+                crate::xml_tool_calls::XmlPiece::ToolCall { name, arguments } => {
+                    self.xml_calls += 1;
+                    let id = format!("call-xml-{}", self.xml_calls);
+                    events.push(StreamEvent::ToolCallDelta {
+                        id: id.clone(),
+                        partial_json: arguments.clone(),
+                    });
+                    self.tool_calls.push(ToolCallAccumulator {
+                        id: Some(id),
+                        name,
+                        arguments,
+                        pending: String::new(),
+                    });
+                }
+            }
         }
     }
 }
@@ -224,8 +267,7 @@ impl FrameReducer for CompletionsReducer {
             if let Some(text) = delta["content"].as_str()
                 && !text.is_empty()
             {
-                self.text.push_str(text);
-                events.push(StreamEvent::TextDelta(text.to_owned()));
+                self.absorb_text(text, &mut events);
             }
             let reasoning = delta["reasoning_content"]
                 .as_str()
@@ -448,5 +490,42 @@ mod tests {
             panic!("tool call required");
         };
         assert_eq!(call.arguments, json!({"a": 1, "b": 2}));
+    }
+
+    #[test]
+    fn xml_tool_call_text_becomes_a_real_tool_call() {
+        let mut reducer = CompletionsReducer::new();
+        let mut events = Vec::new();
+        for data in [
+            frame(json!({"content": "I'll check. <tool_call><function=read><para"})),
+            frame(
+                json!({"content": "meter=path>src/main.rs</parameter></function></tool_call> Done."}),
+            ),
+            "[DONE]".to_owned(),
+        ] {
+            events.extend(reducer.feed(&data));
+        }
+        assert_eq!(
+            events[0],
+            StreamEvent::TextDelta("I'll check. ".to_owned()),
+            "text before the call streams normally"
+        );
+        let StreamEvent::Done { message } = events.pop().expect("terminal") else {
+            panic!("done required");
+        };
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+        assert!(
+            matches!(&message.blocks[0], ContentBlock::Text(t) if t.text == "I'll check.  Done.")
+        );
+        let ContentBlock::ToolCall(call) = &message.blocks[1] else {
+            panic!("tool call required: {:?}", message.blocks);
+        };
+        assert_eq!(call.name, "read");
+        assert_eq!(call.arguments, json!({"path": "src/main.rs"}));
+        assert!(
+            call.id.starts_with("call-xml-"),
+            "synthetic id: {}",
+            call.id
+        );
     }
 }

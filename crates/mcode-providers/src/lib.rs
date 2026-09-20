@@ -15,6 +15,7 @@ mod openai_completions;
 mod openai_responses;
 mod sse;
 mod transport;
+mod xml_tool_calls;
 
 use std::sync::Arc;
 
