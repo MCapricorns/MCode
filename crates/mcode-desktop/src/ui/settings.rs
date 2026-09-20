@@ -557,32 +557,45 @@ fn render_models_catalog_page(
             provider.models.len(),
         ));
     }
-    // Plain rows in a bounded scroll area: a virtualized list collapsed to
-    // a sliver inside a height-less container, hiding every provider.
+    // Lazy rows via `uniform_list`: only the visible window of providers is
+    // measured and painted per frame. The container gets a definite pixel
+    // height (row count, capped) — the earlier virtualized attempt collapsed
+    // because its container had no height bound at all.
     let preset_rows = std::rc::Rc::new(preset_rows);
     let preset_list_weak = cx.weak_entity();
-    let preset_list_theme = cx.theme();
+    let list_height = px(
+        (preset_rows.len().clamp(1, 9) as f32) * PRESET_ROW_HEIGHT.as_f32() + 2.,
+    );
+    let list_rows = preset_rows.clone();
     let preset_list = div()
         .id("preset-catalog-list")
         .w_full()
-        .min_h(px(320.))
-        .max_h(px(440.))
-        .overflow_y_scroll()
+        .h(list_height)
+        .overflow_hidden()
         .rounded_md()
         .border_1()
-        .border_color(preset_list_theme.border)
-        .flex()
-        .flex_col()
-        .children(preset_rows.iter().map(|(id, name, kind, models)| {
-            preset_row(
-                id.clone(),
-                name.clone(),
-                kind.clone(),
-                *models,
-                &preset_list_weak,
-                preset_list_theme,
-            )
-        }));
+        .border_color(cx.theme().border)
+        .child(gpui_kit::uniform_list(
+            "preset-catalog-rows",
+            preset_rows.len(),
+            move |range, _window, cx| {
+                let theme = cx.theme().clone();
+                range
+                    .map(|index| {
+                        let (id, name, kind, models) = &list_rows[index];
+                        preset_row(
+                            id.clone(),
+                            name.clone(),
+                            kind.clone(),
+                            *models,
+                            &preset_list_weak,
+                            &theme,
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .h_full());
 
     let has_preset = workspace.vm().active_preset.is_some();
     let header = subview_header(
@@ -879,25 +892,44 @@ fn render_preset_form(
                         })),
                 )
                 .when(menu_open, |this| {
-                    // Plain rows in a bounded scroll area: a virtualized
-                    // list collapsed to a sliver here, showing one model
-                    // where the provider carries many.
+                    // Lazy rows via `uniform_list` under a definite pixel
+                    // height — same fix as the catalog provider list: only
+                    // visible models are measured and painted per frame.
                     let weak = cx.weak_entity();
+                    let list_models = models.clone();
+                    let list_checked = checked.clone();
+                    let list_height = px(
+                        (list_models.len().clamp(1, 8) as f32) * 28. + 2.,
+                    );
                     this.child(
                         div()
                             .id("preset-model-list")
                             .w_full()
-                            .max_h(px(240.))
-                            .overflow_y_scroll()
+                            .h(list_height)
+                            .overflow_hidden()
                             .rounded_md()
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.background)
-                            .flex()
-                            .flex_col()
-                            .children(models.iter().map(|model| {
-                                preset_model_row(model, checked.contains(model), &weak, theme)
-                            })),
+                            .child(gpui_kit::uniform_list(
+                                "preset-model-rows",
+                                list_models.len(),
+                                move |range, _window, cx| {
+                                    let theme = cx.theme().clone();
+                                    range
+                                        .map(|index| {
+                                            let model = &list_models[index];
+                                            preset_model_row(
+                                                model,
+                                                list_checked.contains(model),
+                                                &weak,
+                                                &theme,
+                                            )
+                                        })
+                                        .collect()
+                                },
+                            )
+                            .h_full()),
                     )
                 }),
         )
