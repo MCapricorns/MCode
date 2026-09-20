@@ -1566,6 +1566,10 @@ fn finish_mention_matches(mut matches: Vec<String>) -> Vec<String> {
 
 /// Deletes one session's durable footprint: ledger, todos, compaction
 /// checkpoint, and file snapshots. The ids are plain names by construction.
+///
+/// Only the ledger directory always exists; todos and snapshots are created
+/// lazily by tools, so an absent directory is a successful delete rather than
+/// an error.
 fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), String> {
     if session_id.is_empty()
         || session_id.contains(['/', '\\', ':', '\0'])
@@ -1582,7 +1586,11 @@ fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), String> {
         home.root().join("checkpoints").join(session_id),
     ];
     for root in roots {
-        std::fs::remove_dir_all(&root).map_err(|error| format!("delete: {error}"))?;
+        match std::fs::remove_dir_all(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("delete: {error}")),
+        }
     }
     Ok(())
 }
@@ -3985,6 +3993,62 @@ mod tests {
 
         bridge.shutdown();
         let _ = EventKind::Message;
+    }
+
+    #[test]
+    fn delete_session_covers_a_lazily_created_footprint() {
+        fn create(bridge: &CoreBridge) -> String {
+            let BridgeReply::Created(created) = drive(bridge, BridgeCommand::CreateSession) else {
+                panic!("created reply");
+            };
+            created.expect("created").session_id
+        }
+
+        fn delete(bridge: &CoreBridge, session_id: &str) -> Result<(), String> {
+            let BridgeReply::SessionDeleted(result) = drive(
+                bridge,
+                BridgeCommand::DeleteSession {
+                    session_id: session_id.to_owned(),
+                },
+            ) else {
+                panic!("deleted reply");
+            };
+            result
+        }
+
+        fn paths(layout: &HomeLayout, session_id: &str) -> (PathBuf, PathBuf, PathBuf) {
+            (
+                layout
+                    .root()
+                    .join("plugins/session/data/sessions")
+                    .join(session_id),
+                layout.root().join("workspace").join(session_id),
+                layout.root().join("checkpoints").join(session_id),
+            )
+        }
+
+        let (_parent, layout) = home();
+        let (mut bridge, _events) = CoreBridge::start(layout.clone());
+
+        // A conversation that never ran tools owns only its ledger directory.
+        let session_id = create(&bridge);
+        let (ledger, workspace, checkpoints) = paths(&layout, &session_id);
+        assert!(ledger.is_dir());
+        assert!(!workspace.exists() && !checkpoints.exists());
+        assert_eq!(delete(&bridge, &session_id), Ok(()));
+        assert!(!ledger.exists());
+        // Deleting twice is a no-op, not a failure.
+        assert_eq!(delete(&bridge, &session_id), Ok(()));
+
+        // Todo and checkpoint directories disappear with the rest.
+        let session_id = create(&bridge);
+        let (ledger, workspace, checkpoints) = paths(&layout, &session_id);
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        std::fs::create_dir_all(&checkpoints).expect("checkpoints dir");
+        assert_eq!(delete(&bridge, &session_id), Ok(()));
+        assert!(!ledger.exists() && !workspace.exists() && !checkpoints.exists());
+
+        bridge.shutdown();
     }
 
     #[test]

@@ -11,20 +11,22 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::{ellipsis, icon_button, project_label, short_id, skin};
+use super::{ellipsis, project_label, short_id, skin};
 use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
 /// Sidebar width.
-const WIDTH: gpui_kit::Pixels = px(258.);
+const WIDTH: gpui_kit::Pixels = px(248.);
 
 pub(super) fn render_sidebar(
     workspace: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     let active_project = workspace.vm().project_dir.clone();
     let sessions = workspace.vm().sessions.clone();
+    let session_count = sessions.len();
     let bindings = workspace.vm().session_projects.clone();
     let view = workspace.vm().view;
 
@@ -65,6 +67,12 @@ pub(super) fn render_sidebar(
         .bg(skin::glass_sidebar(theme))
         .border_r_1()
         .border_color(skin::glass_border(theme))
+        .child(pane_head(
+            "PROJECTS",
+            Some(&session_count.to_string()),
+            desk.faint,
+            theme,
+        ))
         .child(
             div()
                 .id("sidebar-header")
@@ -81,7 +89,7 @@ pub(super) fn render_sidebar(
                         .gap_2()
                         .px_2()
                         .py(px(7.))
-                        .rounded(px(8.))
+                        .rounded(px(3.))
                         .border_1()
                         .border_color(theme.border)
                         .cursor_pointer()
@@ -183,9 +191,11 @@ pub(super) fn render_sidebar(
         .child(render_sidebar_footer(workspace, view, cx))
 }
 
-/// One clickable session row.
+/// One clickable session row: the demo's `.sess` — status lamp, title, meta
+/// count; the open session paints an amber left rail (`.sess.active`).
 fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     let is_open = summary.active;
     let title: SharedString = if summary.title.is_empty() {
         short_id(&summary.session_id).into()
@@ -202,9 +212,13 @@ fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoEl
         .group("session-row")
         .px_2()
         .py(px(6.))
-        .rounded(px(7.))
+        .rounded(px(3.))
+        .border_l_1()
+        .border_color(theme.transparent)
+        .when(is_open, |this| {
+            this.bg(theme.sidebar_accent).border_color(desk.amber)
+        })
         .cursor_pointer()
-        .when(is_open, |this| this.bg(theme.sidebar_accent))
         .hover(|this| this.bg(theme.sidebar_accent))
         .text_color(if is_open {
             theme.sidebar_accent_foreground
@@ -217,14 +231,40 @@ fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoEl
                 workspace.on_open_session(&session_id, cx);
             })
         })
+        .child(super::lamp(if is_open {
+            desk.green
+        } else {
+            desk.faint
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_sm()
+                        .overflow_hidden()
+                        .child(ellipsis(title.as_ref(), 42)),
+                ),
+        )
+        .when(summary.event_count > 0, |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(desk.faint)
+                    .child(summary.event_count.to_string()),
+            )
+        })
         .child(
             div()
                 .id(format!("session-delete-{}", summary.session_id))
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(22.))
-                .rounded(px(5.))
+                .size(px(20.))
+                .rounded(px(2.))
                 .opacity(0.0)
                 .group_hover("session-row", |this| this.opacity(1.0))
                 .cursor_pointer()
@@ -237,32 +277,6 @@ fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoEl
                     })
                 })
                 .child(Icon::new(IconName::Trash).xsmall()),
-        )
-        .child(
-            Icon::new(IconName::MessageSquare)
-                .xsmall()
-                .text_color(theme.muted_foreground),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_sm()
-                        .overflow_hidden()
-                        .child(ellipsis(title.as_ref(), 42)),
-                )
-                .when(summary.event_count > 0, |this| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .opacity(0.4)
-                            .child(format!("{} events", summary.event_count)),
-                    )
-                }),
         )
 }
 
@@ -304,20 +318,37 @@ fn switch_group_header(project: &str, cx: &Context<Workspace>) -> impl IntoEleme
 }
 
 fn group_label(id: &'static str, label: &'static str, theme: &Theme) -> impl IntoElement {
+    let desk = super::desk::Desk::of(theme);
+    pane_head(label, None, desk.faint, theme).id(id)
+}
+
+/// The demo's `.pane-head`: a letterspaced mono caption with an optional
+/// count, sitting on a soft bottom hairline.
+pub(super) fn pane_head(
+    label: &str,
+    count: Option<&str>,
+    color: gpui_kit::Hsla,
+    theme: &Theme,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
-        .id(id)
-        .px_2()
-        .pt(px(8.))
-        .pb_1()
+        .id(format!("pane-head-{label}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px_3()
+        .pt(px(10.))
+        .pb(px(8.))
+        .border_b_1()
+        .border_color(theme.border)
         .text_xs()
-        .opacity(0.45)
-        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-        .text_color(theme.sidebar_foreground)
-        .child(label)
+        .text_color(color)
+        .child(label.to_owned())
+        .when_some(count.map(str::to_owned), |this, count| this.child(count))
 }
 
 fn render_sidebar_footer(
-    workspace: &mut Workspace,
+    _workspace: &mut Workspace,
     view: MainView,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
@@ -361,24 +392,14 @@ fn render_sidebar_footer(
                     "Settings"
                 })),
         )
+        // Day/night lives in the title bar's DAY|NIGHT toggle now; the footer
+        // keeps only the version stamp (the demo's `.rail-foot`).
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(icon_button(
-                    "footer-theme",
-                    if workspace.vm().dark_theme {
-                        IconName::Sun
-                    } else {
-                        IconName::Moon
-                    },
-                    cx.listener(|workspace, _, window, cx| {
-                        workspace.on_toggle_theme(window, cx);
-                    }),
-                    cx,
-                ))
                 .child(
                     div()
                         .text_xs()
@@ -420,7 +441,7 @@ pub(super) fn render_project_menu_layer(
                 .w(px(244.))
                 .max_h(px(430.))
                 .overflow_y_scroll()
-                .rounded(px(14.))
+                .rounded(px(3.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
                 .bg(skin::popover(theme))

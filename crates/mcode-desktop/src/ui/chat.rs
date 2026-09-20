@@ -32,17 +32,34 @@ pub(super) fn render_chat(
             .unwrap_or_default();
         let streaming = active.and_then(|c| c.streaming.as_ref());
         let show_welcome = entries.is_empty() && streaming.is_none();
-        let elements: Vec<gpui_kit::AnyElement> = entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                if entry.kind == EntryKind::UserMessage {
-                    render_user_entry(entry, index > 0, index, cx)
-                } else {
-                    render_entry(entry, cx.theme()).into_any_element()
-                }
-            })
-            .collect();
+        // The Desk timeline pairs each tool call with its result (both share
+        // `call_id`) so a call renders as one ledger block; unpaired entries
+        // keep their flat order. Pairing is display-only: state is untouched.
+        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(entries.len());
+        let mut index = 0;
+        while index < entries.len() {
+            let entry = &entries[index];
+            if entry.kind == EntryKind::UserMessage {
+                elements.push(render_user_entry(entry, index > 0, index, cx));
+            } else if entry.kind == EntryKind::ToolCall {
+                let result = entry.call_id.as_deref().and_then(|call| {
+                    entries[index + 1..].iter().find(|next| {
+                        next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
+                    })
+                });
+                elements.push(render_tool_block(entry, result, cx.theme()));
+            } else if entry.kind == EntryKind::ToolResult
+                && entry.call_id.is_some()
+                && entries[..index].iter().any(|prev| {
+                    prev.kind == EntryKind::ToolCall && prev.call_id == entry.call_id
+                })
+            {
+                // Already shown inside its call's block above.
+            } else {
+                elements.push(render_entry(entry, cx.theme()));
+            }
+            index += 1;
+        }
         let streaming_element = streaming
             .map(|streaming| render_streaming_entry(streaming, cx.theme()).into_any_element());
         (show_welcome, elements, streaming_element)
@@ -100,47 +117,68 @@ pub(super) fn render_chat(
         .into_any_element()
 }
 
-/// The in-flight assistant turn: collapsed thinking plus a bubble.
+/// The in-flight assistant turn: the demo's `.think` dashed box for the
+/// reasoning tail plus bare streaming text — no bubble.
 fn render_streaming_entry(
     streaming: &crate::view_model::StreamingReply,
     theme: &Theme,
 ) -> impl IntoElement {
+    let desk = super::desk::Desk::of(theme);
     div()
         .id("streaming-entry")
         .flex()
-        .flex_col()
-        .gap_1()
-        .when(!streaming.thinking.is_empty(), |this| {
-            this.child(
-                div()
-                    .id("streaming-thinking")
-                    .text_xs()
-                    .opacity(0.55)
-                    .overflow_hidden()
-                    .child(ellipsis(&streaming.thinking, 400)),
-            )
-        })
-        .when(!streaming.text.is_empty(), |this| {
-            this.child(
-                div()
-                    .id("streaming-text")
-                    .text_sm()
-                    .self_start()
-                    .max_w(rems(40.))
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .rounded_tl(px(4.))
-                    .bg(theme.secondary)
-                    .child(streaming.text.clone()),
-            )
-        })
+        .flex_row()
+        .gap_3()
+        .w_full()
+        .child(
+            div()
+                .w(px(52.))
+                .flex_shrink_0()
+                .pt(px(3.))
+                .text_xs()
+                .text_color(desk.faint)
+                .child("stream"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(!streaming.thinking.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .id("streaming-thinking")
+                            .border_1()
+                            .border_dashed()
+                            .border_color(theme.border)
+                            .rounded(px(3.))
+                            .px_2()
+                            .py(px(6.))
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .overflow_hidden()
+                            .child(ellipsis(&streaming.thinking, 400)),
+                    )
+                })
+                .when(!streaming.text.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .id("streaming-text")
+                            .text_sm()
+                            .w_full()
+                            .child(streaming.text.clone()),
+                    )
+                }),
+        )
 }
 
 /// The welcome hero shown when no conversation has started.
 fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let recents = workspace.vm().recents.clone();
+    let desk = super::desk::Desk::of(theme);
     div()
         .id("welcome")
         .flex()
@@ -150,41 +188,32 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         .gap_2()
         .py(px(64.))
         .child(
-            div()
-                .id("welcome-logo")
-                .size(px(56.))
-                .rounded(px(14.))
-                // Same tile as the title bar: white background, black M —
-                // the accent purple made the hero look like another brand.
-                .bg(theme.primary)
-                .text_color(theme.primary_foreground)
-                .shadow_lg()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xl()
-                .font_weight(gpui_kit::FontWeight::BOLD)
-                .child("M"),
-        )
-        .child(
+            // The desk wordmark — plain type, no tile: MCODE//UI in amber on
+            // ink, matching the title bar brand.
             div()
                 .id("welcome-title")
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .gap_1()
                 .text_xl()
                 .font_weight(gpui_kit::FontWeight::BOLD)
-                .child("MCode"),
+                .child("MCODE")
+                .child(div().text_color(desk.amber).child("//"))
+                .child("UI"),
         )
         .child(
             div()
                 .id("welcome-tagline")
                 .text_sm()
-                .opacity(0.6)
+                .text_color(theme.muted_foreground)
                 .child("A coding agent for your desktop."),
         )
         .child(
             div()
                 .id("welcome-hint")
                 .text_xs()
-                .opacity(0.45)
+                .text_color(desk.faint)
                 .max_w(rems(38.))
                 .flex()
                 .flex_col()
@@ -231,8 +260,8 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(
                         div()
                             .text_xs()
-                            .opacity(0.5)
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .text_color(desk.faint)
+                            .font_weight(gpui_kit::FontWeight::BOLD)
                             .child("RECENT PROJECTS"),
                     )
                     .children(recents.iter().take(5).map(|project| {
@@ -301,85 +330,190 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         .into_any_element()
 }
 
-/// Flat transcript entry rendering: user rows as tinted cards, assistant
-/// text bare, tool activity as compact mono rows.
-fn render_entry(entry: &ConversationEntry, theme: &Theme) -> impl IntoElement {
+/// Desk transcript entries: the demo's timeline blocks — a mono stamp gutter
+/// plus a ledger row per entry. User rows are plain text with a `▸` arrow
+/// (`.msg-user`), assistant text is bare (`.msg-agent`), and each tool call
+/// renders as one bordered block (`.tool`) with its result inside.
+fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit::AnyElement {
     match entry.kind {
-        EntryKind::UserMessage => div()
-            .id(format!("entry-{}", entry.event_id))
-            .flex()
-            .flex_col()
-            .items_end()
-            .child(
-                div()
-                    .max_w(rems(28.))
-                    .px(px(10.))
-                    .py(px(5.))
-                    .rounded(px(12.))
-                    .rounded_tr(px(4.))
-                    .text_sm()
-                    .bg(skin::accent(theme, 135.))
-                    .text_color(theme.primary_foreground)
-                    .shadow_sm()
-                    .child(SharedString::from(&entry.text)),
-            ),
-        EntryKind::AssistantMessage => div()
-            .id(format!("entry-{}", entry.event_id))
-            .flex()
-            .flex_col()
-            .items_start()
-            .w_full()
-            .child(
-                div()
-                    .text_sm()
-                    .w_full()
-                    .py_1()
-                    .overflow_hidden()
-                    .child(SharedString::from(&entry.text)),
-            ),
-        EntryKind::ToolCall => div()
-            .id(format!("entry-{}", entry.event_id))
-            .flex()
-            .flex_col()
-            .items_start()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py(px(3.))
-                    .rounded_md()
-                    .text_xs()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_color(theme.muted_foreground)
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(Icon::new(IconName::Wrench).xsmall())
-                    .child(ellipsis(&entry.text, 160)),
-            ),
-        EntryKind::ToolResult => {
-            let failed = entry.text.starts_with("failed:");
+        EntryKind::UserMessage => desk_block(
+            entry,
+            theme,
             div()
-                .id(format!("entry-{}", entry.event_id))
                 .flex()
-                .flex_col()
-                .items_start()
+                .flex_row()
+                .gap_2()
+                .text_sm()
+                .child(div().text_color(super::desk::Desk::of(theme).cyan).child("▸"))
                 .child(
                     div()
-                        .max_w(rems(42.))
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .when(failed, |this| this.text_color(theme.danger))
-                        .when(!failed, |this| this.opacity(0.75))
-                        .child(ellipsis(&entry.text, 600)),
-                )
+                        .flex_1()
+                        .min_w_0()
+                        .child(SharedString::from(&entry.text)),
+                ),
+        )
+        .into_any_element(),
+        EntryKind::AssistantMessage => desk_block(
+            entry,
+            theme,
+            div()
+                .text_sm()
+                .w_full()
+                .overflow_hidden()
+                .child(SharedString::from(&entry.text)),
+        )
+        .into_any_element(),
+        EntryKind::ToolCall => render_tool_block(entry, None, theme),
+        EntryKind::ToolResult => {
+            let desk = super::desk::Desk::of(theme);
+            let failed = entry.text.starts_with("failed:");
+            desk_block(
+                entry,
+                theme,
+                div()
+                    .text_xs()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(if failed { desk.red } else { theme.muted_foreground })
+                    .child(ellipsis(&entry.text, 600)),
+            )
+            .into_any_element()
         }
-        EntryKind::Usage => div().id(format!("entry-{}", entry.event_id)),
+        EntryKind::Usage => div().id(format!("entry-{}", entry.event_id)).into_any_element(),
+    }
+}
+
+/// The timeline block shell: stamp gutter + content, matching the demo's
+/// `.block` (left stamp, hover anchor omitted — no interaction change).
+fn desk_block(
+    entry: &ConversationEntry,
+    theme: &Theme,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .id(format!("entry-{}", entry.event_id))
+        .flex()
+        .flex_row()
+        .gap_3()
+        .w_full()
+        .child(
+            div()
+                .w(px(52.))
+                .flex_shrink_0()
+                .pt(px(3.))
+                .text_xs()
+                .text_color(super::desk::Desk::of(theme).faint)
+                .child(short_stamp(&entry.event_id)),
+        )
+        .child(div().flex_1().min_w_0().flex().flex_col().child(content))
+}
+
+/// Stable short stamp for the gutter: the entry id is a ledger identity, not
+/// a clock time, so show its tail (mirrors `short_id`, 8 chars, mono).
+fn short_stamp(event_id: &str) -> String {
+    let tail: String = event_id.chars().rev().take(8).collect::<String>().chars().rev().collect();
+    tail
+}
+
+/// One tool ledger block: header row (lamp + name + target) with the result
+/// rendered inside as diff-green/red or CRT terminal text. Failures paint the
+/// border red; a pending call (no result yet) shows the amber lamp.
+fn render_tool_block(
+    call: &ConversationEntry,
+    result: Option<&ConversationEntry>,
+    theme: &Theme,
+) -> gpui_kit::AnyElement {
+    let desk = super::desk::Desk::of(theme);
+    let failed = result.is_some_and(|r| r.text.starts_with("failed:"));
+    let waiting = result.is_none();
+    let lamp_color = if failed { desk.red } else if waiting { desk.amber } else { desk.green };
+    let mut block = div()
+        .id(format!("entry-{}", call.event_id))
+        .flex()
+        .flex_col()
+        .w_full()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(if failed { desk.red.opacity(0.4) } else { theme.border })
+        .bg(theme.background)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py(px(7.))
+                .text_xs()
+                .child(super::lamp(lamp_color))
+                .child(
+                    div()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.foreground)
+                        .child(call.text.to_string()),
+                ),
+        );
+    if let Some(result) = result {
+        let body = result_body(result, theme, &desk);
+        block = block.child(
+            div()
+                .border_t_1()
+                .border_color(theme.border)
+                .child(body),
+        );
+    }
+    desk_block(call, theme, block).into_any_element()
+}
+
+/// The tool result body: diff-style green/red lines stay colored text on the
+/// panel; longer output renders as a dark CRT strip (`.term`) in both modes.
+fn result_body(
+    result: &ConversationEntry,
+    theme: &Theme,
+    desk: &super::desk::Desk,
+) -> impl IntoElement {
+    let text = result.text.to_string();
+    let failed = text.starts_with("failed:");
+    let lines: Vec<&str> = text.lines().collect();
+    let looks_diff = lines
+        .iter()
+        .any(|line| line.starts_with('+') || line.starts_with('-') || line.starts_with("@@"));
+    if looks_diff {
+        div()
+            .flex()
+            .flex_col()
+            .py_1()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .children(lines.iter().take(40).map(|line| {
+                let (color, bg) = if line.starts_with('+') {
+                    (desk.green, desk.green.opacity(0.07))
+                } else if line.starts_with('-') {
+                    (desk.red, desk.red.opacity(0.06))
+                } else {
+                    (theme.muted_foreground, theme.transparent)
+                };
+                div().px_2().text_color(color).bg(bg).child(line.to_string())
+            }))
+            .into_any_element()
+    } else if failed || text.len() > 300 || lines.len() > 6 {
+        div()
+            .px_2()
+            .py_1()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .bg(desk.screen)
+            .text_color(if failed { desk.red } else { desk.screen_dim })
+            .child(ellipsis(&text, 2000))
+            .into_any_element()
+    } else {
+        div()
+            .px_2()
+            .py_1()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.muted_foreground)
+            .child(ellipsis(&text, 600))
+            .into_any_element()
     }
 }
 
@@ -426,7 +560,16 @@ fn render_composer(
         .as_ref()
         .is_some_and(|settings| settings.providers.iter().any(|provider| provider.enabled));
 
-    div().id("composer").flex().w_full().px_4().pb_4().child(
+    div()
+        .id("composer")
+        .flex()
+        .w_full()
+        .border_t_1()
+        .border_color(theme.border)
+        .bg(theme.sidebar)
+        .px_4()
+        .py_2()
+        .child(
         div()
             .id("composer-card")
             .flex()
@@ -436,17 +579,31 @@ fn render_composer(
             .mx_auto()
             .w_full()
             .max_w(rems(46.))
-            .rounded(px(16.))
+            .rounded(px(3.))
             .border_1()
-            .border_color(skin::glass_border(theme))
-            .bg(skin::glass(theme))
-            .shadow_lg()
+            .border_color(theme.border)
+            .bg(theme.background)
             .child(
                 div()
                     .id("composer-input")
+                    .flex()
+                    .flex_row()
+                    .gap_2()
                     .text_sm()
-                    .min_h(px(56.))
-                    .child(Textarea::new(&composer)),
+                    .child(
+                        // The demo's amber `▸` prompt glyph.
+                        div()
+                            .pt(px(3.))
+                            .text_color(super::desk::Desk::of(theme).amber)
+                            .child("▸"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h(px(40.))
+                            .child(Textarea::new(&composer)),
+                    ),
             )
             .child(
                 div()
@@ -465,7 +622,10 @@ fn render_composer(
                             .gap_1()
                             .px_2()
                             .h(px(24.))
-                            .rounded(px(12.))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.sidebar)
                             .text_xs()
                             .cursor_pointer()
                             .text_color(theme.muted_foreground)
@@ -492,7 +652,10 @@ fn render_composer(
                             .gap_1()
                             .px_2()
                             .h(px(24.))
-                            .rounded(px(12.))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.sidebar)
                             .text_xs()
                             .cursor_pointer()
                             .text_color(theme.muted_foreground)
@@ -514,7 +677,10 @@ fn render_composer(
                                 .gap_1()
                                 .px_2()
                                 .h(px(24.))
-                                .rounded(px(12.))
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.sidebar)
                                 .text_xs()
                                 .cursor_pointer()
                                 .text_color(theme.muted_foreground)
@@ -543,7 +709,7 @@ fn render_composer(
                         Button::new("send")
                             .icon(IconName::ArrowUp)
                             .primary()
-                            .rounded(px(20.))
+                            .rounded(px(3.))
                             .disabled(sending || !has_session)
                             .on_click(cx.listener(|workspace, _, window, cx| {
                                 workspace.on_send(window, cx);
@@ -564,28 +730,33 @@ fn render_user_entry(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
-    let mut bubble = div()
-        .id(format!("entry-{}", entry.event_id))
+    let desk = super::desk::Desk::of(theme);
+    // Desk `.msg-user`: plain left-aligned ledger row with a cyan ▸ arrow.
+    // The hover edit/recall actions are unchanged — they now sit inline to
+    // the right of the text instead of under a right-aligned bubble.
+    let mut column = div()
+        .flex_1()
+        .min_w_0()
         .flex()
         .flex_col()
-        .items_end()
         .gap_1()
-        .group("user-entry")
         .child(
             div()
-                .max_w(rems(28.))
-                .px(px(10.))
-                .py(px(5.))
-                .rounded(px(12.))
-                .rounded_tr(px(4.))
+                .flex()
+                .flex_row()
+                .gap_2()
+                .w_full()
                 .text_sm()
-                .bg(skin::accent(theme, 135.))
-                .text_color(theme.primary_foreground)
-                .shadow_sm()
-                .child(SharedString::from(&entry.text)),
+                .child(div().text_color(desk.cyan).child("▸"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(SharedString::from(&entry.text)),
+                ),
         );
     if can_rewind {
-        bubble = bubble.child(
+        column = column.child(
             div()
                 .id(format!("entry-actions-{index}"))
                 .flex()
@@ -635,7 +806,24 @@ fn render_user_entry(
                 ),
         );
     }
-    bubble.into_any_element()
+    div()
+        .id(format!("entry-{}", entry.event_id))
+        .flex()
+        .flex_row()
+        .gap_3()
+        .w_full()
+        .group("user-entry")
+        .child(
+            div()
+                .w(px(52.))
+                .flex_shrink_0()
+                .pt(px(3.))
+                .text_xs()
+                .text_color(desk.faint)
+                .child(short_stamp(&entry.event_id)),
+        )
+        .child(column)
+        .into_any_element()
 }
 
 /// Composer chip label for the thinking-effort cycle button.
@@ -839,7 +1027,7 @@ pub(super) fn render_model_menu(
                 .mx_auto()
                 .w_full()
                 .max_w(rems(46.))
-                .rounded(px(14.))
+                .rounded(px(3.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
                 .bg(skin::popover(theme))
@@ -1004,7 +1192,7 @@ pub(super) fn render_mention_layer(
                 .max_w(rems(46.))
                 .max_h(px(300.))
                 .overflow_y_scroll()
-                .rounded(px(14.))
+                .rounded(px(3.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
                 .bg(skin::popover(theme))

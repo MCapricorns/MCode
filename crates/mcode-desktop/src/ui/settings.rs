@@ -170,6 +170,7 @@ fn render_settings_nav(section: SettingsSection, cx: &mut Context<Workspace>) ->
         SettingsSection::Data,
         SettingsSection::About,
     ];
+    let desk = super::desk::Desk::of(theme);
     let rows: Vec<AnyElement> = sections
         .into_iter()
         .map(|candidate| {
@@ -184,7 +185,10 @@ fn render_settings_nav(section: SettingsSection, cx: &mut Context<Workspace>) ->
                 .gap_2()
                 .px_2()
                 .py(px(6.))
-                .rounded_md()
+                .rounded(px(3.))
+                .border_l_1()
+                .border_color(theme.transparent)
+                .when(selected, |this| this.border_color(desk.amber))
                 .text_sm()
                 .cursor_pointer()
                 .when(selected, |this| {
@@ -220,7 +224,8 @@ fn render_settings_nav(section: SettingsSection, cx: &mut Context<Workspace>) ->
         .children(rows)
 }
 
-/// One settings card: title, optional hint, and rows.
+/// One settings card: the desk version keeps the hairline border but sits on
+/// a square, flat panel with a mono caption header.
 fn settings_card(
     id: &str,
     title: &str,
@@ -234,9 +239,10 @@ fn settings_card(
         .flex_col()
         .gap_3()
         .p_4()
-        .rounded_lg()
+        .rounded(px(3.))
         .border_1()
         .border_color(theme.border)
+        .bg(theme.sidebar)
         .child(
             div()
                 .id(format!("card-{id}-header"))
@@ -246,7 +252,7 @@ fn settings_card(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .font_weight(gpui_kit::FontWeight::BOLD)
                         .child(title.to_owned()),
                 )
                 .when_some(hint, |this, hint| {
@@ -646,6 +652,7 @@ fn provider_row(
     let theme = cx.theme();
     div()
         .id(format!("provider-row-{index}"))
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
@@ -726,13 +733,16 @@ fn preset_row(
     div()
         .id(format!("preset-row-{id}"))
         .h(PRESET_ROW_HEIGHT)
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
         .gap_2()
         .px_2()
         .rounded_md()
-        .overflow_hidden()
+        // NOTE: no `overflow_hidden` on the row — inside a scroll container it
+        // collapses the flex_1 name column to zero width on real windows
+        // (headless layout tests do not reproduce this; verified on screen).
         .hover(|this| this.bg(theme.secondary))
         .child(
             div()
@@ -745,7 +755,8 @@ fn preset_row(
                     div()
                         .text_xs()
                         .opacity(0.6)
-                        .child(format!("{id} \u{b7} {kind} \u{b7} {models} models")),
+                        .overflow_hidden()
+                        .child(format!("{id} · {kind} · {models} models")),
                 ),
         )
         .child(
@@ -778,6 +789,7 @@ fn preset_model_row(
     div()
         .id(format!("preset-model-{model}"))
         .h(px(28.))
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
@@ -1142,6 +1154,7 @@ fn mcp_row(
     let theme = cx.theme();
     div()
         .id(format!("mcp-row-{id}"))
+        .w_full()
         .flex()
         .flex_row()
         .items_center()
@@ -1328,6 +1341,7 @@ fn backend_row(
     let theme = cx.theme();
     div()
         .id(format!("backend-row-{id}"))
+        .w_full()
         .flex()
         .flex_row()
         .items_center()

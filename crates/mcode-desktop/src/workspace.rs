@@ -47,6 +47,9 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         titlebar.title = Some("MCode".into());
     }
     cx.open_window(options, |window, cx| {
+        // Paint the Desk palette before first layout: `init` leaves the stock
+        // light theme active until settings load.
+        crate::ui::desk::apply(gpui_kit::component::theme::Theme::global_mut(cx));
         let workspace = Workspace::new(bridge, events, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
     })
@@ -398,6 +401,8 @@ impl Workspace {
                 };
                 if cx.theme().mode != mode {
                     Theme::change(mode, None, cx);
+                    crate::ui::desk::apply(Theme::global_mut(cx));
+                    Theme::sync_base(cx);
                 }
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
@@ -866,11 +871,6 @@ impl Workspace {
         }
     }
 
-    pub(super) fn on_toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next = !self.vm.dark_theme;
-        self.on_select_theme(next, window, cx);
-    }
-
     /// Applies and persists the light/dark theme choice: the appearance
     /// setting is marked dirty and saved immediately, mirroring the
     /// reasoning-effort flow.
@@ -889,6 +889,10 @@ impl Workspace {
             ThemeMode::Light
         };
         Theme::change(mode, Some(window), cx);
+        // The Desk palette rides on top of the resolved light/dark theme so
+        // the day/night toggle keeps working: repaint + push to base layer.
+        crate::ui::desk::apply(Theme::global_mut(cx));
+        Theme::sync_base(cx);
         self.apply_action(DesktopAction::SettingsThemeSelected(dark), cx);
         self.on_save_settings(cx);
     }

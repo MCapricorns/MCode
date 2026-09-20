@@ -2,6 +2,7 @@
 //! tasks, prompt resources). Web search is a model tool, not a panel;
 //! rollback is not a dedicated view.
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
@@ -17,9 +18,10 @@ pub(super) fn render_context_panel(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     div()
         .id("context-panel")
-        .w(gpui_kit::px(312.))
+        .w(gpui_kit::px(320.))
         .h_full()
         .flex()
         .flex_col()
@@ -27,6 +29,7 @@ pub(super) fn render_context_panel(
         .border_l_1()
         .border_color(skin::glass_border(theme))
         .bg(skin::glass_sidebar(theme))
+        .child(super::sidebar::pane_head("INSPECTOR", None, desk.faint, theme))
         .child(
             div()
                 .id("context-body")
@@ -34,7 +37,7 @@ pub(super) fn render_context_panel(
                 .min_h_0()
                 .overflow_y_scroll()
                 .px_3()
-                .pt_3()
+                .pt_2()
                 .pb_3()
                 .child(render_overview(workspace, cx)),
         )
@@ -60,22 +63,9 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
         .flex()
         .flex_col()
         .gap_2()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child("Session overview"),
-        )
+        .child(section_caption("SESSION", theme))
         .children(rows.into_iter().map(|(label, value)| {
-            div()
-                .id(format!("overview-row-{label}"))
-                .flex()
-                .flex_row()
-                .justify_between()
-                .gap_2()
-                .text_sm()
-                .child(div().opacity(0.6).child(label))
-                .child(div().child(value))
+            kv_row(&format!("overview-row-{label}"), &label, &value, theme)
         }))
         .when(!vm.usage_totals.is_empty(), |this| {
             this.child(
@@ -85,7 +75,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     .flex_col()
                     .gap_1()
                     .mt_1()
-                    .child(div().text_xs().opacity(0.6).child("Token usage"))
+                    .child(section_caption("TOKEN USAGE", theme))
                     .children(vm.usage_totals.iter().enumerate().map(
                         |(index, (key, input, output, requests))| {
                             div()
@@ -160,17 +150,9 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     .flex_col()
                     .gap_1()
                     .mt_1()
-                    .child(div().text_xs().opacity(0.6).child("Last turn"))
+                    .child(section_caption("LAST TURN", theme))
                     .children(rows.into_iter().map(|(label, value)| {
-                        div()
-                            .id(format!("last-turn-{label}"))
-                            .flex()
-                            .flex_row()
-                            .justify_between()
-                            .gap_2()
-                            .text_sm()
-                            .child(div().opacity(0.6).child(label))
-                            .child(div().child(value))
+                        kv_row(&format!("last-turn-{label}"), &label, &value, theme)
                     })),
             )
         })
@@ -182,7 +164,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     .flex_col()
                     .gap_1()
                     .mt_1()
-                    .child(div().text_xs().opacity(0.6).child("Tasks"))
+                    .child(section_caption("TASKS", theme))
                     .children(
                         vm.todo_rows
                             .iter()
@@ -218,7 +200,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                 .flex_col()
                 .gap_1()
                 .mt_2()
-                .child(div().text_xs().opacity(0.6).child("Prompt resources"))
+                .child(section_caption("PROMPT RESOURCES", theme))
                 .when(vm.resources.is_empty(), |this| {
                     this.child(
                         div()
@@ -239,6 +221,39 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                         .child(div().text_xs().opacity(0.6).child(ellipsis(path, 60)))
                 })),
         )
+}
+
+/// The demo's `.pane-head` caption for one inspector section.
+fn section_caption(
+    label: &'static str,
+    theme: &Theme,
+) -> impl IntoElement {
+    div()
+        .id(format!("insp-cap-{label}"))
+        .text_xs()
+        .text_color(super::desk::Desk::of(theme).faint)
+        .font_weight(gpui_kit::FontWeight::BOLD)
+        .child(label)
+}
+
+/// One `.kv` row: mono faint label left, value right.
+fn kv_row(
+    id: &str,
+    label: &str,
+    value: &str,
+    theme: &Theme,
+) -> gpui_kit::AnyElement {
+    let desk = super::desk::Desk::of(theme);
+    div()
+        .id(id.to_owned())
+        .flex()
+        .flex_row()
+        .justify_between()
+        .gap_2()
+        .text_sm()
+        .child(div().text_color(desk.faint).child(label.to_owned()))
+        .child(div().child(value.to_owned()))
+        .into_any_element()
 }
 
 /// Compact token-count spelling: 12.3k / 1.2M.

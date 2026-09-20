@@ -1,6 +1,8 @@
-//! GPUI rendering for the workspace, in the opencode-desktop spirit: one
-//! project-centric sidebar, a centered conversation with an integrated
-//! composer, and a full-page settings view with its own secondary nav.
+//! GPUI rendering for the workspace in the Desk look (docs/design/demo.html):
+//! a flat trading-desk ledger — hairline panels, near-zero radius, dense mono
+//! type — over the existing project/sidebar/conversation/settings structure.
+//! Functionality is unchanged; only the visual skin moves.
+pub(crate) mod desk;
 mod chat;
 mod context;
 mod settings;
@@ -29,8 +31,10 @@ pub fn render_root(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let theme = cx.theme();
-    let ambient = skin::ambient(theme);
+    let theme = cx.theme().clone();
+    let mono = theme.mono_font_family.clone();
+    let bg = theme.background;
+    let fg = theme.foreground;
     let focus_handle = workspace.focus_handle().clone();
     div()
         .id("workspace")
@@ -38,8 +42,8 @@ pub fn render_root(
         .flex()
         .flex_col()
         .size_full()
-        .bg(theme.background)
-        .text_color(theme.foreground)
+        .bg(bg)
+        .text_color(fg)
         // Root focus plus the key listener below keep Escape alive even when
         // no input holds focus: bubbled key events reach this node from any
         // focused descendant, and from itself via the startup focus.
@@ -49,7 +53,9 @@ pub fn render_root(
                 workspace.on_escape(cx);
             }
         }))
+        .font_family(mono)
         .child(render_title_bar(workspace, cx))
+        .child(render_tape(workspace, cx))
         .when(workspace.vm().error.is_some(), |this| {
             this.child(render_error_banner(workspace, cx))
         })
@@ -61,9 +67,9 @@ pub fn render_root(
                 .id("body")
                 .flex_1()
                 .min_h_0()
+                .bg(bg)
                 .flex()
                 .flex_row()
-                .bg(ambient)
                 .when(
                     workspace.vm().view == crate::view_model::MainView::Chat,
                     |this| this.child(sidebar::render_sidebar(workspace, cx)),
@@ -86,6 +92,7 @@ pub fn render_root(
 
 fn render_title_bar(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
+    let desk = desk::Desk::of(theme);
     let subtitle: SharedString = match workspace.vm().view {
         MainView::Chat => workspace
             .vm()
@@ -107,45 +114,86 @@ fn render_title_bar(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> i
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_2()
+                .gap_5()
                 .min_w_0()
                 .child(
                     div()
-                        .size(px(18.))
-                        .rounded(px(5.))
-                        .bg(theme.primary)
-                        .text_color(theme.primary_foreground)
                         .flex()
+                        .flex_row()
                         .items_center()
-                        .justify_center()
-                        .text_xs()
-                        .font_weight(gpui_kit::FontWeight::BOLD)
-                        .child("M"),
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                .child("MCODE"),
+                        )
+                        .child(div().text_sm().text_color(desk.amber).child("//"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                .child("UI"),
+                        ),
                 )
+                .child(div().text_xs().text_color(theme.muted_foreground).child(subtitle)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_4()
+                .when_some(update_label, |this, label| {
+                    this.child(
+                        Button::new("title-update")
+                            .label(label)
+                            .small()
+                            .warning()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace.on_show_main_view(MainView::Settings, cx);
+                            })),
+                    )
+                })
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .child("MCode"),
-                )
-                .child(div().text_xs().opacity(0.5).child(subtitle)),
+                        .id("day-night-toggle")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded(px(3.))
+                        .overflow_hidden()
+                        .text_xs()
+                        .child(theme_toggle_seg("DAY", !workspace.vm().dark_theme, &desk, theme, cx))
+                        .child(theme_toggle_seg("NIGHT", workspace.vm().dark_theme, &desk, theme, cx)),
+                ),
         )
-        .child(div().flex().flex_row().items_center().gap_2().when_some(
-            update_label,
-            |this, label| {
-                this.child(
-                    Button::new("title-update")
-                        .label(label)
-                        .small()
-                        .warning()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_show_main_view(MainView::Settings, cx);
-                        })),
-                )
-            },
-        ))
         .border_b_1()
         .border_color(theme.border)
+}
+
+/// One half of the demo's DAY/NIGHT segmented toggle; the active half paints
+/// amber. Same `on_select_theme` path as the footer icon it replaces.
+fn theme_toggle_seg(
+    label: &'static str,
+    on: bool,
+    desk: &desk::Desk,
+    theme: &gpui_kit::component::theme::Theme,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    div()
+        .id(format!("theme-{label}"))
+        .px_2()
+        .py(px(2.))
+        .cursor_pointer()
+        .when(on, |this| this.bg(desk.amber).text_color(theme.primary_foreground))
+        .when(!on, |this| this.text_color(theme.muted_foreground))
+        .child(label)
+        .on_click(cx.listener(move |workspace, _, window, cx| {
+            workspace.on_select_theme(label == "NIGHT", window, cx);
+        }))
 }
 
 fn render_error_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
@@ -184,6 +232,103 @@ fn render_error_banner(workspace: &mut Workspace, cx: &mut Context<Workspace>) -
         )
 }
 
+// ---- tape strip + shared helpers ----
+
+/// The TAPE strip under the title bar: session lamps, token ledger figures,
+/// and the active project — the demo's ticker row rendered from live state
+/// instead of animated sample text.
+fn render_tape(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = desk::Desk::of(theme);
+    let vm = workspace.vm();
+    let sessions = vm.sessions.len();
+    let open = vm.sessions.iter().filter(|s| s.active).count();
+    let (input, output) = vm
+        .usage_totals
+        .iter()
+        .fold((0u64, 0u64), |(a, b), (_, i, o, _)| (a + i, b + o));
+    let project: SharedString = vm
+        .project_dir
+        .as_deref()
+        .map(project_label)
+        .unwrap_or_else(|| "no project".to_owned())
+        .into();
+    div()
+        .id("tape")
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_5()
+        .px_3()
+        .h(px(26.))
+        .flex_shrink_0()
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+        .text_xs()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .text_color(desk.amber)
+                .font_weight(gpui_kit::FontWeight::BOLD)
+                .child("TAPE"),
+        )
+        .child(tape_stat("OPEN", &open.to_string(), desk.green, theme))
+        .child(tape_stat("CHATS", &sessions.to_string(), theme.foreground, theme))
+        .child(tape_stat("IN", &compact_count(input), theme.foreground, theme))
+        .child(tape_stat("OUT", &compact_count(output), theme.foreground, theme))
+        .when(vm.sending, |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .text_color(desk.amber)
+                    .child(lamp(desk.amber))
+                    .child("STREAMING"),
+            )
+        })
+        .child(div().flex_1())
+        .child(div().text_color(theme.muted_foreground).child(project))
+}
+
+fn tape_stat(
+    label: &str,
+    value: &str,
+    color: gpui_kit::Hsla,
+    theme: &gpui_kit::component::theme::Theme,
+) -> impl IntoElement {
+    div()
+        .id(format!("tape-{label}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .text_color(theme.muted_foreground)
+        .child(label.to_owned())
+        .child(div().text_color(color).child(value.to_owned()))
+}
+
+/// Compact token-count spelling: 12.3k / 1.2M (mirrors context.rs).
+fn compact_count(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+/// A 7px status lamp: the demo's `.lamp` dot.
+pub(super) fn lamp(color: gpui_kit::Hsla) -> impl IntoElement {
+    div().size(px(7.)).rounded_full().bg(color)
+}
+
 pub(super) fn icon_button(
     id: impl Into<gpui_kit::ElementId>,
     icon: IconName,
@@ -194,7 +339,7 @@ pub(super) fn icon_button(
     div()
         .id(id)
         .size(px(26.))
-        .rounded(px(6.))
+        .rounded(px(3.))
         .flex()
         .items_center()
         .justify_center()
@@ -204,8 +349,6 @@ pub(super) fn icon_button(
         .child(Icon::new(icon).with_size(px(14.)))
         .on_click(on_click)
 }
-
-// ---- shared helpers ----
 
 pub(super) fn short_id(id: &str) -> String {
     id.chars().take(12).collect()
