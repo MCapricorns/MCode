@@ -262,6 +262,19 @@ pub enum MainView {
     Settings,
 }
 
+/// The Models settings sub-page: provider list, catalog picker, or the
+/// custom-endpoint form.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelsSubview {
+    /// Configured providers plus the two add buttons.
+    #[default]
+    List,
+    /// The models.dev catalog picker (search + provider rows).
+    Catalog,
+    /// The custom endpoint form.
+    Custom,
+}
+
 /// One settings navigation section (the secondary menu).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SettingsSection {
@@ -427,6 +440,12 @@ pub struct WorkspaceState {
     pub preset_models: Vec<String>,
     /// Whether the preset form's model dropdown is open.
     pub preset_model_menu_open: bool,
+    /// The Models settings sub-page.
+    pub models_subview: ModelsSubview,
+    /// Whether the custom provider form's protocol dropdown is open.
+    pub provider_kind_menu_open: bool,
+    /// Whether the custom MCP form's transport dropdown is open.
+    pub mcp_transport_menu_open: bool,
 }
 /// Everything the UI can do to the state.
 #[derive(Clone, Debug, PartialEq)]
@@ -453,6 +472,10 @@ pub enum DesktopAction {
     /// Switch the right-panel tab.
     /// Settings loaded from the core.
     SettingsLoaded(SettingsState),
+    /// The user picked the light or dark theme; persists with settings.
+    SettingsThemeSelected(bool),
+    /// The user dismissed the composer mention menu without picking a row.
+    MentionDismissed,
     /// The settings editor changed the User-Agent.
     SettingsUserAgentChanged(String),
     /// The settings editor changed a provider row.
@@ -529,8 +552,6 @@ pub enum DesktopAction {
     /// The model turn failed without committing anything.
     ChatFailed(String),
     /// Web search completed.
-    /// Toggle light/dark theme.
-    ToggleTheme,
     /// Clear the surfaced error.
     DismissError,
     /// Switch the main area between chat and settings.
@@ -586,6 +607,12 @@ pub enum DesktopAction {
     PresetModelToggled(String),
     /// The preset form's model dropdown opened or closed.
     PresetModelMenuToggled(bool),
+    /// The Models settings sub-page changed.
+    ShowModelsSubview(ModelsSubview),
+    /// The custom provider form's protocol dropdown opened or closed.
+    ProviderKindMenuToggled(bool),
+    /// The custom MCP form's transport dropdown opened or closed.
+    McpTransportMenuToggled(bool),
     /// Self-update progress changed.
     UpdateStateChanged(UpdateState),
     /// A release offer was resolved for the available update.
@@ -758,6 +785,14 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.settings = Some(settings);
             state.dark_theme = dark;
         }
+        DesktopAction::SettingsThemeSelected(dark) => {
+            if let Some(settings) = state.settings.as_mut() {
+                settings.theme = if dark { "dark" } else { "light" }.to_owned();
+                settings.dirty = true;
+            }
+            state.dark_theme = dark;
+        }
+        DesktopAction::MentionDismissed => state.mention = None,
         DesktopAction::SettingsUserAgentChanged(user_agent) => {
             if let Some(settings) = state.settings.as_mut() {
                 settings.user_agent = user_agent;
@@ -866,9 +901,16 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.mcp_tools.push((server_id, tools));
             }
         }
-        DesktopAction::ToggleTheme => state.dark_theme = !state.dark_theme,
         DesktopAction::DismissError => state.error = None,
-        DesktopAction::ShowMainView(view) => state.view = view,
+        DesktopAction::ShowMainView(view) => {
+            state.view = view;
+            // Crossing views closes every floating menu so no stale layer
+            // renders above the destination view.
+            state.project_menu_open = false;
+            state.model_menu_open = false;
+            state.preset_model_menu_open = false;
+            state.mention = None;
+        }
         DesktopAction::ShowSettingsSection(section) => state.settings_section = section,
         DesktopAction::ProjectMenuToggled(open) => state.project_menu_open = open,
         DesktopAction::CatalogLoaded {
@@ -955,6 +997,15 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
         }
         DesktopAction::PresetModelMenuToggled(open) => state.preset_model_menu_open = open,
+        DesktopAction::ShowModelsSubview(view) => {
+            state.models_subview = view;
+            state.active_preset = None;
+            state.preset_model_menu_open = false;
+            state.provider_kind_menu_open = false;
+            state.mcp_transport_menu_open = false;
+        }
+        DesktopAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
+        DesktopAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         DesktopAction::UpdateStateChanged(update) => state.update = update,
         DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
         DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
@@ -1200,6 +1251,8 @@ mod tests {
                 base_url: "https://api.openai.com/v1".to_owned(),
                 models: vec!["gpt-x".to_owned()],
                 enabled: true,
+                context_limit: None,
+                max_output: None,
             }),
         );
         reduce(&mut state, DesktopAction::SettingsProviderRemoved(0));
@@ -1236,6 +1289,8 @@ mod tests {
                 base_url: "https://api.openai.com/v1".to_owned(),
                 models: vec!["gpt-x".to_owned()],
                 enabled: true,
+                context_limit: None,
+                max_output: None,
             }),
         );
         reduce(
@@ -1265,10 +1320,90 @@ mod tests {
 
         reduce(&mut state, DesktopAction::ShowMainView(MainView::Settings));
         assert_eq!(state.view, MainView::Settings);
-        reduce(&mut state, DesktopAction::ToggleTheme);
-        assert!(state.dark_theme);
-        reduce(&mut state, DesktopAction::ToggleTheme);
+        reduce(&mut state, DesktopAction::ShowMainView(MainView::Chat));
+        assert_eq!(state.view, MainView::Chat);
+    }
+
+    #[test]
+    fn theme_selection_updates_settings_doc_and_dark_flag() {
+        let mut state = WorkspaceState::default();
+        let settings =
+            SettingsState::from_settings(&mcode_config::AppSettings::default(), 0, Vec::new());
+        reduce(&mut state, DesktopAction::SettingsLoaded(settings));
+        assert!(state.dark_theme, "default settings spell a dark theme");
+
+        reduce(&mut state, DesktopAction::SettingsThemeSelected(false));
+        let settings = state.settings.as_ref().expect("settings");
         assert!(!state.dark_theme);
+        assert_eq!(settings.theme, "light");
+        assert!(settings.dirty, "the choice persists through a save");
+
+        reduce(&mut state, DesktopAction::SettingsThemeSelected(true));
+        let settings = state.settings.as_ref().expect("settings");
+        assert!(state.dark_theme);
+        assert_eq!(settings.theme, "dark");
+    }
+
+    #[test]
+    fn switching_views_closes_floating_menus() {
+        let mut state = WorkspaceState {
+            project_menu_open: true,
+            model_menu_open: true,
+            preset_model_menu_open: true,
+            mention: Some(ComposerMention {
+                kind: MentionKind::File,
+                fragment: "src".to_owned(),
+                items: Vec::new(),
+            }),
+            ..WorkspaceState::default()
+        };
+        reduce(&mut state, DesktopAction::ShowMainView(MainView::Settings));
+        assert!(!state.project_menu_open);
+        assert!(!state.model_menu_open);
+        assert!(!state.preset_model_menu_open);
+        assert!(state.mention.is_none());
+
+        // Dismissal also clears a mention on its own.
+        state.mention = Some(ComposerMention {
+            kind: MentionKind::Command,
+            fragment: "new".to_owned(),
+            items: Vec::new(),
+        });
+        reduce(&mut state, DesktopAction::MentionDismissed);
+        assert!(state.mention.is_none());
+    }
+
+    #[test]
+    fn models_subview_switches_reset_transient_form_state() {
+        use crate::view_model::ModelsSubview;
+
+        let mut state = WorkspaceState {
+            active_preset: Some("openai".to_owned()),
+            preset_model_menu_open: true,
+            provider_kind_menu_open: true,
+            mcp_transport_menu_open: true,
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            DesktopAction::ShowModelsSubview(ModelsSubview::Catalog),
+        );
+        assert_eq!(state.models_subview, ModelsSubview::Catalog);
+        assert!(state.active_preset.is_none());
+        assert!(!state.preset_model_menu_open);
+        assert!(!state.provider_kind_menu_open);
+        assert!(!state.mcp_transport_menu_open);
+
+        reduce(
+            &mut state,
+            DesktopAction::ShowModelsSubview(ModelsSubview::Custom),
+        );
+        assert_eq!(state.models_subview, ModelsSubview::Custom);
+
+        reduce(&mut state, DesktopAction::ProviderKindMenuToggled(true));
+        assert!(state.provider_kind_menu_open);
+        reduce(&mut state, DesktopAction::McpTransportMenuToggled(true));
+        assert!(state.mcp_transport_menu_open);
     }
 
     #[test]
@@ -1282,6 +1417,8 @@ mod tests {
             base_url: "https://api.acme.dev/v1".to_owned(),
             models: vec!["m1".to_owned(), "m2".to_owned()],
             enabled: true,
+            context_limit: None,
+            max_output: None,
         });
         reduce(&mut state, DesktopAction::SettingsLoaded(settings));
         assert_eq!(state.selected_provider.as_deref(), Some("acme"));

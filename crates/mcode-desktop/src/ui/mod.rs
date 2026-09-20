@@ -14,8 +14,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    ClickEvent, Context, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::view_model::{MainView, UpdateState};
@@ -31,6 +31,7 @@ pub fn render_root(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let ambient = skin::ambient(theme);
+    let focus_handle = workspace.focus_handle().clone();
     div()
         .id("workspace")
         .relative()
@@ -39,6 +40,15 @@ pub fn render_root(
         .size_full()
         .bg(theme.background)
         .text_color(theme.foreground)
+        // Root focus plus the key listener below keep Escape alive even when
+        // no input holds focus: bubbled key events reach this node from any
+        // focused descendant, and from itself via the startup focus.
+        .track_focus(&focus_handle)
+        .on_key_down(cx.listener(|workspace, event: &KeyDownEvent, _, cx| {
+            if event.keystroke.key == "escape" {
+                workspace.on_escape(cx);
+            }
+        }))
         .child(render_title_bar(workspace, cx))
         .when(workspace.vm().error.is_some(), |this| {
             this.child(render_error_banner(workspace, cx))

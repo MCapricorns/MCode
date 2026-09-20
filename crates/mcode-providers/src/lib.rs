@@ -250,6 +250,8 @@ mod tests {
             base_url: "https://api.example.com".to_owned(),
             models: vec!["model-a".to_owned()],
             enabled: true,
+            context_limit: None,
+            max_output: None,
         }
     }
 

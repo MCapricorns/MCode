@@ -323,9 +323,7 @@ fn render_general_section(
                     .when(!dark, |this| this.primary())
                     .when(dark, |this| this.ghost())
                     .on_click(cx.listener(|workspace, _, window, cx| {
-                        if workspace.vm().dark_theme {
-                            workspace.on_toggle_theme(window, cx);
-                        }
+                        workspace.on_select_theme(false, window, cx);
                     }))
                     .into_any_element(),
             )
@@ -337,9 +335,7 @@ fn render_general_section(
                     .when(dark, |this| this.primary())
                     .when(!dark, |this| this.ghost())
                     .on_click(cx.listener(|workspace, _, window, cx| {
-                        if !workspace.vm().dark_theme {
-                            workspace.on_toggle_theme(window, cx);
-                        }
+                        workspace.on_select_theme(true, window, cx);
                     }))
                     .into_any_element(),
             )
@@ -362,7 +358,7 @@ fn render_general_section(
     settings_card(
         "appearance",
         "Appearance",
-        Some("Theme applies immediately and persists with settings."),
+        Some("Theme applies immediately and is saved to settings right away."),
         theme,
         vec![theme_row, ua_field],
     )
@@ -376,19 +372,59 @@ fn render_models_section(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    match workspace.vm().models_subview {
+        crate::view_model::ModelsSubview::List => render_models_list_page(workspace, cx),
+        crate::view_model::ModelsSubview::Catalog => {
+            render_models_catalog_page(workspace, window, cx)
+        }
+        crate::view_model::ModelsSubview::Custom => {
+            render_custom_provider_page(workspace, window, cx)
+        }
+    }
+}
+
+/// A secondary-page header: back arrow, title, and optional hint.
+fn subview_header(
+    title: &str,
+    hint: Option<&str>,
+    on_back: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    div()
+        .id("subview-header")
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .pb_1()
+        .child(
+            Button::new("subview-back")
+                .icon(IconName::ArrowLeft)
+                .label("Back")
+                .small()
+                .ghost()
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    on_back(workspace, cx);
+                })),
+        )
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::BOLD)
+                .child(title.to_owned()),
+        )
+        .when_some(hint, |this, hint| {
+            this.child(div().text_xs().opacity(0.5).child(hint.to_owned()))
+        })
+        .into_any_element()
+}
+
+/// The Models landing page: configured provider rows plus the two add paths.
+fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
     };
     let catalog = workspace.vm().catalog.clone();
-    let active_preset = workspace.vm().active_preset.clone();
-    // &mut Context work first: input entities and nested forms.
-    let preset_search = workspace.preset_search_input(window, cx);
-    let provider_form_element = render_provider_form(workspace, window, cx);
-    let preset_form_element = active_preset
-        .as_ref()
-        .map(|preset_id| render_preset_form(workspace, preset_id, window, cx))
-        .unwrap_or_else(|| div().into_any_element());
-
     let mut provider_rows: Vec<(usize, String, String, String, usize, bool, bool)> = Vec::new();
     for (index, provider) in settings.providers.iter().enumerate() {
         let name = catalog
@@ -423,24 +459,97 @@ fn render_models_section(
             provider_row(index, name, kind, host, models, keyed, enabled, cx)
         })
         .collect();
+    let theme = cx.theme();
+    let providers_empty = provider_row_elements.is_empty();
+    settings_card(
+        "providers",
+        "Model providers",
+        Some("Pick a provider, paste its API key, done. Every listed model becomes selectable in the composer."),
+        theme,
+        vec![
+            div()
+                .when(providers_empty, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .child("No providers yet — add one below"),
+                    )
+                })
+                .children(provider_row_elements)
+                .into_any_element(),
+            div()
+                .id("add-provider-row")
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .pt_1()
+                .child(
+                    Button::new("add-from-catalog")
+                        .icon(IconName::Plus)
+                        .label("Add from catalog\u{2026}")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_show_models_subview(
+                                crate::view_model::ModelsSubview::Catalog,
+                                cx,
+                            );
+                        })),
+                )
+                .child(
+                    Button::new("add-custom-endpoint")
+                        .icon(IconName::Terminal)
+                        .label("Add custom endpoint\u{2026}")
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_show_models_subview(
+                                crate::view_model::ModelsSubview::Custom,
+                                cx,
+                            );
+                        })),
+                )
+                .into_any_element(),
+        ],
+    )
+    .into_any_element()
+}
+
+/// The catalog picker page: search + every provider from models.dev; picking
+/// one opens the preset configuration form.
+fn render_models_catalog_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let Some(catalog) = workspace.vm().catalog.clone() else {
+        return div().into_any_element();
+    };
+    // &mut Context work first: input entities and nested forms.
+    let preset_search = workspace.preset_search_input(window, cx);
+    let active_preset = workspace.vm().active_preset.clone();
+    let preset_form_element = active_preset
+        .as_ref()
+        .map(|preset_id| render_preset_form(workspace, preset_id, window, cx))
+        .unwrap_or_else(|| div().into_any_element());
 
     let preset_search_text = workspace.vm().preset_search.to_lowercase();
     let mut preset_rows: Vec<(String, String, String, usize)> = Vec::new();
-    if let Some(catalog) = catalog.as_ref() {
-        for provider in &catalog.providers {
-            if !preset_search_text.is_empty()
-                && !provider.name.to_lowercase().contains(&preset_search_text)
-                && !provider.id.contains(&preset_search_text)
-            {
-                continue;
-            }
-            preset_rows.push((
-                provider.id.clone(),
-                provider.name.clone(),
-                provider.kind.clone(),
-                provider.models.len(),
-            ));
+    for provider in &catalog.providers {
+        if !preset_search_text.is_empty()
+            && !provider.name.to_lowercase().contains(&preset_search_text)
+            && !provider.id.contains(&preset_search_text)
+        {
+            continue;
         }
+        preset_rows.push((
+            provider.id.clone(),
+            provider.name.clone(),
+            provider.kind.clone(),
+            provider.models.len(),
+        ));
     }
     // Virtualized: the catalog lists every known provider, so only the
     // visible slice gets rows and click handlers.
@@ -467,42 +576,66 @@ fn render_models_section(
         },
     );
 
+    let has_preset = workspace.vm().active_preset.is_some();
+    let header = subview_header(
+        if has_preset {
+            "Configure provider"
+        } else {
+            "Add from catalog"
+        },
+        if has_preset {
+            None
+        } else {
+            Some("190+ providers from models.dev")
+        },
+        move |workspace, cx| {
+            if has_preset {
+                workspace.on_close_preset(cx);
+            } else {
+                workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+            }
+        },
+        cx,
+    );
     let theme = cx.theme();
-    let providers_empty = provider_row_elements.is_empty();
-    settings_card(
-        "providers",
-        "Model providers",
-        Some(
-            "Pick a provider, paste its API key, done. Every listed model becomes \
-             selectable in the composer.",
-        ),
-        theme,
-        vec![
-            div()
-                .when(providers_empty, |this| {
-                    this.child(
+    div()
+        .id("models-catalog-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(header)
+        .when(workspace.vm().active_preset.is_none(), |this| {
+            this.child(
+                settings_card(
+                    "catalog-search",
+                    "Choose a provider",
+                    Some("Filter by name or id, then pick a provider to configure."),
+                    theme,
+                    vec![
                         div()
-                            .text_xs()
-                            .opacity(0.5)
-                            .child("No providers yet — add one from the catalog below"),
-                    )
-                })
-                .children(provider_row_elements)
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
+                            .child(
+                                preset_list
+                                    .w_full()
+                                    .min_h(px(320.))
+                                    .max_h(px(440.))
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.border),
+                            )
+                            .into_any_element(),
+                    ],
+                )
                 .into_any_element(),
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .pt_1()
-                .child(div().text_xs().opacity(0.7).child("Add from catalog"))
-                .child(div().h(px(30.)).text_sm().child(Input::new(&preset_search)))
-                .child(preset_list.w_full().max_h(px(240.)))
-                .into_any_element(),
-            preset_form_element,
-            provider_form_element,
-        ],
-    )
-    .into_any_element()
+            )
+        })
+        .when(workspace.vm().active_preset.is_some(), |this| {
+            this.child(preset_form_element)
+        })
+        .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1509,8 +1642,8 @@ fn render_backend_form(
 pub(crate) struct McpForm {
     /// Server identity input.
     pub id: Entity<InputState>,
-    /// Transport input (`http` or `stdio`).
-    pub transport: Entity<InputState>,
+    /// Selected transport (`http` or `stdio`).
+    pub transport: String,
     /// HTTP endpoint input (http transport).
     pub endpoint: Entity<InputState>,
     /// Command input (stdio transport).
@@ -1525,13 +1658,12 @@ impl McpForm {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
         let id = make("id, e.g. my-mcp");
-        let transport = make("http | stdio");
         let endpoint = make("https://mcp.example.com/mcp");
         let command = make("stdio: command (e.g. npx)");
         let api_key = make("api key (leave empty to skip)");
         cx.new(|_| Self {
             id,
-            transport,
+            transport: "http".to_owned(),
             endpoint,
             command,
             api_key,
@@ -1545,6 +1677,19 @@ fn render_mcp_form(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let form = workspace.mcp_form(window, cx);
+    let transport = form.read(cx).transport.clone();
+    let transport_menu_open = workspace.vm().mcp_transport_menu_open;
+    let transport_field = dropdown_field(
+        "mcp-transport",
+        "Transport",
+        Some("HTTP servers speak Streamable-HTTP; stdio servers spawn a command."),
+        &transport,
+        &["http", "stdio"],
+        transport_menu_open,
+        |workspace, open, cx| workspace.on_toggle_mcp_transport_menu(open, cx),
+        |workspace, transport, cx| workspace.on_select_mcp_transport(transport, cx),
+        cx,
+    );
     let theme = cx.theme();
     div()
         .id("mcp-form")
@@ -1567,7 +1712,7 @@ fn render_mcp_form(
                 .gap_2()
                 .text_sm()
                 .child(labeled_field("id", form.read(cx).id.clone()))
-                .child(labeled_field("transport", form.read(cx).transport.clone()))
+                .child(transport_field)
                 .child(labeled_field(
                     "endpoint (http)",
                     form.read(cx).endpoint.clone(),
@@ -1597,12 +1742,17 @@ fn render_mcp_form(
 pub(crate) struct ProviderForm {
     /// Provider identity input.
     pub id: Entity<InputState>,
-    /// Wire-protocol kind input.
-    pub kind: Entity<InputState>,
+    /// Selected wire protocol (`anthropic-messages`, `openai-completions`,
+    /// `openai-responses`).
+    pub kind: String,
     /// Base URL input.
     pub base_url: Entity<InputState>,
     /// Default model input.
     pub model: Entity<InputState>,
+    /// Optional context window override (tokens).
+    pub context_limit: Entity<InputState>,
+    /// Optional max output override (tokens).
+    pub max_output: Entity<InputState>,
     /// API key input; stored in the secret store, never in settings.
     pub api_key: Entity<InputState>,
 }
@@ -1613,59 +1763,223 @@ impl ProviderForm {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
         let id = make("id, e.g. openai-main");
-        let kind = make("anthropic-messages | openai-completions | openai-responses");
         let base_url = make("https://api.example.com/v1");
         let model = make("model id");
+        let context_limit = make("optional, e.g. 200000");
+        let max_output = make("optional, e.g. 8192");
         let api_key = make("api key (leave empty to skip)");
         cx.new(|_| Self {
             id,
-            kind,
+            kind: "openai-completions".to_owned(),
             base_url,
             model,
+            context_limit,
+            max_output,
             api_key,
         })
     }
 }
 
-fn render_provider_form(
+/// A dropdown row: label on the left, a button showing the current value on
+/// the right, and an inline option list that opens below the row.
+#[allow(clippy::too_many_arguments)]
+fn dropdown_field(
+    id: &str,
+    label: &str,
+    description: Option<&str>,
+    current: &str,
+    options: &[&'static str],
+    open: bool,
+    on_toggle: impl Fn(&mut Workspace, bool, &mut Context<Workspace>) + Copy + 'static,
+    on_pick: impl Fn(&mut Workspace, &str, &mut Context<Workspace>) + Copy + 'static,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("dropdown-{id}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_4()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .min_w_0()
+                        .child(div().text_sm().child(label.to_owned()))
+                        .when_some(description, |this, description| {
+                            this.child(div().text_xs().opacity(0.5).child(description.to_owned()))
+                        }),
+                )
+                .child(
+                    Button::new(format!("dropdown-button-{id}"))
+                        .label(current.to_owned())
+                        .icon(IconName::ChevronDown)
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            on_toggle(workspace, !open, cx);
+                        })),
+                ),
+        )
+        .when(open, |this| {
+            this.child(
+                div()
+                    .id(format!("dropdown-list-{id}"))
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .p_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
+                    .children(options.iter().map(|option| {
+                        let option = *option;
+                        let selected = option == current;
+                        div()
+                            .id(format!("dropdown-{id}-{option}"))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .px_2()
+                            .h(px(28.))
+                            .rounded_md()
+                            .text_sm()
+                            .cursor_pointer()
+                            .hover(|this| this.bg(theme.secondary))
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                on_pick(workspace, option, cx);
+                            }))
+                            .child(option)
+                            .when(selected, |this| {
+                                this.child(
+                                    Icon::new(IconName::Check)
+                                        .xsmall()
+                                        .text_color(theme.primary),
+                                )
+                            })
+                    })),
+            )
+        })
+        .into_any_element()
+}
+
+/// The custom-endpoint page: protocol dropdown, endpoint identity, and the
+/// optional model parameter overrides.
+fn render_custom_provider_page(
     workspace: &mut Workspace,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let form = workspace.provider_form(window, cx);
+    let kind = form.read(cx).kind.clone();
+    let kind_menu_open = workspace.vm().provider_kind_menu_open;
+    let (context_input, max_output_input, base_url_input, model_input, id_input, api_key_input) = {
+        let read = form.read(cx);
+        (
+            read.context_limit.clone(),
+            read.max_output.clone(),
+            read.base_url.clone(),
+            read.model.clone(),
+            read.id.clone(),
+            read.api_key.clone(),
+        )
+    };
+    let kind_field = dropdown_field(
+        "provider-kind",
+        "Protocol",
+        Some("Wire protocol the endpoint speaks."),
+        &kind,
+        &[
+            "anthropic-messages",
+            "openai-completions",
+            "openai-responses",
+        ],
+        kind_menu_open,
+        |workspace, open, cx| workspace.on_toggle_provider_kind_menu(open, cx),
+        |workspace, kind, cx| workspace.on_select_provider_kind(kind, cx),
+        cx,
+    );
+    let header = subview_header(
+        "Add custom endpoint",
+        Some("Any endpoint speaking one of the three wire protocols."),
+        |workspace, cx| {
+            workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
+        },
+        cx,
+    );
     let theme = cx.theme();
     div()
-        .id("provider-form")
+        .id("custom-provider-page")
         .flex()
         .flex_col()
-        .gap_2()
-        .p_3()
-        .rounded_md()
-        .bg(theme.secondary)
-        .child(div().text_xs().opacity(0.7).child("Add a custom endpoint"))
+        .gap_3()
+        .child(header)
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .text_sm()
-                .child(labeled_field("id", form.read(cx).id.clone()))
-                .child(labeled_field("kind", form.read(cx).kind.clone()))
-                .child(labeled_field("base URL", form.read(cx).base_url.clone()))
-                .child(labeled_field("model", form.read(cx).model.clone()))
-                .child(labeled_field(
-                    "api key (stored in secrets.json)",
-                    form.read(cx).api_key.clone(),
-                )),
-        )
-        .child(
-            Button::new("provider-add")
-                .label("Add provider")
-                .small()
-                .outline()
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.on_add_provider(cx);
-                })),
+            settings_card(
+                "custom-provider",
+                "Endpoint",
+                Some("The provider appears in the model picker as soon as it is added."),
+                theme,
+                vec![
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_sm()
+                        .child(labeled_field("id", id_input))
+                        .child(kind_field)
+                        .child(labeled_field("base URL", base_url_input))
+                        .child(labeled_field("default model", model_input))
+                        .into_any_element(),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_sm()
+                        .child(labeled_field("context window (optional)", context_input))
+                        .child(labeled_field(
+                            "max output tokens (optional)",
+                            max_output_input,
+                        ))
+                        .into_any_element(),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_sm()
+                        .child(labeled_field(
+                            "api key (stored in secrets.json)",
+                            api_key_input,
+                        ))
+                        .into_any_element(),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(
+                            Button::new("provider-add")
+                                .icon(IconName::Check)
+                                .label("Add provider")
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_add_provider(cx);
+                                })),
+                        )
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
         )
         .into_any_element()
 }

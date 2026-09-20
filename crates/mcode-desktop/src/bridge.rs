@@ -1742,6 +1742,8 @@ fn upsert_copilot_provider(state: &CoreState, models: &[String]) -> Result<(), S
             base_url,
             models: bound,
             enabled: true,
+            context_limit: None,
+            max_output: None,
         }),
     }
     replace_app_settings(&state.home, revision, &settings)
@@ -3269,10 +3271,9 @@ mod tests {
             eprintln!("MCODE_E2E_API_KEY unset; skipping live gateway test");
             return;
         };
-        let model =
-            std::env::var("MCODE_E2E_MODEL").unwrap_or_else(|_| "glm-5.3-flash".to_owned());
-        let kind = std::env::var("MCODE_E2E_KIND")
-            .unwrap_or_else(|_| "anthropic-messages".to_owned());
+        let model = std::env::var("MCODE_E2E_MODEL").unwrap_or_else(|_| "glm-5.3-flash".to_owned());
+        let kind =
+            std::env::var("MCODE_E2E_KIND").unwrap_or_else(|_| "anthropic-messages".to_owned());
 
         let (_parent, layout) = home();
         let provider = ProviderSettings {
@@ -3281,9 +3282,11 @@ mod tests {
             base_url,
             models: vec![model.clone()],
             enabled: true,
+            context_limit: None,
+            max_output: None,
         };
-        let resolved = ResolvedProvider::resolve(&provider, &model, &api_key, "mcode-e2e")
-            .expect("resolve");
+        let resolved =
+            ResolvedProvider::resolve(&provider, &model, &api_key, "mcode-e2e").expect("resolve");
         let transport = ReqwestTransport::new().expect("transport");
         let wire = WireProvider::new(resolved, Arc::new(transport));
 
@@ -3355,10 +3358,7 @@ mod tests {
                             .expect("tool call opened");
                         tools += 1;
                     }
-                    Ok(mcode_core::events::AgentEvent::ToolCompleted {
-                        call_id,
-                        result,
-                    }) => {
+                    Ok(mcode_core::events::AgentEvent::ToolCompleted { call_id, result }) => {
                         let payload = serde_json::to_vec(&result).expect("result encodes");
                         pump_writer
                             .close_call(call_id.as_str(), &payload)
@@ -3385,9 +3385,10 @@ mod tests {
             }
         });
 
-        let mut agent = Agent::new(AgentConfig::new().with_system_prompt(
-            "You are a coding agent. Use the provided tools for file work.",
-        ));
+        let mut agent =
+            Agent::new(AgentConfig::new().with_system_prompt(
+                "You are a coding agent. Use the provided tools for file work.",
+            ));
         let cancel = CancellationToken::new();
         let env = mcode_agent::TurnEnv::new(&wire, &registry, &hooks)
             .with_cancel(cancel)
@@ -3395,7 +3396,10 @@ mod tests {
             .with_cwd(cwd.clone());
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            agent.prompt(Message::User(mcode_core::UserMessage::text(prompt_text)), &env),
+            agent.prompt(
+                Message::User(mcode_core::UserMessage::text(prompt_text)),
+                &env,
+            ),
         )
         .await
         .expect("turn completed within the timeout — a hang means a blocking call remains");

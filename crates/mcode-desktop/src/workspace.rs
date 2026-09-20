@@ -1,5 +1,6 @@
 //! The workspace window view: activity bar, sessions sidebar, chat, and a
 //! full-page settings view.
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
@@ -37,7 +38,12 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     // The custom titlebar owns dragging and window controls, so the system
     // titlebar is hidden (`appears_transparent`).
     let mut options = gpui_kit::component::TitleBar::window_options();
-    options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
+    // Open maximized: gpui's Windows platform can size a freshly created
+    // window with a stale scale after a system scale change (e.g. 125% ->
+    // 150%), clipping the right and bottom of the UI, while an OS-driven
+    // maximize sizes the window correctly at every scale. WINDOW_BOUNDS is
+    // the restore size once the user un-maximizes.
+    options.window_bounds = Some(WindowBounds::Maximized(WINDOW_BOUNDS));
     options.window_min_size = Some(size(px(960.), px(560.)));
     if let Some(titlebar) = options.titlebar.as_mut() {
         titlebar.title = Some("MCode".into());
@@ -53,6 +59,9 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
 pub struct Workspace {
     vm: WorkspaceState,
     bridge: CoreBridge,
+    /// Root focus so key events (Escape) reach the workspace node even when
+    /// no input holds focus.
+    focus_handle: gpui_kit::FocusHandle,
     composer: Entity<TextareaState>,
     ua_input: Option<Entity<InputState>>,
     ua_sync_pending: bool,
@@ -85,9 +94,12 @@ impl Workspace {
                 .placeholder("Message MCode…  (Enter to send, Shift+Enter for a new line)")
                 .auto_grow(1, 10)
         });
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
         let workspace = cx.new(|_| Self {
             vm: WorkspaceState::default(),
             bridge,
+            focus_handle,
             composer,
             ua_input: None,
             ua_sync_pending: false,
@@ -354,14 +366,17 @@ impl Workspace {
                 let revision = revision.get();
                 let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
                 state.mcp_with_keys = mcp_keys;
-                // Apply the persisted theme once at startup; later changes go
-                // through on_toggle_theme.
+                // Apply the persisted theme only when it differs from the
+                // live one: reloads (import, sign-in) must not clobber a
+                // runtime toggle that has not been saved yet.
                 let mode = if state.theme == "light" {
                     ThemeMode::Light
                 } else {
                     ThemeMode::Dark
                 };
-                Theme::change(mode, None, cx);
+                if cx.theme().mode != mode {
+                    Theme::change(mode, None, cx);
+                }
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
             }
@@ -787,6 +802,39 @@ impl Workspace {
         self.apply_action(DesktopAction::ShowSettingsSection(section), cx);
     }
 
+    /// Switches the Models settings sub-page.
+    pub(super) fn on_show_models_subview(
+        &mut self,
+        view: crate::view_model::ModelsSubview,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_action(DesktopAction::ShowModelsSubview(view), cx);
+    }
+
+    pub(super) fn on_toggle_provider_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ProviderKindMenuToggled(open), cx);
+    }
+
+    /// Picks the custom provider form's wire protocol.
+    pub(super) fn on_select_provider_kind(&mut self, kind: &str, cx: &mut Context<Self>) {
+        if let Some(form) = self.provider_form.clone() {
+            form.update(cx, |form, _| form.kind = kind.to_owned());
+        }
+        self.apply_action(DesktopAction::ProviderKindMenuToggled(false), cx);
+    }
+
+    pub(super) fn on_toggle_mcp_transport_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::McpTransportMenuToggled(open), cx);
+    }
+
+    /// Picks the custom MCP form's transport.
+    pub(super) fn on_select_mcp_transport(&mut self, transport: &str, cx: &mut Context<Self>) {
+        if let Some(form) = self.mcp_form.clone() {
+            form.update(cx, |form, _| form.transport = transport.to_owned());
+        }
+        self.apply_action(DesktopAction::McpTransportMenuToggled(false), cx);
+    }
+
     pub(super) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
         if let Some(session_id) = SessionId::parse(session_id) {
             self.dispatch(BridgeCommand::OpenSession(session_id), cx);
@@ -794,13 +842,74 @@ impl Workspace {
     }
 
     pub(super) fn on_toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next = if self.vm.dark_theme {
-            ThemeMode::Light
-        } else {
+        let next = !self.vm.dark_theme;
+        self.on_select_theme(next, window, cx);
+    }
+
+    /// Applies and persists the light/dark theme choice: the appearance
+    /// setting is marked dirty and saved immediately, mirroring the
+    /// reasoning-effort flow.
+    pub(super) fn on_select_theme(
+        &mut self,
+        dark: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.vm.dark_theme == dark {
+            return;
+        }
+        let mode = if dark {
             ThemeMode::Dark
+        } else {
+            ThemeMode::Light
         };
-        Theme::change(next, Some(window), cx);
-        self.apply_action(DesktopAction::ToggleTheme, cx);
+        Theme::change(mode, Some(window), cx);
+        self.apply_action(DesktopAction::SettingsThemeSelected(dark), cx);
+        self.on_save_settings(cx);
+    }
+
+    /// Escape dismisses the topmost floating menu first; with nothing open it
+    /// leaves the settings view.
+    pub(super) fn on_escape(&mut self, cx: &mut Context<Self>) {
+        let mut dismissed = false;
+        if self.vm.project_menu_open {
+            self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
+            dismissed = true;
+        }
+        if self.vm.model_menu_open {
+            self.apply_action(DesktopAction::ModelMenuToggled(false), cx);
+            dismissed = true;
+        }
+        if self.vm.preset_model_menu_open {
+            self.apply_action(DesktopAction::PresetModelMenuToggled(false), cx);
+            dismissed = true;
+        }
+        if self.vm.provider_kind_menu_open {
+            self.apply_action(DesktopAction::ProviderKindMenuToggled(false), cx);
+            dismissed = true;
+        }
+        if self.vm.mcp_transport_menu_open {
+            self.apply_action(DesktopAction::McpTransportMenuToggled(false), cx);
+            dismissed = true;
+        }
+        if self.vm.mention.is_some() {
+            self.apply_action(DesktopAction::MentionDismissed, cx);
+            dismissed = true;
+        }
+        if !dismissed
+            && self.vm.view == MainView::Settings
+            && self.vm.settings_section == crate::view_model::SettingsSection::Models
+            && self.vm.models_subview != crate::view_model::ModelsSubview::List
+        {
+            self.apply_action(
+                DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
+                cx,
+            );
+            dismissed = true;
+        }
+        if !dismissed && self.vm.view == MainView::Settings {
+            self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
+        }
     }
 
     pub(super) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -831,6 +940,7 @@ impl Workspace {
 
     /// Persists the requested reasoning effort through the settings doc.
     pub(super) fn on_select_reasoning(&mut self, level: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ModelMenuToggled(false), cx);
         let Some(settings) = self.vm.settings.as_mut() else {
             return;
         };
@@ -1089,6 +1199,10 @@ impl Workspace {
         &self.vm
     }
 
+    pub(super) fn focus_handle(&self) -> &gpui_kit::FocusHandle {
+        &self.focus_handle
+    }
+
     pub(super) fn composer(&self) -> &Entity<TextareaState> {
         &self.composer
     }
@@ -1141,17 +1255,31 @@ impl Workspace {
             return;
         };
         let id = form.read(cx).id.read(cx).value().trim().to_string();
-        let kind = form.read(cx).kind.read(cx).value().trim().to_string();
+        let kind = form.read(cx).kind.clone();
         let base_url = form.read(cx).base_url.read(cx).value().trim().to_string();
         let model = form.read(cx).model.read(cx).value().trim().to_string();
         let api_key = form.read(cx).api_key.read(cx).value().trim().to_string();
-        if id.is_empty() || kind.is_empty() || base_url.is_empty() || model.is_empty() {
+        let context_limit = parse_token_field(&form.read(cx).context_limit.read(cx).value());
+        let max_output = parse_token_field(&form.read(cx).max_output.read(cx).value());
+        if id.is_empty() || base_url.is_empty() || model.is_empty() {
             self.apply_action(
-                DesktopAction::Failed("fill id, kind, base URL, and model".to_owned()),
+                DesktopAction::Failed("fill id, base URL, and model".to_owned()),
                 cx,
             );
             return;
         }
+        let (context_limit, max_output) = match (context_limit, max_output) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => {
+                self.apply_action(
+                    DesktopAction::Failed(
+                        "context window and max output must be plain numbers".to_owned(),
+                    ),
+                    cx,
+                );
+                return;
+            }
+        };
         self.apply_action(
             DesktopAction::SettingsProviderAdded(mcode_config::ProviderSettings {
                 id: id.clone(),
@@ -1159,6 +1287,8 @@ impl Workspace {
                 base_url,
                 models: vec![model],
                 enabled: true,
+                context_limit,
+                max_output,
             }),
             cx,
         );
@@ -1171,6 +1301,10 @@ impl Workspace {
                 cx,
             );
         }
+        self.apply_action(
+            DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
+            cx,
+        );
     }
 
     pub(super) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1282,6 +1416,8 @@ impl Workspace {
                 base_url: preset.base_url.clone(),
                 models,
                 enabled: true,
+                context_limit: None,
+                max_output: None,
             }),
             cx,
         );
@@ -1367,15 +1503,12 @@ impl Workspace {
             return;
         };
         let id = form.read(cx).id.read(cx).value().trim().to_string();
-        let transport = form.read(cx).transport.read(cx).value().trim().to_string();
+        let transport = form.read(cx).transport.clone();
         let endpoint = form.read(cx).endpoint.read(cx).value().trim().to_string();
         let command = form.read(cx).command.read(cx).value().trim().to_string();
         let api_key = form.read(cx).api_key.read(cx).value().trim().to_string();
-        if id.is_empty() || transport.is_empty() {
-            self.apply_action(
-                DesktopAction::Failed("fill id and transport".to_owned()),
-                cx,
-            );
+        if id.is_empty() {
+            self.apply_action(DesktopAction::Failed("fill id".to_owned()), cx);
             return;
         }
         let server = match transport.as_str() {
@@ -1472,6 +1605,16 @@ fn parse_head(spelling: &str) -> HeadStamp {
             .map(HeadStamp::Event)
             .unwrap_or(HeadStamp::Empty)
     }
+}
+
+/// Parses one optional token-count field: empty keeps `None`, a plain number
+/// overrides; anything else is an error.
+fn parse_token_field(raw: &str) -> Result<Option<u64>, ()> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed.parse::<u64>().map(Some).map_err(|_| ())
 }
 
 /// Renders the whole window; split across the `ui` submodule.

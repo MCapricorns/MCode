@@ -384,6 +384,13 @@ fn render_composer(
         .unwrap_or_else(|| "Set folder".to_owned())
         .into();
     let has_project = session_project.is_some();
+    // Thinking effort rides the provider wire; without an enabled provider
+    // the control would be dead weight in the chip row.
+    let has_enabled_provider = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .is_some_and(|settings| settings.providers.iter().any(|provider| provider.enabled));
 
     div().id("composer").flex().w_full().px_4().pb_4().child(
         div()
@@ -463,38 +470,40 @@ fn render_composer(
                             .child(Icon::new(IconName::Bot).xsmall())
                             .child(model_label),
                     )
-                    .child(
-                        div()
-                            .id("composer-reasoning-chip")
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .h(px(24.))
-                            .rounded(px(12.))
-                            .text_xs()
-                            .cursor_pointer()
-                            .text_color(theme.muted_foreground)
-                            .hover(|this| this.bg(theme.secondary))
-                            .on_click(cx.listener(|workspace, _, _, cx| {
-                                let current = workspace
-                                    .vm()
-                                    .settings
-                                    .as_ref()
-                                    .and_then(|settings| settings.reasoning.clone())
-                                    .unwrap_or_else(|| "default".to_owned());
-                                let levels = ["default", "low", "medium", "high"];
-                                let index = levels
-                                    .iter()
-                                    .position(|level| *level == current)
-                                    .unwrap_or(0);
-                                let next = levels[(index + 1) % levels.len()];
-                                workspace.on_select_reasoning(next, cx);
-                            }))
-                            .child(Icon::new(IconName::Sparkles).xsmall())
-                            .child(reasoning_label),
-                    )
+                    .when(has_enabled_provider, |this| {
+                        this.child(
+                            div()
+                                .id("composer-reasoning-chip")
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .h(px(24.))
+                                .rounded(px(12.))
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(theme.muted_foreground)
+                                .hover(|this| this.bg(theme.secondary))
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    let current = workspace
+                                        .vm()
+                                        .settings
+                                        .as_ref()
+                                        .and_then(|settings| settings.reasoning.clone())
+                                        .unwrap_or_else(|| "default".to_owned());
+                                    let levels = ["default", "low", "medium", "high"];
+                                    let index = levels
+                                        .iter()
+                                        .position(|level| *level == current)
+                                        .unwrap_or(0);
+                                    let next = levels[(index + 1) % levels.len()];
+                                    workspace.on_select_reasoning(next, cx);
+                                }))
+                                .child(Icon::new(IconName::Sparkles).xsmall())
+                                .child(reasoning_label),
+                        )
+                    })
                     .child(div().flex_1())
                     .child(
                         Button::new("send")
@@ -710,6 +719,7 @@ pub(super) fn render_model_menu_layer(
         label: "PROVIDER",
         divider: false,
     }];
+    let has_providers = !providers.is_empty();
     if providers.is_empty() {
         rows.push(ModelMenuRow::Hint(
             "No enabled providers — add one in Settings \u{2192} Models",
@@ -735,22 +745,25 @@ pub(super) fn render_model_menu_layer(
             id,
         }));
     }
-    rows.push(ModelMenuRow::Header {
-        label: "THINKING",
-        divider: true,
-    });
-    rows.extend(
-        ["default", "low", "medium", "high"].map(|level| ModelMenuRow::Reasoning {
-            selected: level == selected_reasoning,
-            label: match level {
-                "low" => "Low \u{b7} brief".to_owned(),
-                "medium" => "Medium \u{b7} balanced".to_owned(),
-                "high" => "High \u{b7} deep".to_owned(),
-                other => format!("{other} \u{b7} provider default"),
-            },
-            level,
-        }),
-    );
+    // Thinking effort only matters once a provider is configured.
+    if has_providers {
+        rows.push(ModelMenuRow::Header {
+            label: "THINKING",
+            divider: true,
+        });
+        rows.extend(
+            ["default", "low", "medium", "high"].map(|level| ModelMenuRow::Reasoning {
+                selected: level == selected_reasoning,
+                label: match level {
+                    "low" => "Low \u{b7} brief".to_owned(),
+                    "medium" => "Medium \u{b7} balanced".to_owned(),
+                    "high" => "High \u{b7} deep".to_owned(),
+                    other => format!("{other} \u{b7} provider default"),
+                },
+                level,
+            }),
+        );
+    }
 
     let rows = std::rc::Rc::new(rows);
     let weak = cx.weak_entity();
@@ -932,6 +945,17 @@ pub(super) fn render_mention_layer(
         .id("mention-layer")
         .absolute()
         .inset_0()
+        .child(
+            // Transparent click-catcher: any click outside the popover
+            // dismisses the menu instead of falling through or dead-ending.
+            div()
+                .id("mention-backdrop")
+                .absolute()
+                .size_full()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.apply_action(crate::view_model::DesktopAction::MentionDismissed, cx);
+                })),
+        )
         .child(
             div()
                 .id("mention-menu")

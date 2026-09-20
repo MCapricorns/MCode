@@ -107,7 +107,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
         .when(vm.last_turn.is_some(), |this| {
             let turn = vm.last_turn.as_ref().expect("checked");
             let mut rows: Vec<(String, String)> = Vec::new();
-            let context_window = vm.catalog.as_ref().and_then(|catalog| {
+            let catalog_context = vm.catalog.as_ref().and_then(|catalog| {
                 let provider_id = vm.selected_provider.as_deref()?;
                 let provider = catalog.provider(provider_id)?;
                 provider
@@ -117,6 +117,19 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     .map(|model| model.context)
                     .filter(|context| *context > 0)
             });
+            // A provider-level override (custom endpoints) wins over the
+            // catalog value.
+            let override_context = vm
+                .settings
+                .as_ref()
+                .and_then(|settings| {
+                    settings.providers.iter().find(|provider| {
+                        Some(provider.id.as_str()) == vm.selected_provider.as_deref()
+                    })
+                })
+                .and_then(|provider| provider.context_limit)
+                .filter(|context| *context > 0);
+            let context_window = override_context.or(catalog_context);
             match context_window {
                 Some(window) => {
                     let percent = (turn.input as f64 / window as f64 * 1000.0).round() / 10.0;

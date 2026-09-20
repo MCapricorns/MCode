@@ -68,3 +68,16 @@ UI (GPUI main thread)
 - `cargo fmt --all`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked` 全绿。
 - 单元测试覆盖：reducer 全 action 分支（settings 往返、模型选择回退、更新状态机）、bridge 命令/reply 配对（noop-waker 轮询 oneshot）、目录解析/缓存/新鲜度、更新校验和与平台资产匹配。
 - 桌面窗口本身需 GPU，CI 只验证编译与单元测试；人工冒烟（开窗、选项目、目录添加 provider、流式对话、检查更新）在 Windows 本机执行。
+
+## 8. 已知问题：Windows 显示缩放变更后的窗口裁切
+
+症状：系统显示缩放从一档改为另一档（例如 125% → 150%）后启动应用，窗口物理尺寸停留在未缩放的大小（1280×840 物理），但渲染层按新 scale（1.5）绘制 1280×840 逻辑场景（1920×1260 物理），右下约 1/3 的 UI 被裁出屏幕外；composer 与侧栏 footer 不可见。键鼠命中测试与渲染使用同一 scale，仍互相对齐，已显示部分完全可交互。
+
+诊断（2026-09，gpui-kit 0.6 / gpui 0.2.2 / Windows 11 150%）：进程为 PerMonitorV2 感知（exe 清单由 gpui-pre 资源提供），`GetDpiForWindow` 返回 144；`window.scale_factor()` 为 1.5、`viewport_size()` 为 1280×840 逻辑，但窗口创建路径 `retrieve_window_placement` 的 `bounds.to_device_pixels(scale)` 未把物理窗口放大到 1920×1260。属上游 gpui Windows 平台在缩放变更后创建窗口的缺陷。
+
+已尝试并否决的应用层绕过（不要重试）：
+
+- 打开后 `window.resize(logical × scale_factor)`：该构建的 `resize` 以传入值为物理像素执行，物理窗口与布局对齐、UI 完整显示，但随后客户端区鼠标输入非确定性失效（WM_NCHITTEST 的标题栏按钮仍可用、键盘可用）。
+- 按 `GetClientRect` 实测与 `viewport × scale` 的比值压缩根布局：聊天视图可接受，但设置页 `mx_auto + max_w(rems)` 列几何被推挤溢出右缘。
+
+处置：等待 gpui-kit / gpui 升级修复后验证关闭；期间建议用户以 100%/125% 缩放运行，或在系统缩放变更后注销重登再启动应用。

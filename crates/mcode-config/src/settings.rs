@@ -108,6 +108,13 @@ pub struct ProviderSettings {
     pub models: Vec<String>,
     /// Enabled in the model picker.
     pub enabled: bool,
+    /// Context window override in tokens; absent keeps the catalog value or
+    /// the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u64>,
+    /// Max output tokens override; absent keeps the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u64>,
 }
 
 /// One configured MCP server binding.
@@ -588,6 +595,8 @@ mod tests {
             base_url: base.to_owned(),
             models: vec!["model-a".to_owned()],
             enabled: true,
+            context_limit: None,
+            max_output: None,
         }
     }
 
@@ -632,6 +641,26 @@ mod tests {
         assert!(settings.validate().is_ok(), "valid stdio accepted");
         settings.mcp_servers[0].endpoint = Some("https://x.example.com".to_owned());
         assert!(settings.validate().is_err(), "endpoint on stdio rejected");
+    }
+
+    #[test]
+    fn provider_parameter_overrides_round_trip() {
+        let (_parent, layout) = layout();
+        let mut settings = AppSettings::default();
+        settings.providers.push(ProviderSettings {
+            id: "custom-main".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://api.custom.dev/v1".to_owned(),
+            models: vec!["custom-x".to_owned()],
+            enabled: true,
+            context_limit: Some(200_000),
+            max_output: Some(8_192),
+        });
+        let revision =
+            replace_app_settings(&layout, AuthorityRevision::ABSENT, &settings).expect("save");
+        let read = read_app_settings(&layout).expect("read");
+        assert_eq!(read.providers, settings.providers);
+        assert_eq!(revision.get(), 1);
     }
 
     #[test]
