@@ -50,6 +50,20 @@ pub struct AssistantMessage {
     pub stop_reason: StopReason,
 }
 
+impl AssistantMessage {
+    /// Concatenated text of all text content blocks.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// A single unit of message content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -283,6 +297,30 @@ mod tests {
             "read",
             json!({"path": "Cargo.toml", "offset": 1}),
         )
+    }
+
+    #[test]
+    fn assistant_text_concatenates_text_blocks_only() {
+        let message = AssistantMessage {
+            blocks: vec![
+                ContentBlock::Thinking(ThinkingBlock::new("reasoning")),
+                ContentBlock::Text(TextBlock::new("one")),
+                ContentBlock::ToolCall(sample_tool_call()),
+                ContentBlock::Text(TextBlock::new("two")),
+            ],
+            usage: None,
+            stop_reason: StopReason::Stop,
+        };
+        assert_eq!(message.text(), "onetwo");
+        assert_eq!(
+            AssistantMessage {
+                blocks: Vec::new(),
+                usage: None,
+                stop_reason: StopReason::Stop,
+            }
+            .text(),
+            ""
+        );
     }
 
     #[test]

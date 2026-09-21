@@ -12,7 +12,7 @@ use crate::secure_fs::owned_file::read_owned_file;
 use crate::{CanonicalVersion, ConfigError, HomeLayout, PackId, PluginFamily};
 
 /// Canonical inventory path of an executable Pack component.
-pub const PACK_COMPONENT_BUNDLE_PATH: &str = "component.wasm";
+pub(crate) const PACK_COMPONENT_BUNDLE_PATH: &str = "component.wasm";
 
 /// Maximum byte length of one Pack component artifact.
 pub const MAX_PACK_COMPONENT_BYTES: usize = 4 * 1024 * 1024;

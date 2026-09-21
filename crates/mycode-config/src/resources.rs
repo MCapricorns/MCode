@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use crate::{ConfigError, HomeLayout};
 
 /// Maximum bytes read per resource file.
-pub const MAX_RESOURCE_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_RESOURCE_BYTES: usize = 64 * 1024;
 /// Maximum resources in one catalog.
-pub const MAX_RESOURCES: usize = 16;
+pub(crate) const MAX_RESOURCES: usize = 16;
 /// Maximum total prompt characters across all resources.
-pub const MAX_TOTAL_PROMPT_CHARS: usize = 96 * 1024;
+pub(crate) const MAX_TOTAL_PROMPT_CHARS: usize = 96 * 1024;
 
 /// One discovered resource file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,7 +177,7 @@ fn push_skill(
 ///
 /// Returns [`ConfigError`] for IO failures, oversized files, or non-UTF-8
 /// content.
-pub fn read_resource(path: &Path) -> Result<String, ConfigError> {
+pub(crate) fn read_resource(path: &Path) -> Result<String, ConfigError> {
     let bytes = std::fs::read(path).map_err(|_| ConfigError::authority_rejection())?;
     if bytes.len() > MAX_RESOURCE_BYTES {
         return Err(ConfigError::new(crate::ConfigErrorKind::Oversized));

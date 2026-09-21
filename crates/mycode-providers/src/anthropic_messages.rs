@@ -111,15 +111,7 @@ fn convert_message(message: &Message, messages: &mut Vec<Value>) {
             }
         }
         Message::ToolResult(result) => {
-            let content: String = result
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text(text) => Some(text.text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            let content = crate::wire_common::join_text(&result.content);
             messages.push(json!({
                 "role": "user",
                 "content": [{

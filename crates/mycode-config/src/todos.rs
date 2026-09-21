@@ -190,7 +190,7 @@ pub fn read_todo_document(
     session_id: &str,
 ) -> Result<TodoDocument, ConfigError> {
     let path = todo_path(session_id)?;
-    let bytes = read_owned_file(home, &path, crate::MAX_SETTINGS_BYTES)?;
+    let bytes = read_owned_file(home, &path, crate::MAX_AUTHORITY_DOCUMENT_BYTES)?;
     let Some(bytes) = bytes else {
         return Ok(TodoDocument::default());
     };
@@ -224,7 +224,7 @@ pub fn read_todo_revision(
     session_id: &str,
 ) -> Result<AuthorityRevision, ConfigError> {
     let path = todo_path(session_id)?;
-    let bytes = read_owned_file(home, &path, crate::MAX_SETTINGS_BYTES)?;
+    let bytes = read_owned_file(home, &path, crate::MAX_AUTHORITY_DOCUMENT_BYTES)?;
     let Some(bytes) = bytes else {
         return Ok(AuthorityRevision::ABSENT);
     };
@@ -261,47 +261,52 @@ pub fn replace_todo_document(
     document.validate()?;
     let path = todo_path(session_id)?;
     let mut published = None;
-    locked_update_owned_file(home, &path, crate::MAX_SETTINGS_BYTES, |current| {
-        let current_revision = match current {
-            Some(bytes) => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase", deny_unknown_fields)]
-                #[allow(dead_code)]
-                struct Header {
-                    format_version: u32,
-                    kind: String,
-                    revision: u64,
-                    #[serde(default)]
-                    tasks: Vec<serde_json::Value>,
+    locked_update_owned_file(
+        home,
+        &path,
+        crate::MAX_AUTHORITY_DOCUMENT_BYTES,
+        |current| {
+            let current_revision = match current {
+                Some(bytes) => {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                    #[allow(dead_code)]
+                    struct Header {
+                        format_version: u32,
+                        kind: String,
+                        revision: u64,
+                        #[serde(default)]
+                        tasks: Vec<serde_json::Value>,
+                    }
+                    let header: Header = serde_json::from_slice(bytes)
+                        .map_err(|_| ConfigError::authority_rejection())?;
+                    if header.format_version != TODO_FORMAT_VERSION || header.kind != TODO_KIND {
+                        return Err(ConfigError::authority_rejection());
+                    }
+                    AuthorityRevision::new(header.revision)?
                 }
-                let header: Header = serde_json::from_slice(bytes)
-                    .map_err(|_| ConfigError::authority_rejection())?;
-                if header.format_version != TODO_FORMAT_VERSION || header.kind != TODO_KIND {
-                    return Err(ConfigError::authority_rejection());
-                }
-                AuthorityRevision::new(header.revision)?
+                None => AuthorityRevision::ABSENT,
+            };
+            if current_revision != expected_revision {
+                return Err(ConfigError::new(ConfigErrorKind::RevisionConflict));
             }
-            None => AuthorityRevision::ABSENT,
-        };
-        if current_revision != expected_revision {
-            return Err(ConfigError::new(ConfigErrorKind::RevisionConflict));
-        }
-        let revision = current_revision.checked_next()?;
-        let mut wire = serde_json::Map::new();
-        wire.insert("formatVersion".into(), TODO_FORMAT_VERSION.into());
-        wire.insert("kind".into(), TODO_KIND.into());
-        wire.insert("revision".into(), revision.get().into());
-        wire.insert(
-            "tasks".into(),
-            serde_json::to_value(&document.tasks)
-                .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?,
-        );
-        let mut bytes = serde_json::to_vec_pretty(&wire)
-            .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
-        bytes.push(b'\n');
-        published = Some(revision);
-        Ok(bytes)
-    })?;
+            let revision = current_revision.checked_next()?;
+            let mut wire = serde_json::Map::new();
+            wire.insert("formatVersion".into(), TODO_FORMAT_VERSION.into());
+            wire.insert("kind".into(), TODO_KIND.into());
+            wire.insert("revision".into(), revision.get().into());
+            wire.insert(
+                "tasks".into(),
+                serde_json::to_value(&document.tasks)
+                    .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?,
+            );
+            let mut bytes = serde_json::to_vec_pretty(&wire)
+                .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
+            bytes.push(b'\n');
+            published = Some(revision);
+            Ok(bytes)
+        },
+    )?;
     published.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
 }
 

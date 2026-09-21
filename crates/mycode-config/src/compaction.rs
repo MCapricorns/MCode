@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
-use crate::{ConfigError, HomeLayout, MAX_SETTINGS_BYTES};
+use crate::{ConfigError, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES};
 
 /// Current checkpoint document version.
 pub const COMPACTION_FORMAT_VERSION: u32 = 1;
@@ -89,7 +89,7 @@ pub fn read_compaction(
     session_id: &str,
 ) -> Result<Option<CompactionCheckpoint>, ConfigError> {
     let path = compaction_path(session_id)?;
-    let Some(bytes) = read_owned_file(home, &path, MAX_SETTINGS_BYTES)? else {
+    let Some(bytes) = read_owned_file(home, &path, MAX_AUTHORITY_DOCUMENT_BYTES)? else {
         return Ok(None);
     };
     let checkpoint: CompactionCheckpoint =
@@ -117,7 +117,7 @@ pub fn write_compaction(
     let mut wire = serde_json::to_vec_pretty(checkpoint)
         .map_err(|_| ConfigError::new(crate::ConfigErrorKind::Serialization))?;
     wire.push(b'\n');
-    locked_update_owned_file(home, &path, MAX_SETTINGS_BYTES, |_| Ok(wire))
+    locked_update_owned_file(home, &path, MAX_AUTHORITY_DOCUMENT_BYTES, |_| Ok(wire))
 }
 
 #[cfg(test)]

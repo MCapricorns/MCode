@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 use crate::{ConfigError, HomeLayout};
 
 /// Maximum snapshots retained per session.
-pub const MAX_SNAPSHOTS_PER_SESSION: usize = 256;
+pub(crate) const MAX_SNAPSHOTS_PER_SESSION: usize = 256;
 /// Maximum snapshotted file size in bytes.
-pub const MAX_SNAPSHOT_FILE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_SNAPSHOT_FILE_BYTES: usize = 8 * 1024 * 1024;
 /// Exact manifest file name.
 pub const MANIFEST_NAME: &str = "manifest.jsonl";
 
@@ -96,7 +96,7 @@ pub fn checkpoint_file(
 /// # Errors
 ///
 /// Returns [`ConfigError`] for IO or manifest corruption.
-pub fn list_checkpoints(
+pub(crate) fn list_checkpoints(
     home: &HomeLayout,
     session_id: &str,
 ) -> Result<Vec<CheckpointEntry>, ConfigError> {

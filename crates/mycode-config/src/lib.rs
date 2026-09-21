@@ -42,10 +42,7 @@ mod ui_state;
 pub use authority::{
     ArtifactRef, AuthorityRevision, CanonicalVersion, Sha256Digest, SourceBindingId, TrustHighWater,
 };
-pub use checkpoints::{
-    CheckpointEntry, MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOTS_PER_SESSION, checkpoint_file,
-    list_checkpoints, rollback_session,
-};
+pub use checkpoints::{checkpoint_file, rollback_session};
 #[doc(inline)]
 pub use compaction::{
     COMPACTION_FORMAT_VERSION, COMPACTION_KIND, CompactionCheckpoint, MAX_SUMMARY_CHARS,
@@ -54,18 +51,16 @@ pub use compaction::{
 pub use error::{ConfigError, ConfigErrorKind};
 pub use home::{
     HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, PluginFamily, SCRATCH_DIR, SESSIONS_DIR,
-    is_portable_role_name, project_folder_name, session_relative,
+    project_folder_name, session_relative,
 };
 #[doc(inline)]
 pub use host_vault::{
     HOST_VAULT_FORMAT_VERSION, HOST_VAULT_KIND, HostVaultState, MAX_HOST_VAULT_BYTES,
     VaultRevision, initialize_empty_host_vault, read_host_vault_state,
 };
-pub use mcp_import::{ImportedMcpServer, normalize_api_key, parse_mcp_import};
+pub use mcp_import::{normalize_api_key, parse_mcp_import};
 #[doc(inline)]
-pub use pack_component::{
-    MAX_PACK_COMPONENT_BYTES, PACK_COMPONENT_BUNDLE_PATH, read_pack_component,
-};
+pub use pack_component::{MAX_PACK_COMPONENT_BYTES, read_pack_component};
 #[doc(inline)]
 pub use pack_installation::{
     BundlePath, InventoryEntry, MAX_PACK_INSTALLATION_BYTES, MAX_PACK_INVENTORY_ENTRIES,
@@ -74,8 +69,7 @@ pub use pack_installation::{
 };
 #[doc(inline)]
 pub use resources::{
-    MAX_RESOURCE_BYTES, MAX_RESOURCES, MAX_TOTAL_PROMPT_CHARS, ResourceFile, SkillFile,
-    discover_resources, discover_skills, read_resource, render_resource_prompt,
+    ResourceFile, SkillFile, discover_resources, discover_skills, render_resource_prompt,
     render_skill_catalog,
 };
 #[doc(inline)]
@@ -85,9 +79,8 @@ pub use root_composition::{
     RootCompositionDocument, UiSelection, read_root_composition, replace_root_composition,
 };
 pub use secrets::{
-    MAX_KEY_BYTES, MAX_SECRET_PROVIDERS, MAX_SECRETS_BYTES, ProviderSecrets,
-    SECRETS_FORMAT_VERSION, SECRETS_KIND, SECRETS_PATH, read_provider_secrets,
-    replace_provider_secrets,
+    MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_KIND, SECRETS_PATH,
+    read_provider_secrets, replace_provider_secrets,
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{
@@ -100,18 +93,17 @@ pub use secure_fs::{
 };
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
-    MAX_PROVIDERS, MAX_SETTINGS_BYTES, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES,
-    MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND,
-    SETTINGS_PATH, ShellSettings, SubagentRoleSettings, SubagentSettings, ToolsSettings,
-    UsageSettings, VALID_PROVIDER_KINDS, VALID_SHELL_KINDS, VALID_WEB_KINDS, WebBackendSettings,
-    WebSettings, builtin_mcp_servers, builtin_web_backends, default_user_agent, read_app_settings,
-    replace_app_settings, split_command_line,
+    AppSettings, AppearanceSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_MCP_ENV_VARS,
+    MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, MAX_SETTINGS_BYTES,
+    MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES, MAX_WEB_BACKENDS, McpServerSettings,
+    ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND, SETTINGS_PATH, ShellSettings,
+    SubagentRoleSettings, SubagentSettings, ToolsSettings, UsageSettings, VALID_PROVIDER_KINDS,
+    VALID_SHELL_KINDS, VALID_WEB_KINDS, WebBackendSettings, WebSettings, builtin_mcp_servers,
+    builtin_web_backends, default_user_agent, read_app_settings, replace_app_settings,
+    split_command_line,
 };
 #[doc(inline)]
 pub use staging::{
-    MAX_STAGING_DIRECTORIES, MAX_STAGING_ENTRIES, MAX_STAGING_FILE_BYTES, MAX_STAGING_FILES,
-    MAX_STAGING_JOURNAL_BYTES, MAX_STAGING_ROOT_ENTRIES, MAX_STAGING_TOTAL_BYTES,
     StagedTransaction, StagingTransaction, begin_staging, recover_abandoned_staging,
 };
 #[doc(inline)]

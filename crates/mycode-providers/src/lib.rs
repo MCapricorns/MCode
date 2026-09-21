@@ -22,6 +22,7 @@ mod openai_completions;
 mod openai_responses;
 mod sse;
 mod transport;
+mod wire_common;
 mod xml_tool_calls;
 
 use std::sync::Arc;
@@ -33,17 +34,14 @@ use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Reque
 
 pub use oauth::{
     CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
-    CodexDeviceStart, CopilotToken, DeviceCodeStart, DeviceTokenPoll, OAuthSecret,
-    OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID, XAI_VERIFICATION_URI, chatgpt_account_id,
-    copilot_bearer, exchange_codex_code, parse_oauth_secret, poll_codex_device_token,
-    poll_device_token, poll_xai_device_token, refresh_codex_token, refresh_xai_token,
-    start_codex_device_flow, start_device_flow, start_xai_device_flow,
+    CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
+    XAI_PROVIDER_ID, XAI_VERIFICATION_URI, chatgpt_account_id, copilot_bearer, exchange_codex_code,
+    parse_oauth_secret, poll_codex_device_token, poll_device_token, poll_xai_device_token,
+    refresh_codex_token, refresh_xai_token, start_codex_device_flow, start_device_flow,
+    start_xai_device_flow,
 };
-pub use sse::MAX_FRAME_BYTES;
 pub use transport::{ReqwestTransport, SseTransport, TransportCall};
 
-/// Anthropic-compatible endpoint path appended to the base URL.
-pub const ANTHROPIC_MESSAGES_PATH: &str = "/v1/messages";
 /// OpenAI-compatible completions path appended to the base URL.
 pub const OPENAI_COMPLETIONS_PATH: &str = "/chat/completions";
 /// OpenAI-compatible Responses path appended to the base URL.
@@ -229,7 +227,7 @@ mod tests {
     use mycode_core::StreamEvent;
 
     use super::*;
-    use mycode_core::{ContentBlock, StopReason, UserMessage};
+    use mycode_core::{StopReason, UserMessage};
 
     /// Transport that records calls and replays a canned SSE body.
     struct MockTransport {
@@ -377,12 +375,5 @@ mod tests {
             Ok(_) => panic!("foreign model must be rejected"),
         };
         assert_eq!(error.kind(), ProviderErrorKind::Rejected);
-    }
-
-    /// Keeps the unused-import lint honest for ContentBlock in this module.
-    #[test]
-    fn content_block_import_is_used_by_fixtures() {
-        let block = ContentBlock::Text(mycode_core::TextBlock::new("x"));
-        assert!(matches!(block, ContentBlock::Text(_)));
     }
 }

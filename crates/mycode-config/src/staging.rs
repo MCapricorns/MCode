@@ -11,19 +11,19 @@ use crate::{BundlePath, ConfigError, ConfigErrorKind, HomeLayout, TransactionId}
 use crate::secure_fs::staging_platform as platform;
 
 /// Maximum encoded staging journal size: 1 KiB.
-pub const MAX_STAGING_JOURNAL_BYTES: usize = 1024;
+pub(crate) const MAX_STAGING_JOURNAL_BYTES: usize = 1024;
 /// Maximum number of direct entries in `.staging/`.
-pub const MAX_STAGING_ROOT_ENTRIES: usize = 1024;
+pub(crate) const MAX_STAGING_ROOT_ENTRIES: usize = 1024;
 /// Maximum number of payload regular files.
-pub const MAX_STAGING_FILES: usize = 4096;
+pub(crate) const MAX_STAGING_FILES: usize = 4096;
 /// Maximum number of structural payload directories.
-pub const MAX_STAGING_DIRECTORIES: usize = 4096;
+pub(crate) const MAX_STAGING_DIRECTORIES: usize = 4096;
 /// Maximum combined number of payload files and directories.
-pub const MAX_STAGING_ENTRIES: usize = 8192;
+pub(crate) const MAX_STAGING_ENTRIES: usize = 8192;
 /// Maximum byte length of one payload file: 256 MiB.
-pub const MAX_STAGING_FILE_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_STAGING_FILE_BYTES: u64 = 256 * 1024 * 1024;
 /// Maximum logical byte length of one payload: 512 MiB.
-pub const MAX_STAGING_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_STAGING_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 
 const STAGING_JOURNAL_KIND: &str = "mycode-staging-transaction";
 
@@ -50,7 +50,8 @@ struct LedgerLimits {
     total_bytes: u64,
 }
 
-const PUBLIC_LIMITS: LedgerLimits = LedgerLimits {
+/// The published payload bounds enforced against the payload ledger.
+const LEDGER_LIMITS: LedgerLimits = LedgerLimits {
     files: MAX_STAGING_FILES,
     directories: MAX_STAGING_DIRECTORIES,
     entries: MAX_STAGING_ENTRIES,
@@ -179,7 +180,7 @@ impl StagingTransaction {
         if self.poisoned {
             return Err(validation_error());
         }
-        let plan = self.ledger.plan(path, bytes.len(), PUBLIC_LIMITS)?;
+        let plan = self.ledger.plan(path, bytes.len(), LEDGER_LIMITS)?;
         match self
             .native
             .write_file(&plan.path, &plan.new_directories, bytes, plan.size)
@@ -375,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn public_limits_are_frozen_and_wired_to_the_ledger() {
+    fn ledger_limits_are_frozen_and_wired() {
         assert_eq!(super::MAX_STAGING_JOURNAL_BYTES, 1_024);
         assert_eq!(super::MAX_STAGING_ROOT_ENTRIES, 1_024);
         assert_eq!(super::MAX_STAGING_FILES, 4_096);
@@ -383,11 +384,11 @@ mod tests {
         assert_eq!(super::MAX_STAGING_ENTRIES, 8_192);
         assert_eq!(super::MAX_STAGING_FILE_BYTES, 256 * 1_024 * 1_024);
         assert_eq!(super::MAX_STAGING_TOTAL_BYTES, 512 * 1_024 * 1_024);
-        assert_eq!(super::PUBLIC_LIMITS.files, 4_096);
-        assert_eq!(super::PUBLIC_LIMITS.directories, 4_096);
-        assert_eq!(super::PUBLIC_LIMITS.entries, 8_192);
-        assert_eq!(super::PUBLIC_LIMITS.file_bytes, 256 * 1_024 * 1_024);
-        assert_eq!(super::PUBLIC_LIMITS.total_bytes, 512 * 1_024 * 1_024);
+        assert_eq!(super::LEDGER_LIMITS.files, 4_096);
+        assert_eq!(super::LEDGER_LIMITS.directories, 4_096);
+        assert_eq!(super::LEDGER_LIMITS.entries, 8_192);
+        assert_eq!(super::LEDGER_LIMITS.file_bytes, 256 * 1_024 * 1_024);
+        assert_eq!(super::LEDGER_LIMITS.total_bytes, 512 * 1_024 * 1_024);
     }
 
     #[test]

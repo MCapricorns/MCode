@@ -7,9 +7,10 @@
 use serde_json::{Value, json};
 
 use mycode_core::{ContentBlock, Message, StopReason, ToolSpec, Usage};
-use mycode_core::{ReasoningLevel, Request, StreamEvent};
+use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
+use crate::wire_common::{apply_reasoning_effort, assemble_blocks, join_text};
 
 /// Concatenation separator for multi-part system prompts.
 const SYSTEM_JOIN: &str = "\n\n";
@@ -43,23 +44,6 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
     body
 }
 
-fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
-    match level {
-        ReasoningLevel::Off => {
-            body["reasoning_effort"] = json!("none");
-            body["thinking"] = json!({ "type": "disabled" });
-        }
-        ReasoningLevel::On => {
-            body["thinking"] = json!({ "type": "enabled" });
-        }
-        other => {
-            if let Some(token) = other.effort_token() {
-                body["reasoning_effort"] = json!(token);
-            }
-        }
-    }
-}
-
 fn convert_tool(tool: &ToolSpec) -> Value {
     json!({
         "type": "function",
@@ -77,15 +61,7 @@ fn convert_message(message: &Message, messages: &mut Vec<Value>) {
             messages.push(json!({"role": "user", "content": user_content(&user.content)}));
         }
         Message::Assistant(assistant) => {
-            let text: String = assistant
-                .blocks
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text(text) => Some(text.text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            let text = join_text(&assistant.blocks);
             let tool_calls: Vec<Value> = assistant
                 .blocks
                 .iter()
@@ -119,15 +95,7 @@ fn convert_message(message: &Message, messages: &mut Vec<Value>) {
             messages.push(wire);
         }
         Message::ToolResult(result) => {
-            let content: String = result
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text(text) => Some(text.text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            let content = join_text(&result.content);
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": result.tool_call_id,
@@ -143,15 +111,7 @@ fn user_content(content: &[ContentBlock]) -> Value {
         .iter()
         .any(|block| matches!(block, ContentBlock::Image(_)));
     if !has_image {
-        let text: String = content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text(text) => Some(text.text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        return json!(text);
+        return json!(join_text(content));
     }
     let parts: Vec<Value> = content
         .iter()
@@ -204,26 +164,17 @@ impl CompletionsReducer {
                 self.text.push_str(&text);
             }
         }
-        let mut blocks = Vec::new();
-        if !self.thinking.is_empty() {
-            blocks.push(ContentBlock::Thinking(mycode_core::ThinkingBlock::new(
-                self.thinking.clone(),
-            )));
-        }
-        if !self.text.is_empty() {
-            blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(
-                self.text.clone(),
-            )));
-        }
-        for call in &self.tool_calls {
-            let arguments =
-                serde_json::from_str::<Value>(&call.arguments).unwrap_or_else(|_| json!({}));
-            blocks.push(ContentBlock::ToolCall(mycode_core::ToolCall::new(
-                call.id.clone().unwrap_or_default(),
-                call.name.clone(),
-                arguments,
-            )));
-        }
+        let blocks = assemble_blocks(
+            &self.thinking,
+            &self.text,
+            self.tool_calls.iter().map(|call| {
+                (
+                    call.id.as_deref().unwrap_or_default(),
+                    call.name.as_str(),
+                    call.arguments.as_str(),
+                )
+            }),
+        );
         // XML-filtered calls arrive without a `tool_calls` finish reason;
         // any dispatched call set must read as tool use (length stays).
         let stop_reason =
@@ -374,7 +325,7 @@ impl CompletionsReducer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mycode_core::{TextBlock, ToolResultMessage, UserMessage};
+    use mycode_core::{ReasoningLevel, TextBlock, ToolResultMessage, UserMessage};
 
     fn frame(delta: Value) -> String {
         json!({"choices": [{"delta": delta}]}).to_string()

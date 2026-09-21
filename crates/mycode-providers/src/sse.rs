@@ -7,7 +7,7 @@
 use mycode_core::{ProviderError, ProviderErrorKind};
 
 /// Maximum accepted size of one assembled data payload.
-pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
 /// Assembles SSE data payloads from response chunks.
 #[derive(Debug, Default)]

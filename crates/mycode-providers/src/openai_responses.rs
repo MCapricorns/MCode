@@ -8,9 +8,10 @@
 use serde_json::{Value, json};
 
 use mycode_core::{AssistantMessage, ContentBlock, Message, StopReason, ToolSpec, Usage};
-use mycode_core::{ReasoningLevel, Request, StreamEvent};
+use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
+use crate::wire_common::{apply_reasoning_effort, assemble_blocks, join_text};
 
 /// Converts one provider-neutral request into a Responses body.
 #[must_use]
@@ -37,23 +38,6 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
     body
 }
 
-fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
-    match level {
-        ReasoningLevel::Off => {
-            body["reasoning_effort"] = json!("none");
-            body["thinking"] = json!({ "type": "disabled" });
-        }
-        ReasoningLevel::On => {
-            body["thinking"] = json!({ "type": "enabled" });
-        }
-        other => {
-            if let Some(token) = other.effort_token() {
-                body["reasoning_effort"] = json!(token);
-            }
-        }
-    }
-}
-
 fn convert_tool(tool: &ToolSpec) -> Value {
     json!({
         "type": "function",
@@ -66,15 +50,7 @@ fn convert_tool(tool: &ToolSpec) -> Value {
 fn convert_message(message: &Message, input: &mut Vec<Value>) {
     match message {
         Message::User(user) => {
-            let text: String = user
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text(text) => Some(text.text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            let text = join_text(&user.content);
             input.push(json!({
                 "type": "message",
                 "role": "user",
@@ -107,15 +83,7 @@ fn convert_message(message: &Message, input: &mut Vec<Value>) {
             }
         }
         Message::ToolResult(result) => {
-            let output: String = result
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text(text) => Some(text.text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            let output = join_text(&result.content);
             input.push(json!({
                 "type": "function_call_output",
                 "call_id": result.tool_call_id,
@@ -152,27 +120,18 @@ impl ResponsesReducer {
 
     fn assemble(&mut self) -> StreamEvent {
         self.terminal_sent = true;
-        let mut blocks = Vec::new();
-        if !self.thinking.is_empty() {
-            blocks.push(ContentBlock::Thinking(mycode_core::ThinkingBlock::new(
-                self.thinking.clone(),
-            )));
-        }
-        if !self.text.is_empty() {
-            blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(
-                self.text.clone(),
-            )));
-        }
+        let blocks = assemble_blocks(
+            &self.thinking,
+            &self.text,
+            self.function_calls.iter().map(|call| {
+                (
+                    call.id.as_str(),
+                    call.name.as_str(),
+                    call.arguments.as_str(),
+                )
+            }),
+        );
         let tool_use = !self.function_calls.is_empty();
-        for call in &self.function_calls {
-            let arguments =
-                serde_json::from_str::<Value>(&call.arguments).unwrap_or_else(|_| json!({}));
-            blocks.push(ContentBlock::ToolCall(mycode_core::ToolCall::new(
-                call.id.clone(),
-                call.name.clone(),
-                arguments,
-            )));
-        }
         StreamEvent::Done {
             message: AssistantMessage {
                 blocks,

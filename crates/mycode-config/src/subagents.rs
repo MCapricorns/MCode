@@ -422,7 +422,7 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
         let value = value.trim();
         match key.trim() {
             "name" => {
-                if !crate::is_portable_role_name(value) {
+                if !crate::home::is_portable_role_name(value) {
                     return Err(format!(
                         "name \"{value}\": must be 1-64 lowercase letters, digits, dash, dot, or underscore"
                     ));

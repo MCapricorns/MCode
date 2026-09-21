@@ -29,8 +29,7 @@ pub use message::{
 };
 #[doc(inline)]
 pub use provider::{
-    EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES,
-    MAX_REQUEST_ENCODED_BYTES, Provider, ProviderError, ProviderErrorKind, ReasoningLevel, Request,
-    StreamEvent,
+    EventStream, EventStreamSender, MAX_REQUEST_ENCODED_BYTES, Provider, ProviderError,
+    ProviderErrorKind, ReasoningLevel, Request, StreamEvent,
 };
 pub use tool::ToolSpec;

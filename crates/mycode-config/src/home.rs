@@ -450,7 +450,7 @@ pub(crate) fn is_valid_portable_id(value: &str) -> bool {
 /// tool argument, so they use the portable-id grammar with a shorter bound
 /// that keeps routing lines single-line.
 #[must_use]
-pub fn is_portable_role_name(value: &str) -> bool {
+pub(crate) fn is_portable_role_name(value: &str) -> bool {
     value.len() <= 64 && is_valid_portable_id(value)
 }
 
