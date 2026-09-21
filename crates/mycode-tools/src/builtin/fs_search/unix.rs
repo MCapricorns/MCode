@@ -2,6 +2,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
+#[cfg(all(test, unix))]
 use std::path::Path;
 
 use tokio_util::sync::CancellationToken;
@@ -235,7 +236,7 @@ pub(crate) fn unix_on_disk_component_name(
 /// Symbols match `libc` 0.2.189. Unknown Unix errno ABIs fail at compile
 /// time rather than treating a leftover errno as a listing failure.
 #[cfg(unix)]
-pub(super) fn unix_clear_errno() {
+pub(crate) fn unix_clear_errno() {
     // SAFETY: writing 0 into thread-local errno distinguishes `readdir`
     // EOF from a real failure after a previous fallible syscall.
     #[cfg(any(

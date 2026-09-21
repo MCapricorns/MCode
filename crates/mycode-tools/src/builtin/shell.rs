@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 #[path = "shell_detect.rs"]
 mod detect;
-pub(crate) use detect::runtime_shell;
+
 pub use detect::{DetectedShell, ShellKind, detect_default_shell, set_runtime_shell};
 
 use async_trait::async_trait;

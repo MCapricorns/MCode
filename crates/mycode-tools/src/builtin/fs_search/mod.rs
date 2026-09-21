@@ -305,8 +305,8 @@ pub(crate) use windows::*;
 // crate-public API and the extracted tests.
 #[cfg(test)]
 pub(crate) use crate::builtin::blocking::{
-    BlockWorkerHook, WorkerStart, prepare_search_async_with_io_block, run_blocking,
-    run_blocking_started,
+    BlockWorkerHook, WorkerStart, acquire_interrupt_signal, prepare_search_async_with_io_block,
+    run_blocking, run_blocking_started, wait_for_worker_readable,
 };
 pub use crate::builtin::blocking::{
     live_search_thread_handles, live_search_workers, prepare_search_async,

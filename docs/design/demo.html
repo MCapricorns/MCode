@@ -75,7 +75,7 @@ body{
 :focus-visible{outline:1px solid var(--amber);outline-offset:2px}
 
 /* ============ CHROME ============ */
-.app{display:grid;grid-template-rows:38px 26px 1fr 44px;height:100vh}
+.app{display:grid;grid-template-rows:38px 26px 1fr auto;height:100vh}
 
 /* ---- top bar ---- */
 .topbar{
@@ -249,6 +249,107 @@ body{
 .msg-agent{font-size:13px;line-height:1.7;color:var(--ink)}
 .msg-agent code{font-family:var(--mono);font-size:11.5px;background:var(--panel-2);border:1px solid var(--line-soft);border-radius:2px;padding:1px 5px;color:var(--amber)}
 
+/* ---- 对话细化 · session 2 ---- */
+/* 块 hover 动作 */
+.bacts{position:absolute;top:0;right:0;display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.block:hover .bacts{opacity:1}
+.bact{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;color:var(--ink-faint);border:1px solid var(--line);border-radius:2px;padding:2px 6px;background:var(--panel);cursor:pointer;user-select:none}
+.bact:hover{color:var(--amber);border-color:var(--amber-dim)}
+
+/* @ 文件引用 chips */
+.refs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ref{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--cyan);border:1px solid rgba(90,200,250,.35);border-radius:2px;padding:2px 7px;cursor:pointer;background:rgba(90,200,250,.04)}
+.ref:hover{background:rgba(90,200,250,.1)}
+.ref .ln{color:var(--ink-faint)}
+.ref .rm{color:var(--ink-faint);margin-left:2px}
+.ref .rm:hover{color:var(--red)}
+
+/* 引用回复 */
+.quote{display:block;margin-top:8px;padding:6px 0 6px 10px;border-left:1px solid var(--line);font-size:12px;line-height:1.6;color:var(--ink-dim);cursor:pointer}
+.quote:hover{border-left-color:var(--cyan)}
+.quote .qsrc{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--ink-faint);margin-bottom:3px}
+.quote .qsrc b{color:var(--cyan);font-weight:500}
+
+/* PLAN · todo_write 清单 */
+.prow{display:flex;align-items:center;gap:9px;padding:6px 12px;font-size:12px;color:var(--ink);border-top:1px dashed var(--line-soft)}
+.prow:first-child{border-top:none}
+.prow .pmark{font-family:var(--mono);font-size:10px;width:12px;text-align:center;flex-shrink:0}
+.prow .pmeta{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--ink-faint);letter-spacing:.1em}
+.prow.done{color:var(--ink-faint)}
+.prow.done .pmark{color:var(--green)}
+.prow.done .ptxt{text-decoration:line-through;text-decoration-color:var(--line)}
+.prow.now .pmark{color:var(--amber);animation:blink 1.1s steps(2,start) infinite}
+.prow.todo{color:var(--ink-dim)}
+.prow.todo .pmark{color:var(--line)}
+
+/* agent 回复内代码块 */
+.codeblock{margin-top:9px;border:1px solid var(--line);border-radius:3px;background:var(--screen);overflow:hidden}
+.codeblock .cb-h{display:flex;align-items:center;gap:9px;padding:5px 10px;background:var(--panel);border-bottom:1px solid var(--line-soft);font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--ink-faint)}
+.codeblock .cb-h .path{color:var(--ink-dim)}
+.codeblock .cb-h .copy{margin-left:auto;cursor:pointer;color:var(--ink-faint)}
+.codeblock .cb-h .copy:hover{color:var(--amber)}
+.codeblock pre{padding:10px 12px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--screen-ink);overflow-x:auto}
+
+/* ask_user 交互卡 */
+.ask{padding:10px 12px}
+.ask .aq{font-size:12.5px;line-height:1.65;color:var(--ink);margin-bottom:9px}
+.ask .opts{display:flex;flex-direction:column;gap:5px}
+.opt{display:flex;gap:8px;align-items:baseline;font-size:11.5px;color:var(--ink-dim);border:1px solid var(--line);border-radius:2px;padding:6px 10px;cursor:pointer;background:var(--panel-2)}
+.opt .k{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+.opt:hover{border-color:var(--amber-dim)}
+.opt.picked{border-color:var(--amber);color:var(--ink);background:rgba(255,178,36,.06)}
+.opt.picked .k{color:var(--amber)}
+.ask .aft{margin-top:8px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--ink-faint)}
+.ask .aft b{color:var(--amber);font-weight:500}
+
+/* task · subagent 运行中 */
+.role{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;border:1px solid rgba(157,140,255,.5);color:var(--violet);border-radius:2px;padding:1px 5px;flex-shrink:0}
+.sab-b{padding:9px 12px;border-top:1px solid var(--line-soft)}
+.pbar{height:4px;background:var(--line);border-radius:2px;position:relative;overflow:hidden}
+.pbar i{position:absolute;top:0;bottom:0;width:34%;border-radius:2px;background:var(--amber);animation:pbg 1.5s ease-in-out infinite alternate}
+@keyframes pbg{from{left:0}to{left:66%}}
+.sab-line{margin-top:7px;font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--ink-dim)}
+.sab-line .step{color:var(--ink-faint)}
+
+/* grep 命中列表 */
+.matches{padding:4px 0}
+.mrow{display:flex;gap:9px;padding:2px 12px;font-family:var(--mono);font-size:10.5px;line-height:1.7;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow:hover{background:var(--panel-2)}
+.mrow .f{color:var(--cyan);flex-shrink:0}
+.mrow .l{color:var(--ink-faint);width:30px;text-align:right;flex-shrink:0}
+.mrow .s{color:var(--ink-dim)}
+.mrow .hl{color:var(--amber);background:rgba(255,178,36,.13)}
+
+/* 上下文压缩 · details 展开 */
+.cdetails summary{list-style:none;cursor:pointer}
+.cdetails summary::-webkit-details-marker{display:none}
+.cdetails[open] .cbox{border-radius:3px 3px 0 0}
+.cdetails .sum{border:1px dashed var(--line);border-top:none;border-radius:0 0 3px 3px;padding:8px 12px 10px;margin:0;font-size:11.5px;line-height:1.7;color:var(--ink-dim)}
+
+/* 回合计量条 */
+.turnfoot{display:flex;align-items:baseline;gap:10px;margin:-6px 0 20px;padding:0 2px 10px 64px;font-family:var(--mono);font-size:9px;letter-spacing:.08em;color:var(--ink-faint);border-bottom:1px solid var(--line-soft)}
+.turnfoot .tf-model{color:var(--violet)}
+.turnfoot b{color:var(--ink-dim);font-weight:500}
+.turnfoot .tf-act{margin-left:auto;display:flex;gap:10px}
+.turnfoot .tf-act span{cursor:pointer;color:var(--ink-faint)}
+.turnfoot .tf-act span:hover{color:var(--amber)}
+
+/* 上下文压缩事件 */
+.cbox{display:flex;align-items:center;gap:10px;border:1px dashed var(--line);border-radius:3px;padding:8px 12px;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;color:var(--ink-faint)}
+.cbox b{color:var(--ink-dim);font-weight:500}
+.cbox .c-act{margin-left:auto;cursor:pointer;color:var(--amber);letter-spacing:.12em}
+
+/* streaming 计量行 */
+.meter{display:flex;gap:12px;margin-top:7px;font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--ink-faint)}
+.meter b{color:var(--amber);font-weight:500}
+.meter .live{color:var(--green)}
+
+/* 回到底部悬浮 */
+.jump{position:sticky;bottom:12px;display:flex;justify-content:center;pointer-events:none;z-index:5}
+.jump span{pointer-events:auto;cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 13px;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;color:var(--amber);box-shadow:0 4px 14px rgba(0,0,0,.32);opacity:0;transform:translateY(5px);transition:.2s}
+.jump.show span{opacity:1;transform:none}
+.jump span:hover{border-color:var(--amber-dim)}
+
 /* ---- right inspector ---- */
 .insp{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column}
 .insp-sec{padding:12px;border-bottom:1px solid var(--line-soft)}
@@ -279,6 +380,15 @@ body{
 }
 .cmdbar input::placeholder{color:var(--ink-faint)}
 .cmdbar .hints{display:flex;gap:14px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+.cmdbar{flex-direction:column;align-items:stretch;justify-content:center;gap:6px;padding-top:6px;padding-bottom:8px}
+.cmd-atts{display:flex;align-items:center;gap:6px}
+.cmd-att{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9.5px;color:var(--amber);border:1px solid var(--amber-dim);border-radius:2px;padding:1px 6px;background:rgba(255,178,36,.05)}
+.cmd-att .rm{color:var(--ink-faint);cursor:pointer}
+.cmd-att .rm:hover{color:var(--red)}
+.cmd-hint{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--ink-faint);letter-spacing:.08em}
+.cmd-hint b{color:var(--amber);font-weight:500}
+.cmdrow{display:flex;align-items:center;gap:12px}
+.hints .model{color:var(--violet);letter-spacing:.1em}
 
 /* scrollbars */
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -316,7 +426,7 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
     <div class="spacer"></div>
     <div class="topstat">TOKENS <b>142,318</b></div>
     <div class="topstat">COST <b>$3.87</b></div>
-    <div class="clock">14:32:07</div>
+    <div class="clock">14:34:24</div>
     <div class="theme-toggle" id="themeToggle" title="切换昼夜"><span data-t="light">DAY</span><span data-t="night" class="on">NIGHT</span></div>
     <span class="kbd">⌘K</span>
   </header>
@@ -372,28 +482,49 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
     <!-- CENTER TIMELINE -->
     <section class="center">
       <div class="stream">
-        <div class="dayrule">WEB-APP · FIX: AUTH TOKEN 刷新竞态 · 2025-09-20</div>
+        <div class="dayrule">WEB-APP · FIX: AUTH TOKEN 刷新竞态 · 2025-09-20 · TURN 1</div>
 
-        <!-- user -->
+        <!-- user · 含 @ 文件引用 -->
         <div class="block">
           <span class="stamp">14:28:41</span><span class="anchor">#b1</span>
+          <div class="bacts"><span class="bact">COPY</span><span class="bact">QUOTE</span><span class="bact">⎇ FORK</span></div>
           <div class="tag user">YOU</div>
           <div class="msg-user"><span class="arrow">▸</span> 用户反馈 token 过期后偶发白屏。查一下 auth 刷新逻辑里的竞态条件，修好并补上测试。</div>
+          <div class="refs">
+            <span class="ref">@ src/auth.ts<span class="ln">:47-64</span><span class="rm">×</span></span>
+            <span class="ref">@ src/auth.spec.ts<span class="rm">×</span></span>
+          </div>
         </div>
 
         <!-- thinking done -->
         <div class="block">
           <span class="stamp">14:28:43</span><span class="anchor">#b2</span>
-          <div class="tag think">THINKING · 8.2s</div>
+          <div class="bacts"><span class="bact">COPY</span><span class="bact">QUOTE</span></div>
+          <div class="tag think">THINKING · 8.2s · 1,204 tok</div>
           <details class="think">
             <summary>推理过程 · 已折叠</summary>
             <p style="margin-top:8px">问题大概率在 <b>refreshToken()</b>：多个并发请求同时发现 401 时会各自触发刷新，后到的刷新覆盖了先到的 token。应该先读 <code style="font-family:var(--mono)">src/auth.ts</code> 确认是否没有单例 promise 缓存……</p>
           </details>
         </div>
 
+        <!-- plan · todo_write -->
+        <div class="block">
+          <span class="stamp">14:28:49</span><span class="anchor">#b3</span>
+          <div class="tag tool">TOOL</div>
+          <div class="tool open">
+            <div class="tool-h"><span class="fold">▸</span><span class="lamp green"></span><span class="tname">todo_write</span><span class="targ">todos.json · 4 项</span><span class="tdur">0.1s</span></div>
+            <div class="tool-b">
+              <div class="prow done"><span class="pmark">✓</span><span class="ptxt">读 src/auth.ts，确认并发刷新未共享 promise</span></div>
+              <div class="prow done"><span class="pmark">✓</span><span class="ptxt">用单例 promise 重构 refreshToken()</span></div>
+              <div class="prow done"><span class="pmark">✓</span><span class="ptxt">修正并发用例断言，补失败重置用例</span></div>
+              <div class="prow now"><span class="pmark">▸</span><span class="ptxt">跑全量测试并等待构建清理批准</span><span class="pmeta">NOW</span></div>
+            </div>
+          </div>
+        </div>
+
         <!-- tool: read ok -->
         <div class="block">
-          <span class="stamp">14:28:52</span><span class="anchor">#b3</span>
+          <span class="stamp">14:28:52</span><span class="anchor">#b4</span>
           <div class="tag tool">TOOL</div>
           <div class="tool">
             <div class="tool-h"><span class="fold">▸</span><span class="lamp green"></span><span class="tname">read_file</span><span class="targ">src/auth.ts</span><span class="tdur">0.4s · 214 lines</span></div>
@@ -402,7 +533,8 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
 
         <!-- tool: edit with diff, open -->
         <div class="block">
-          <span class="stamp">14:29:10</span><span class="anchor">#b4</span>
+          <span class="stamp">14:29:10</span><span class="anchor">#b5</span>
+          <div class="bacts"><span class="bact">COPY</span><span class="bact">QUOTE</span><span class="bact">REVERT</span></div>
           <div class="tag tool">TOOL</div>
           <div class="tool open">
             <div class="tool-h"><span class="fold">▸</span><span class="lamp green"></span><span class="tname">edit_file</span><span class="targ">src/auth.ts</span><span class="tdur">1.2s · +12 −4</span></div>
@@ -432,7 +564,7 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
 
         <!-- tool: bash error -->
         <div class="block">
-          <span class="stamp">14:29:31</span><span class="anchor">#b5</span>
+          <span class="stamp">14:29:31</span><span class="anchor">#b6</span>
           <div class="tag tool">TOOL</div>
           <div class="tool error open">
             <div class="tool-h"><span class="fold">▸</span><span class="lamp" style="background:var(--red);box-shadow:0 0 6px rgba(240,90,90,.8)"></span><span class="tname">bash</span><span class="targ">pnpm test auth.spec.ts</span><span class="tdur">3.3s · exit 1</span></div>
@@ -449,14 +581,14 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
 
         <!-- thinking streaming -->
         <div class="block">
-          <span class="stamp">14:29:35</span><span class="anchor">#b6</span>
+          <span class="stamp">14:29:35</span><span class="anchor">#b7</span>
           <div class="tag think">THINKING · STREAMING</div>
           <div class="think streaming">测试断言反了——共享 promise 时 refresh 应该只调用 1 次，断言写成了 2。修正断言，再补一个"失败后会重置 refreshing"的用例<span class="caret"></span></div>
         </div>
 
         <!-- approval -->
         <div class="block">
-          <span class="stamp">14:30:02</span><span class="anchor">#b7</span>
+          <span class="stamp">14:30:02</span><span class="anchor">#b8</span>
           <div class="tag tool">APPROVAL REQUIRED</div>
           <div class="tool armed">
             <div class="tool-h" style="cursor:default"><span class="lamp amber"></span><span class="tname">bash</span><span class="targ">awaiting approval</span><span class="tdur">ARMED · 00:47</span></div>
@@ -472,9 +604,15 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
           </div>
         </div>
 
+        <!-- 回合计量 -->
+        <div class="turnfoot">
+          <span>TURN 1</span><span class="tf-model">KIMI-K3</span><span>用时 <b>1m27s</b></span><span><b>▲8,214</b> / <b>▼1,872</b> tok</span><span><b>$0.214</b></span><span>变更 <b>+12 −4</b> · 1 文件</span>
+          <span class="tf-act"><span>↻ 重跑本回合</span><span>⎇ 从此处分支</span></span>
+        </div>
+
         <!-- error + interrupt -->
         <div class="block">
-          <span class="stamp">14:30:48</span><span class="anchor">#b8</span>
+          <span class="stamp">14:30:48</span><span class="anchor">#b9</span>
           <div class="errorband">
             <b>✗ INTERRUPTED · 网络超时</b>
             上一次请求在 12.4s 后超时，agent 已暂停。未提交的改动不会丢失。
@@ -482,20 +620,118 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
           </div>
         </div>
 
-        <!-- agent reply -->
+        <!-- agent reply · 含代码块 -->
         <div class="block">
-          <span class="stamp">14:31:02</span><span class="anchor">#b9</span>
-          <div class="tag" style="color:var(--green);border-color:rgba(63,185,107,.35)">AGENT</div>
+          <span class="stamp">14:31:02</span><span class="anchor">#b10</span>
+          <div class="bacts"><span class="bact">COPY</span><span class="bact">QUOTE</span></div>
+          <div class="tag" style="color:var(--green);border-color:rgba(63,185,107,.35)">AGENT · 2.1s · 486 tok</div>
           <div class="msg-agent">
-            修好了。竞态根因是并发刷新没有共享 promise，现在用单例模式串行化；测试断言一并修正，新增了一个失败重置用例。<code>pnpm test</code> 全绿（2/2）。剩余的 <code>rm -rf dist</code> 需要你批准——不批准也不影响修复本身。
+            修好了。竞态根因是并发刷新没有共享 promise，现在用单例模式串行化；测试断言一并修正，新增了一个失败重置用例。<code>pnpm test</code> 全绿（3/3）。关键改动如下：
+          </div>
+          <div class="codeblock">
+            <div class="cb-h"><span class="path">src/auth.ts</span><span>TYPESCRIPT</span><span class="copy">⧉ COPY</span></div>
+            <pre>let refreshing: Promise&lt;string&gt; | null = null
+
+export async function refreshToken() {
+  if (refreshing) return refreshing   // 并发共享同一次刷新
+  refreshing = (async () =&gt; { /* … */ })()
+  return refreshing
+}</pre>
+          </div>
+          <div class="msg-agent" style="margin-top:8px">
+            剩余的 <code>rm -rf dist</code> 需要你批准——不批准也不影响修复本身。
           </div>
         </div>
+
+        <!-- 上下文压缩事件 -->
+        <div class="block">
+          <span class="stamp">14:33:12</span><span class="anchor">#b11</span>
+          <details class="cdetails">
+            <summary class="cbox"><span class="lamp dim"></span><span><b>CONTEXT COMPACTED</b> · 58,432 → 19,860 tok · 尾部保留 20k · 摘要写入 <b>compaction.json</b></span><span class="c-act">COMPACTION SUMMARY ▸</span></summary>
+            <p class="sum">……前 3 个回合围绕 auth token 刷新竞态：定位根因（并发刷新未共享 promise）→ 单例重构 → 修正断言 + 新增重置用例，测试 3/3 通过。待办：dist 清理重建待批准。</p>
+          </details>
+        </div>
+
+        <div class="dayrule">TURN 2 · 并发下的失败传播 · 14:33</div>
+
+        <!-- user · 引用回复 -->
+        <div class="block">
+          <span class="stamp">14:33:20</span><span class="anchor">#b12</span>
+          <div class="bacts"><span class="bact">COPY</span><span class="bact">QUOTE</span></div>
+          <div class="tag user">YOU</div>
+          <span class="quote"><span class="qsrc">REPLY TO <b>#b10</b> · AGENT</span>“测试断言一并修正，并新增了一个失败重置用例……”</span>
+          <div class="msg-user" style="margin-top:7px"><span class="arrow">▸</span> 如果刷新本身失败了（比如 5xx），所有排队的并发请求会拿到什么？先 grep 一下 <code style="font-family:var(--mono);font-size:12px">refreshToken</code> 的调用方，确认失败处理策略一致。</div>
+        </div>
+
+        <!-- tool: grep 命中 -->
+        <div class="block">
+          <span class="stamp">14:33:29</span><span class="anchor">#b13</span>
+          <div class="tag tool">TOOL</div>
+          <div class="tool open">
+            <div class="tool-h"><span class="fold">▸</span><span class="lamp green"></span><span class="tname">grep</span><span class="targ">refreshToken( · src/</span><span class="tdur">0.2s · 4 命中</span></div>
+            <div class="tool-b">
+              <div class="matches">
+                <div class="mrow"><span class="f">src/auth.ts</span><span class="l">47</span><span class="s">export async function <span class="hl">refreshToken(</span>) {</span></div>
+                <div class="mrow"><span class="f">src/http.ts</span><span class="l">82</span><span class="s">const token = await <span class="hl">refreshToken(</span>)</span></div>
+                <div class="mrow"><span class="f">src/http.ts</span><span class="l">139</span><span class="s">await <span class="hl">refreshToken(</span>)  <span style="color:var(--ink-faint)">// 401 重试路径</span></span></div>
+                <div class="mrow"><span class="f">src/store/user.ts</span><span class="l">12</span><span class="s"><span class="hl">refreshToken(</span>).catch(clearSession)</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ask_user 交互 -->
+        <div class="block">
+          <span class="stamp">14:33:36</span><span class="anchor">#b14</span>
+          <div class="tag tool">TOOL</div>
+          <div class="tool open">
+            <div class="tool-h"><span class="fold">▸</span><span class="lamp green"></span><span class="tname">ask_user</span><span class="targ">失败传播策略</span><span class="tdur">0:36 · 已答复</span></div>
+            <div class="tool-b">
+              <div class="ask">
+                <div class="aq">并发请求共享同一次刷新——如果这次刷新失败，等待者应该？</div>
+                <div class="opts">
+                  <div class="opt"><span class="k">A</span>各自收到同一个错误（快速失败）</div>
+                  <div class="opt picked"><span class="k">B ✓</span>各自自动重试一次，再失败才报错</div>
+                </div>
+                <div class="aft">你选择了 <b>B · REJECT-THEN-RETRY</b> · 14:34:12</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- task · subagent 运行中 -->
+        <div class="block">
+          <span class="stamp">14:34:15</span><span class="anchor">#b15</span>
+          <div class="tag tool">TOOL</div>
+          <div class="tool open">
+            <div class="tool-h"><span class="fold">▸</span><span class="lamp amber"></span><span class="role">SCOUT</span><span class="tname">task</span><span class="targ">审计 4 处调用方的失败处理是否一致</span><span class="tdur"><span id="ssec">0:18</span> · RUNNING</span></div>
+            <div class="tool-b">
+              <div class="sab-b">
+                <div class="pbar"><i></i></div>
+                <div class="sab-line">▸ 已扫描 <span class="step">src/auth.ts src/http.ts src/store/user.ts</span> · 正在比对 401 重试路径的错误抛法<span class="caret"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- agent 流式输出中 -->
+        <div class="block">
+          <span class="stamp">14:34:21</span><span class="anchor">#b16</span>
+          <div class="tag" style="color:var(--green);border-color:rgba(63,185,107,.35)">AGENT · STREAMING</div>
+          <div class="msg-agent">
+            确认 4 处调用方。按你选的策略 B（失败自动重试一次）：<code>src/http.ts:139</code> 的 401 拦截会把 <code>refreshToken()</code> 的 reject 交给重试中间件；<code>src/store/user.ts:12</code> 的 catch 会在重试仍失败时清理 session 并跳登录。scout 子代理还在比对最后一条路径，稍后补最终结论<span class="caret"></span>
+          </div>
+          <div class="meter"><span class="live">● LIVE</span><span>KIMI-K3</span><span><b id="mtok">312</b> tok</span><span id="msec">0:07</span></div>
+        </div>
       </div>
+
+      <!-- 回到底部 -->
+      <div class="jump"><span>↓ 新活动 · 回到最新</span></div>
     </section>
 
     <!-- RIGHT INSPECTOR -->
     <aside class="insp">
-      <div class="pane-head">INSPECTOR <span>#b4</span></div>
+      <div class="pane-head">INSPECTOR <span>#b5</span></div>
       <div class="insp-sec">
         <div class="insp-title">edit_file</div>
         <div class="insp-sub">src/auth.ts</div>
@@ -529,9 +765,16 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
 
   <!-- COMMAND BAR -->
   <footer class="cmdbar">
-    <span class="prompt">▸</span>
-    <input type="text" placeholder="给 web-app 的 agent 发消息，或输入 / 命令…" spellcheck="false">
-    <div class="hints"><span>⏎ send</span><span>⇧⏎ newline</span><span>/stop 中断</span><span>@ 引用文件</span></div>
+    <div class="cmd-atts">
+      <span class="cmd-att">@ src/auth.ts :47-64<span class="rm">×</span></span>
+      <span class="cmd-att">📎 screenshot.png<span class="rm">×</span></span>
+      <span class="cmd-hint">RUNNING <b>2</b> · ESC 中断 · 队列 <b>3</b></span>
+    </div>
+    <div class="cmdrow">
+      <span class="prompt">▸</span>
+      <input type="text" placeholder="给 web-app 的 agent 发消息，或输入 / 命令…" spellcheck="false">
+      <div class="hints"><span class="model">K-3 · AUTO</span><span>⏎ send</span><span>⇧⏎ newline</span><span>/stop 中断</span><span>@ 引用文件</span></div>
+    </div>
   </footer>
 </div>
 
@@ -556,6 +799,44 @@ document.getElementById('themeToggle').addEventListener('click',()=>{
 // ticker: duplicate for seamless loop
 const tape=document.getElementById('tape');
 tape.innerHTML+=tape.innerHTML;
+
+// live counters: subagent elapsed / streaming tokens
+(function(){
+  const ssec=document.getElementById('ssec'),msec=document.getElementById('msec'),mtok=document.getElementById('mtok');
+  if(!ssec)return;
+  let s=18,m=7,t=312;
+  const f=x=>Math.floor(x/60)+':'+String(x%60).padStart(2,'0');
+  setInterval(()=>{s++;m++;t+=37+((s*13)%9);
+    ssec.textContent=f(s);
+    if(msec)msec.textContent=f(m);
+    if(mtok)mtok.textContent=t.toLocaleString();
+  },1000);
+})();
+
+// jump-to-latest pill
+(function(){
+  const c=document.querySelector('.center'),j=document.querySelector('.jump');
+  if(!c||!j)return;
+  const near=()=>c.scrollHeight-c.scrollTop-c.clientHeight<90;
+  c.addEventListener('scroll',()=>j.classList.toggle('show',!near()));
+  j.addEventListener('click',()=>c.scrollTo({top:c.scrollHeight,behavior:'smooth'}));
+})();
+
+// block COPY action
+document.querySelectorAll('.bact').forEach(b=>{
+  b.addEventListener('click',e=>{
+    e.stopPropagation();
+    if(b.textContent==='COPY'){
+      const blk=b.closest('.block');
+      if(blk&&navigator.clipboard)navigator.clipboard.writeText(blk.innerText.trim());
+    }
+  });
+});
+
+// cmdbar attachment remove
+document.querySelectorAll('.cmd-att .rm').forEach(x=>{
+  x.addEventListener('click',()=>x.closest('.cmd-att').remove());
+});
 </script>
 </body>
 </html>

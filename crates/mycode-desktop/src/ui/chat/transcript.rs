@@ -1,6 +1,7 @@
 //! The transcript timeline: streaming bubble, committed entries, tool
 //! blocks, and user rows with their edit/recall hover actions.
 use gpui_kit::assets::IconName;
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -54,7 +55,11 @@ pub(super) fn render_streaming_entry(
                     desk.green.opacity(0.35),
                     theme,
                 ))
-                .child(agent_text(streaming.text.clone(), theme))
+                .child(agent_text(
+                    "streaming-agent-md".into(),
+                    streaming.text.clone().into(),
+                    theme,
+                ))
             })
             .when(
                 streaming.thinking.is_empty() && streaming.text.is_empty(),
@@ -96,7 +101,11 @@ pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit
                     desk.green.opacity(0.35),
                     theme,
                 ))
-                .child(agent_text(SharedString::from(&entry.text), theme))
+                .child(agent_text(
+                    format!("agent-md-{}", entry.event_id).into(),
+                    SharedString::from(&entry.text),
+                    theme,
+                ))
         })
         .into_any_element(),
         EntryKind::ToolResult => {
@@ -155,12 +164,13 @@ fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl I
         .w_full()
         .child(
             div()
-                .w(px(52.))
+                .w(px(64.))
                 .flex_shrink_0()
                 .pt(px(3.))
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .text_color(Desk::of(theme).faint)
+                .whitespace_nowrap()
                 .child(stamp),
         )
         .child(content)
@@ -202,16 +212,19 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
         )
 }
 
-fn agent_text(text: impl Into<SharedString>, theme: &Theme) -> impl IntoElement {
+/// Assistant reply bubble: Markdown-rendered via gpui's TextView, which
+/// picks up code/link/inline-code styling from the active theme
+/// (`install_text_view_defaults` runs on every `Theme::change`). The id must
+/// be unique per entry — `ElementId::CodeLocation` would collide across
+/// blocks since all bubbles render from the same call site.
+fn agent_text(id: SharedString, text: SharedString, theme: &Theme) -> impl IntoElement {
     div()
         .w_full()
         .rounded(px(3.))
         .px_3()
         .py_2()
         .bg(theme.secondary)
-        .text_sm()
-        .whitespace_normal()
-        .child(text.into())
+        .child(TextView::markdown(id, text).selectable(true))
 }
 
 /// Stable short stamp for the gutter: the entry id is a ledger identity, not
@@ -444,20 +457,7 @@ pub(super) fn render_user_entry(
     }
     div()
         .id(format!("entry-{}", entry.event_id))
-        .flex()
-        .flex_row()
-        .gap_3()
-        .w_full()
         .group("user-entry")
-        .child(
-            div()
-                .w(px(52.))
-                .flex_shrink_0()
-                .pt(px(3.))
-                .text_xs()
-                .text_color(desk.faint)
-                .child(short_stamp(&entry.event_id)),
-        )
-        .child(column)
+        .child(desk_shell(short_stamp(&entry.event_id), theme, column))
         .into_any_element()
 }

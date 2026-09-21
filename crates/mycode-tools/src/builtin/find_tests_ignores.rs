@@ -1,8 +1,9 @@
 //! Ignore-boundary, hidden-target, and enumeration tests split from `find_tests`.
+#[cfg(unix)]
+use super::tests::chmod;
 use super::*;
 use crate::builtin::test_support::{ctx_at, run_dyn, text_of, unwrap_tool};
 use serde_json::json;
-use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 /// Permission errors probing `.git` must fail closed, not skip gitignore.

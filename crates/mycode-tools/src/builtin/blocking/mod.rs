@@ -23,9 +23,9 @@ use crate::tool::ToolError;
 #[cfg(unix)]
 mod signal;
 #[cfg(unix)]
-use signal::{
-    acquire_interrupt_signal, current_sigurg_handler, our_sigurg_handler, unblock_interrupt_signal,
-};
+pub(crate) use signal::acquire_interrupt_signal;
+#[cfg(unix)]
+use signal::{current_sigurg_handler, our_sigurg_handler, unblock_interrupt_signal};
 
 /// Pause between cancel interrupts while a worker is still joining.
 ///
@@ -458,7 +458,7 @@ impl WorkerWake {
 ///
 /// Outside a supervised Unix worker there is no wake descriptor, so the
 /// caller proceeds directly. Windows uses `CancelSynchronousIo` instead.
-pub(super) fn wait_for_worker_readable(file: &File) -> io::Result<()> {
+pub(crate) fn wait_for_worker_readable(file: &File) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;

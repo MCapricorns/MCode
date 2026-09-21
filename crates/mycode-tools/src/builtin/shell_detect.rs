@@ -343,6 +343,9 @@ mod tests {
             ShellKind::from_program(Path::new("pwsh.exe")),
             ShellKind::Pwsh
         );
+        // A Windows-spelled path is a single component on Unix, so its stem is
+        // only meaningful where `\` separates.
+        #[cfg(windows)]
         assert_eq!(
             ShellKind::from_program(Path::new(
                 r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"

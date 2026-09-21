@@ -836,7 +836,7 @@ async fn windows_eight_dot_three_alias_find_honors_on_disk_anchored_ignore() {
 }
 
 #[cfg(unix)]
-struct RestoreUnixMode {
+pub(crate) struct RestoreUnixMode {
     path: std::path::PathBuf,
     mode: u32,
 }

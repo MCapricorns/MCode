@@ -5,10 +5,10 @@ use std::sync::Mutex;
 
 #[cfg(unix)]
 #[derive(Debug)]
-pub(super) struct SignalGuard;
+pub(crate) struct SignalGuard;
 
 #[cfg(unix)]
-struct SignalState {
+pub(super) struct SignalState {
     refs: usize,
     previous: libc::sigaction,
 }
@@ -54,7 +54,7 @@ pub(super) fn handler_is_default(handler: usize) -> bool {
 /// Returns an I/O error when `sigaction` fails or a foreign handler is
 /// installed.
 #[cfg(unix)]
-pub(super) fn acquire_interrupt_signal() -> io::Result<SignalGuard> {
+pub(crate) fn acquire_interrupt_signal() -> io::Result<SignalGuard> {
     let mut slot = signal_state()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());

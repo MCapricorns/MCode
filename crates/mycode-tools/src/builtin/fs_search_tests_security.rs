@@ -418,7 +418,7 @@ fn clear_errno_makes_readdir_eof_succeed() {
 fn foreign_sigurg_handler_fails_closed_and_is_restored() {
     const CHILD_ENV: &str = "MYCODE_FS_SEARCH_SIGURG_CHILD";
     const TEST_NAME: &str =
-        "builtin::fs_search::tests::foreign_sigurg_handler_fails_closed_and_is_restored";
+        "builtin::fs_search::tests_security::foreign_sigurg_handler_fails_closed_and_is_restored";
     if let Some(mode) = std::env::var_os(CHILD_ENV) {
         // SAFETY: install a foreign disposition and verify acquisition
         // fails without replacing it.
@@ -474,7 +474,7 @@ fn foreign_sigurg_handler_fails_closed_and_is_restored() {
 async fn replaced_sigurg_is_not_restored_and_worker_stops() {
     const CHILD_ENV: &str = "MYCODE_FS_SEARCH_SIGURG_REPLACE_CHILD";
     const TEST_NAME: &str =
-        "builtin::fs_search::tests::replaced_sigurg_is_not_restored_and_worker_stops";
+        "builtin::fs_search::tests_security::replaced_sigurg_is_not_restored_and_worker_stops";
     if let Some(mode) = std::env::var_os(CHILD_ENV) {
         use std::sync::mpsc;
 
