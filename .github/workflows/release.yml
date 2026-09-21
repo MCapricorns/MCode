@@ -2,12 +2,12 @@
 # Release. Runs on `v*` tags.
 #
 # Assets produced per tag:
-#   mcode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
-#   mcode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
-#   mcode-desktop-<tag>-x86_64-apple-darwin.zip         (+ .sha256)
+#   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
+#   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
+#   mycode-desktop-<tag>-x86_64-apple-darwin.zip         (+ .sha256)
 #
 # Each archive contains the bare application binary so the in-app updater
-# can swap it in place (mcode-updates::apply_and_restart).
+# can swap it in place (mycode-updates::apply_and_restart).
 
 name: release
 
@@ -32,13 +32,13 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: mcode-desktop.exe
+            binary: mycode-desktop.exe
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary: mcode-desktop
+            binary: mycode-desktop
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary: mcode-desktop
+            binary: mycode-desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -48,19 +48,19 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --locked -p mcode-desktop --target ${{ matrix.target }}
+        run: cargo build --release --locked -p mycode-desktop --target ${{ matrix.target }}
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          $stage = "mcode-desktop-$tag-${{ matrix.target }}"
+          $stage = "mycode-desktop-$tag-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
           Copy-Item README.md "$stage/" -ErrorAction SilentlyContinue
           Copy-Item LICENSE "$stage/" -ErrorAction SilentlyContinue
-          $zip = "mcode-desktop-$tag-${{ matrix.target }}.zip"
+          $zip = "mycode-desktop-$tag-${{ matrix.target }}.zip"
           Compress-Archive -Path $stage -DestinationPath $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
@@ -70,13 +70,13 @@ jobs:
         shell: bash
         run: |
           tag="${{ github.ref_name }}"
-          stage="mcode-desktop-$tag-${{ matrix.target }}"
+          stage="mycode-desktop-$tag-${{ matrix.target }}"
           mkdir -p "$stage"
           chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
           cp README.md "$stage/" 2>/dev/null || true
           cp LICENSE "$stage/" 2>/dev/null || true
-          zip="mcode-desktop-$tag-${{ matrix.target }}.zip"
+          zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
           zip -r "$zip" "$stage"
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates crates/mcode-desktop/assets/icon.ico for MCode.
+"""Generates crates/mycode-desktop/assets/icon.ico for MYCode.
 
 Pure-python rasterizer: no PIL/imaging dependency. Draws the M-mark (black
 stroke "M" over a white rounded square — matching the in-app logo tiles)
@@ -137,7 +137,7 @@ def write_ico(path, entries):
 
 
 def main():
-    out = Path(__file__).resolve().parents[1] / "crates/mcode-desktop/assets/icon.ico"
+    out = Path(__file__).resolve().parents[1] / "crates/mycode-desktop/assets/icon.ico"
     out.parent.mkdir(parents=True, exist_ok=True)
     entries = []
     for size in (16, 24, 32, 48):

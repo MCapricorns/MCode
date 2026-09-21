@@ -1,18 +1,15 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/mcode-core",
-    "crates/mcode-config",
-    "crates/mcode-catalog",
-    "crates/mcode-provider-api",
-    "crates/mcode-providers",
-    "crates/mcode-tools",
-    "crates/mcode-agent",
-    "crates/mcode-session",
-    "crates/mcode-web",
-    "crates/mcode-mcp",
-    "crates/mcode-updates",
-    "crates/mcode-desktop",
+    "crates/mycode-core",
+    "crates/mycode-config",
+    "crates/mycode-providers",
+    "crates/mycode-tools",
+    "crates/mycode-agent",
+    "crates/mycode-web",
+    "crates/mycode-mcp",
+    "crates/mycode-updates",
+    "crates/mycode-desktop",
 ]
 [workspace.package]
 version = "0.2.0"

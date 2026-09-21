@@ -1,6 +1,6 @@
-# MCode
+# MYCode
 
-MCode 是一个基于 Zed GPUI 的 Windows/macOS 桌面编码 agent（Zed/Codex 式布局：活动栏 + 会话侧栏 + 对话流 + 上下文面板），围绕一个持久、可回放的会话 ledger 与第一方 provider runtime 构建。
+MYCode 是一个基于 Zed GPUI 的 Windows/macOS 桌面编码 agent（Zed/Codex 式布局：活动栏 + 会话侧栏 + 对话流 + 上下文面板），围绕一个持久、可回放的会话 ledger 与第一方 provider runtime 构建。
 
 ## 功能
 
@@ -18,24 +18,24 @@ MCode 是一个基于 Zed GPUI 的 Windows/macOS 桌面编码 agent（Zed/Codex 
 
 前往 [Releases](https://github.com/MCapricorns/MCode/releases) 获取最新版本：
 
-- `mcode-desktop-v<版本>-x86_64-pc-windows-msvc.zip` — Windows 10/11 x64
-- `mcode-desktop-v<版本>-aarch64-apple-darwin.zip` — macOS Apple Silicon
-- `mcode-desktop-v<版本>-x86_64-apple-darwin.zip` — macOS Intel
+- `mycode-desktop-v<版本>-x86_64-pc-windows-msvc.zip` — Windows 10/11 x64
+- `mycode-desktop-v<版本>-aarch64-apple-darwin.zip` — macOS Apple Silicon
+- `mycode-desktop-v<版本>-x86_64-apple-darwin.zip` — macOS Intel
 
 应用内置自动更新；也可以手动下载覆盖安装。
 
 ## 构建
 
 ```text
-cargo build --release -p mcode-desktop
-target/release/mcode-desktop.exe
+cargo build --release -p mycode-desktop
+target/release/mycode-desktop.exe
 ```
 
 工具链：Rust stable（MSVC）。门禁：`cargo fmt --all`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`。
 
 ## 数据位置
 
-`MCODE_HOME`（默认 `~/.mcode`）下：`settings.json`（配置）、`secrets.json`（API keys，Debug 输出打码）、`ui.json`（最近项目/更新偏好）、`catalog-cache.json`（provider 目录缓存）、`sessions/`（durable ledger）、`checkpoints/`（文件快照）、`workspace/<session>/`（缺省工具工作目录 + todos.json）。
+`MYCODE_HOME`（默认 `~/.mycode`）下：`settings.json`（配置）、`secrets.json`（API keys，Debug 输出打码）、`ui.json`（最近项目/更新偏好）、`catalog-cache.json`（provider 目录缓存）、`sessions/`（durable ledger）、`checkpoints/`（文件快照）、`workspace/<session>/`（缺省工具工作目录 + todos.json）。
 
 ## 文档
 

@@ -1,0 +1,77 @@
+[package]
+name = "mycode-tools"
+description = "MYCode tool trait, registry, and builtin tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycode-core = { path = "../mycode-core" }
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "io-util", "net"] }
+async-trait.workspace = true
+schemars.workspace = true
+tokio-util.workspace = true
+globset.workspace = true
+ignore.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+regex.workspace = true
+aho-corasick.workspace = true
+memchr.workspace = true
+jsonschema.workspace = true
+blake3.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-cpp.workspace = true
+tree-sitter-c-sharp.workspace = true
+tree-sitter-json.workspace = true
+
+# Unix-only: terminate the platform shell's process group, perform
+# handle-relative no-follow opens for grep/find, and drive the file IO
+# kernel through rustix 1.1.4 `fs` (openat2/openat/renameat*/linkat).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+rustix = { workspace = true, features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+fs2.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+zip.workspace = true
+windows-sys = { workspace = true, features = [
+    "Wdk_Foundation",
+    "Win32_Globalization",
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+junction.workspace = true

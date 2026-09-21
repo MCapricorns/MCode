@@ -3,9 +3,9 @@
 
 Usage: python scripts/generate_catalog.py <models.dev api.json> <output snapshot.json>
 
-The snapshot keeps only providers MCode can serve with its three first-party
+The snapshot keeps only providers MYCode can serve with its three first-party
 wire protocols (anthropic-messages, openai-completions) and normalizes every
-entry to the compact camelCase schema the mcode-catalog crate embeds.
+entry to the compact camelCase schema the mycode-providers crate embeds.
 """
 import json
 import sys
@@ -147,7 +147,7 @@ def main() -> int:
 
     snapshot = {
         "formatVersion": 1,
-        "kind": "mcode-catalog-snapshot",
+        "kind": "mycode-catalog-snapshot",
         "source": "models.dev",
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "providers": providers,

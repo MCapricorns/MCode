@@ -30,7 +30,7 @@ loop {
 
 Provider 由 `providers` Manager 和独立 ProviderPack world 实现。Host 独占 auth store、HTTP、TLS、DNS、proxy、credential lookup/refresh/insertion、reserved-header policy 与审计；Provider Pack 看不到 credential、socket 或 HTTP client。
 
-唯一 auth 文件是 lazy 的 `~/.mcode/plugins/.host/auth.json`，不属于 Providers 或任何 family。每个签名 Provider/Web/Usage Pack 以精确 canonical account、issuer、auth schema、source/signer、credential-contract 和 operation/method/origin/path/auth slot 获批。Host 自动为任何 active Pack 精确匹配 account 并生成单次、generation-bound injection lease；同一 account 不重复存储 secret，也不逐 Pack 登录。mismatch/new authority 必须 fail closed/rebind。
+唯一 auth 文件是 lazy 的 `~/.mycode/plugins/.host/auth.json`，不属于 Providers 或任何 family。每个签名 Provider/Web/Usage Pack 以精确 canonical account、issuer、auth schema、source/signer、credential-contract 和 operation/method/origin/path/auth slot 获批。Host 自动为任何 active Pack 精确匹配 account 并生成单次、generation-bound injection lease；同一 account 不重复存储 secret，也不逐 Pack 登录。mismatch/new authority 必须 fail closed/rebind。
 
 Provider 和 Usage 相互独立。Host 只在验证的 route/request/terminal 边界生成 immutable `ModelRouteLease`、`UsageContextSnapshot`、`UsageSample`；Usage 不查询 Provider，也不从字符串、Session、widget 或 quota 推测模型。Usage Manager 以根配置顺序组合 unique source Pack 的有界 row/card 到 `status.trailing/usage.summary` 与 `panel/usage.details`。
 

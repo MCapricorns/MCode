@@ -1,0 +1,120 @@
+//! First-party built-in Session service.
+//!
+//! Event-sourced branch/resume/rewind over a durable per-session ledger:
+//! strict manifests are published through the hardened owned-file
+//! transaction, branch logs are append-only framed records with payload
+//! digests, and staged payloads make reservations single-use under
+//! expected-head compare-and-swap. The service runs on the T8 typed task
+//! runtime inside a Host-owned generation fence; recovery is chunked per
+//! pull and reports the frozen `recovering`/`replaying` progress phases.
+//! The typed surface is the first-party Rust projection of design doc
+//! `07-pack-abi-session-resources.md` §3.
+mod actor;
+mod digest;
+mod dto;
+mod fs;
+mod generation;
+mod ids;
+mod ledger;
+mod runtime;
+mod service;
+mod store;
+
+#[doc(inline)]
+pub use digest::{DIGEST_PREFIX, is_canonical_digest};
+#[doc(inline)]
+pub use dto::{
+    AppendedResult, BranchHead, BranchMutationKind, BranchedResult, ConflictResult, CreatedResult,
+    EventKind, EventReservationView, EventsResult, HeadStamp, LoadedEvent, MAX_BRANCHES,
+    MAX_EVENT_PAYLOAD_BYTES, MAX_READ_LIMIT, MAX_USAGE_PAYLOAD_BYTES, OpenedResult, SessionError,
+    SessionEvent, SessionProgress, SessionPull, SessionRequest, SessionResult,
+};
+#[doc(inline)]
+pub use ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
+#[doc(inline)]
+pub use service::SessionService;
+#[doc(inline)]
+pub use store::{MAX_MANIFEST_BYTES, MAX_SESSION_TOTAL_BYTES};
+
+/// Read-only branch snapshot for session listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchSnapshot {
+    /// Branch identity.
+    pub branch_id: BranchId,
+    /// Committed head.
+    pub head: HeadStamp,
+    /// Committed event count.
+    pub event_count: u64,
+}
+
+/// Read-only session snapshot for session listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionSnapshot {
+    /// Session identity.
+    pub session_id: SessionId,
+    /// Every branch, ordered by branch-ID bytes.
+    pub branches: Vec<BranchSnapshot>,
+}
+
+/// Lists every stored session by strictly decoding each manifest.
+///
+/// The listing performs no recovery and mutates nothing; manifests are the
+/// authority and atomically replaced, so a snapshot is always consistent.
+/// Any malformed or unreadable session fails closed.
+///
+/// # Errors
+///
+/// Returns [`SessionError::Corrupt`] for an unreadable sessions directory or
+/// any manifest that fails strict validation and [`SessionError::Unavailable`]
+/// for owned-path violations.
+pub fn inspect_sessions(
+    home: &mycode_config::HomeLayout,
+) -> Result<Vec<SessionSnapshot>, SessionError> {
+    let sessions_root = home
+        .owned_join(store::SESSIONS_RELATIVE_DIR)
+        .map_err(|_| SessionError::Unavailable)?;
+    let entries = match std::fs::read_dir(&sessions_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(SessionError::Corrupt),
+    };
+    let mut snapshots = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| SessionError::Corrupt)?;
+        if !entry
+            .file_type()
+            .map_err(|_| SessionError::Corrupt)?
+            .is_dir()
+        {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return Err(SessionError::Corrupt);
+        };
+        let session_id = SessionId::parse(name).ok_or(SessionError::Corrupt)?;
+        let paths = store::SessionPaths::new(home, &session_id);
+        let manifest_bytes =
+            mycode_config::read_owned_file(home, paths.manifest(), store::MAX_MANIFEST_BYTES)
+                .map_err(|_| SessionError::Unavailable)?
+                .ok_or(SessionError::Corrupt)?
+                .to_vec();
+        let manifest =
+            store::decode_manifest(&manifest_bytes).map_err(|_| SessionError::Corrupt)?;
+        let mut branches = Vec::with_capacity(manifest.branches.len());
+        for row in &manifest.branches {
+            branches.push(BranchSnapshot {
+                branch_id: BranchId::parse(&row.branch_id).ok_or(SessionError::Corrupt)?,
+                head: store::decode_head(&row.head).ok_or(SessionError::Corrupt)?,
+                event_count: row.event_count,
+            });
+        }
+        branches.sort_by(|a, b| a.branch_id.cmp(&b.branch_id));
+        snapshots.push(SessionSnapshot {
+            session_id,
+            branches,
+        });
+    }
+    snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    Ok(snapshots)
+}

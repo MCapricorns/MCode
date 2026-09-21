@@ -9,7 +9,7 @@
 # Android and BSD are not product targets.
 #
 # Privileged FS fixtures stay #[ignore]. This workflow does not set
-# MCODE_PRIVILEGED_FS_TESTS and does not pass --ignored; those tests
+# MYCODE_PRIVILEGED_FS_TESTS and does not pass --ignored; those tests
 # require a host that can actually deny mode-000 opens.
 #
 # Clippy -D warnings and rustfmt --check run on every native product runner.

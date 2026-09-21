@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCODE//UI — Trading Desk Preview</title>
+<title>MYCODE//UI — Trading Desk Preview</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -309,7 +309,7 @@ html[data-theme="light"] .theme-toggle span.on{color:#FFF6E4;background:#8A5700}
 
   <!-- TOP BAR -->
   <header class="topbar">
-    <div class="wordmark">MCODE<b>//</b>UI</div>
+    <div class="wordmark">MYCODE<b>//</b>UI</div>
     <div class="topstat"><span class="lamp green"></span>RUNNING <b>3</b></div>
     <div class="topstat"><span class="lamp amber"></span>ARMED <b>2</b></div>
     <div class="topstat"><span class="lamp dim"></span>IDLE <b>5</b></div>
@@ -543,14 +543,14 @@ document.querySelectorAll('.tool-h').forEach(h=>{
 // theme: night desk <-> day desk
 const rootEl=document.documentElement;
 const qp=new URLSearchParams(location.search).get('theme');
-const saved=qp||localStorage.getItem('mcode-theme');
+const saved=qp||localStorage.getItem('mycode-theme');
 if(saved)rootEl.dataset.theme=saved==='night'?'':saved;
 function syncToggle(){document.querySelectorAll('#themeToggle span').forEach(s=>s.classList.toggle('on',(rootEl.dataset.theme||'night')===s.dataset.t))}
 syncToggle();
 document.getElementById('themeToggle').addEventListener('click',()=>{
   const next=(rootEl.dataset.theme||'night')==='night'?'light':'night';
   rootEl.dataset.theme=next==='night'?'':next;
-  localStorage.setItem('mcode-theme',next);syncToggle();
+  localStorage.setItem('mycode-theme',next);syncToggle();
 });
 
 // ticker: duplicate for seamless loop

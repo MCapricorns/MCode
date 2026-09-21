@@ -4174,216 +4174,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcode-agent"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "mcode-core",
- "mcode-provider-api",
- "mcode-tools",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "mcode-catalog"
-version = "0.2.0"
-dependencies = [
- "mcode-config",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "mcode-config"
-version = "0.2.0"
-dependencies = [
- "base64 0.23.1",
- "blake3",
- "getrandom 0.4.3",
- "junction",
- "rustix",
- "semver",
- "serde",
- "serde_json",
- "syn 2.0.119",
- "tempfile",
- "uuid",
- "windows-sys 0.61.2",
- "zeroize",
-]
-
-[[package]]
-name = "mcode-core"
-version = "0.2.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "uuid",
-]
-
-[[package]]
-name = "mcode-desktop"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "gpui-kit",
- "jsonschema",
- "mcode-agent",
- "mcode-catalog",
- "mcode-config",
- "mcode-core",
- "mcode-mcp",
- "mcode-provider-api",
- "mcode-providers",
- "mcode-session",
- "mcode-tools",
- "mcode-updates",
- "mcode-web",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "winresource",
-]
-
-[[package]]
-name = "mcode-mcp"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "mcode-provider-api"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "mcode-core",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "mcode-providers"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "mcode-config",
- "mcode-core",
- "mcode-provider-api",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "mcode-session"
-version = "0.2.0"
-dependencies = [
- "getrandom 0.4.3",
- "mcode-config",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "mcode-tools"
-version = "0.2.0"
-dependencies = [
- "aho-corasick",
- "async-trait",
- "base64 0.23.1",
- "blake3",
- "fs2",
- "globset",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "jsonschema",
- "junction",
- "libc",
- "mcode-core",
- "memchr",
- "regex",
- "reqwest",
- "rustix",
- "schemars",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "uuid",
- "windows-sys 0.61.2",
- "zip",
-]
-
-[[package]]
-name = "mcode-updates"
-version = "0.2.0"
-dependencies = [
- "reqwest",
- "semver",
- "serde",
- "sha2 0.11.0",
- "tempfile",
- "zip",
-]
-
-[[package]]
-name = "mcode-web"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "mcode-config",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4490,6 +4280,180 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
+]
+
+[[package]]
+name = "mycode-agent"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "getrandom 0.4.3",
+ "mycode-config",
+ "mycode-core",
+ "mycode-tools",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "mycode-config"
+version = "0.2.0"
+dependencies = [
+ "base64 0.23.1",
+ "blake3",
+ "getrandom 0.4.3",
+ "junction",
+ "rustix",
+ "semver",
+ "serde",
+ "serde_json",
+ "syn 2.0.119",
+ "tempfile",
+ "uuid",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "mycode-core"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "mycode-desktop"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "gpui-kit",
+ "jsonschema",
+ "mycode-agent",
+ "mycode-config",
+ "mycode-core",
+ "mycode-mcp",
+ "mycode-providers",
+ "mycode-tools",
+ "mycode-updates",
+ "mycode-web",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "winresource",
+]
+
+[[package]]
+name = "mycode-mcp"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "mycode-providers"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "mycode-config",
+ "mycode-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "mycode-tools"
+version = "0.2.0"
+dependencies = [
+ "aho-corasick",
+ "async-trait",
+ "base64 0.23.1",
+ "blake3",
+ "fs2",
+ "globset",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "jsonschema",
+ "junction",
+ "libc",
+ "memchr",
+ "mycode-core",
+ "regex",
+ "reqwest",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "uuid",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
+name = "mycode-updates"
+version = "0.2.0"
+dependencies = [
+ "reqwest",
+ "semver",
+ "serde",
+ "sha2 0.11.0",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "mycode-web"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
