@@ -1369,20 +1369,20 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         job.done = done;
         return;
     }
-    if let Some(job) = state.live_jobs.iter_mut().rev().find(|job| !job.done) {
-        if call_id.is_empty() || job.call_id.is_empty() {
-            if !call_id.is_empty() {
-                job.call_id = call_id.to_owned();
-            }
-            if !role.is_empty() {
-                job.role = role.to_owned();
-            }
-            if !step.is_empty() {
-                job.step = step.to_owned();
-            }
-            job.done = done;
-            return;
+    if let Some(job) = state.live_jobs.iter_mut().rev().find(|job| !job.done)
+        && (call_id.is_empty() || job.call_id.is_empty())
+    {
+        if !call_id.is_empty() {
+            job.call_id = call_id.to_owned();
         }
+        if !role.is_empty() {
+            job.role = role.to_owned();
+        }
+        if !step.is_empty() {
+            job.step = step.to_owned();
+        }
+        job.done = done;
+        return;
     }
     state.live_jobs.push(LiveJob {
         call_id: call_id.to_owned(),
