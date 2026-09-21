@@ -13,7 +13,9 @@ use gpui_kit::{
 };
 
 use super::{ellipsis, project_label, skin};
-use crate::view_model::{ConversationEntry, EntryKind, selected_model_supports_reasoning};
+use crate::view_model::{
+    ConversationEntry, EntryKind, selected_model_supports_reasoning, transcript_start,
+};
 use crate::workspace::Workspace;
 
 pub(super) fn render_chat(
@@ -26,40 +28,30 @@ pub(super) fn render_chat(
     // message text again. The borrow is scoped so the welcome and composer
     // builders can still take `&mut Workspace`.
     let sending = workspace.vm().sending;
-    let (show_welcome, entry_elements, streaming_element) = {
+    let extra = workspace.vm().transcript_extra;
+    let (show_welcome, hidden, entry_elements, streaming_element) = {
         let active = workspace.vm().active.as_ref();
         let entries: &[ConversationEntry] = active
             .map(|conversation| conversation.entries.as_slice())
             .unwrap_or_default();
         let streaming = active.and_then(|c| c.streaming.as_ref());
         let show_welcome = entries.is_empty() && streaming.is_none() && !sending;
-        // The Desk timeline pairs each tool call with its result (both share
-        // `call_id`) so a call renders as one ledger block; unpaired entries
-        // keep their flat order. Pairing is display-only: state is untouched.
-        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(entries.len());
-        let mut index = 0;
-        while index < entries.len() {
-            let entry = &entries[index];
-            if entry.kind == EntryKind::UserMessage {
-                elements.push(render_user_entry(entry, index > 0, index, cx));
-            } else if entry.kind == EntryKind::ToolCall {
-                let result = entry.call_id.as_deref().and_then(|call| {
-                    entries[index + 1..].iter().find(|next| {
-                        next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
-                    })
-                });
-                elements.push(render_tool_block(entry, result, cx.theme()));
-            } else if entry.kind == EntryKind::ToolResult
-                && entry.call_id.is_some()
-                && entries[..index]
-                    .iter()
-                    .any(|prev| prev.kind == EntryKind::ToolCall && prev.call_id == entry.call_id)
-            {
-                // Already shown inside its call's block above.
-            } else {
-                elements.push(render_entry(entry, cx.theme()));
+        let items = collect_transcript_items(entries);
+        let start = transcript_start(items.len(), extra);
+        let hidden = start;
+        let mut elements: Vec<gpui_kit::AnyElement> = Vec::with_capacity(items.len() - start);
+        for item in items.into_iter().skip(start) {
+            match item {
+                TranscriptItem::User { entry, index } => {
+                    elements.push(render_user_entry(entry, index > 0, index, cx));
+                }
+                TranscriptItem::Tool { call, result } => {
+                    elements.push(render_tool_block(call, result, cx.theme()));
+                }
+                TranscriptItem::Entry(entry) => {
+                    elements.push(render_entry(entry, cx.theme()));
+                }
             }
-            index += 1;
         }
         let streaming_element = streaming
             .map(|streaming| render_streaming_entry(streaming, cx.theme()).into_any_element())
@@ -75,7 +67,7 @@ pub(super) fn render_chat(
                     .into_any_element()
                 })
             });
-        (show_welcome, elements, streaming_element)
+        (show_welcome, hidden, elements, streaming_element)
     };
     let scroll_handle = workspace.conversation_scroll_handle().clone();
     div()
@@ -108,6 +100,7 @@ pub(super) fn render_chat(
                         .when(show_welcome, |this| {
                             this.child(render_welcome(workspace, cx))
                         })
+                        .when(hidden > 0, |this| this.child(render_fold_chip(hidden, cx)))
                         .children(entry_elements)
                         .when_some(streaming_element, |this, streaming| this.child(streaming)),
                 ),
@@ -414,6 +407,78 @@ fn capability_chip(
             .text_color(if ready { color } else { desk.faint })
             .child(label.to_owned()),
     )
+}
+
+enum TranscriptItem<'a> {
+    User {
+        entry: &'a ConversationEntry,
+        index: usize,
+    },
+    Tool {
+        call: &'a ConversationEntry,
+        result: Option<&'a ConversationEntry>,
+    },
+    Entry(&'a ConversationEntry),
+}
+
+fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem<'_>> {
+    let mut items = Vec::with_capacity(entries.len());
+    let mut index = 0;
+    while index < entries.len() {
+        let entry = &entries[index];
+        if entry.kind == EntryKind::UserMessage {
+            items.push(TranscriptItem::User { entry, index });
+        } else if entry.kind == EntryKind::ToolCall {
+            let result = entry.call_id.as_deref().and_then(|call| {
+                entries[index + 1..].iter().find(|next| {
+                    next.kind == EntryKind::ToolResult && next.call_id.as_deref() == Some(call)
+                })
+            });
+            items.push(TranscriptItem::Tool {
+                call: entry,
+                result,
+            });
+        } else if entry.kind == EntryKind::ToolResult
+            && entry.call_id.is_some()
+            && entries[..index]
+                .iter()
+                .any(|prev| prev.kind == EntryKind::ToolCall && prev.call_id == entry.call_id)
+        {
+            // Already shown inside its call's block above.
+        } else {
+            items.push(TranscriptItem::Entry(entry));
+        }
+        index += 1;
+    }
+    items
+}
+
+fn render_fold_chip(hidden: usize, cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
+    div()
+        .id("transcript-fold")
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .py(px(8.))
+        .rounded(px(12.))
+        .border_1()
+        .border_color(skin::glass_border(theme))
+        .bg(skin::glass(theme))
+        .cursor_pointer()
+        .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.on_reveal_transcript(cx);
+        }))
+        .child(super::lamp(desk.violet))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("{hidden} earlier messages")),
+        )
 }
 
 /// Desk transcript entries: the demo's timeline blocks — a mono stamp gutter

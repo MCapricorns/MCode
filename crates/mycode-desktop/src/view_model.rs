@@ -74,6 +74,16 @@ pub enum MentionKind {
 
 /// Built-in slash commands offered by the composer menu.
 pub const COMPOSER_COMMANDS: &[(&str, &str)] = &[("/new", "new chat"), ("/settings", "settings")];
+/// Recent transcript blocks that stay mounted. Older ones fold.
+pub const TRANSCRIPT_TAIL: usize = 24;
+/// How many folded blocks one reveal click mounts.
+pub const TRANSCRIPT_PAGE: usize = 24;
+
+/// First visible display-block index for a folded transcript.
+#[must_use]
+pub fn transcript_start(block_count: usize, extra: usize) -> usize {
+    block_count.saturating_sub(TRANSCRIPT_TAIL.saturating_add(extra))
+}
 
 /// Parses the composer draft into an active mention, if any: a trailing
 /// `@fragment` token selects files; a leading `/name` (still the whole
@@ -423,6 +433,8 @@ pub struct WorkspaceState {
     pub ask_answers: Vec<String>,
     /// Durable task list rows: (content, status). Completed tasks are dropped.
     pub todo_rows: Vec<(String, String)>,
+    /// Extra folded transcript blocks the user asked to mount above the tail.
+    pub transcript_extra: usize,
     /// Cumulative usage per provider/model, in first-seen order.
     pub usage_totals: Vec<UsageTotal>,
     /// Most recent turn's timing and token metrics, when usage is enabled.
@@ -597,6 +609,8 @@ pub enum DesktopAction {
     AskChoicePicked { index: usize, answer: String },
     /// The user submitted answers locally; clear the pending panel.
     AskAnswered,
+    /// Mount another page of folded transcript blocks.
+    TranscriptRevealMore,
     /// Settings were persisted under CAS; carries the new revision.
     SettingsSaved(u64),
     /// One provider's API key was stored or cleared; refreshes key markers.
@@ -828,6 +842,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 streaming: None,
             });
             state.live_jobs.clear();
+            state.transcript_extra = 0;
         }
         DesktopAction::SessionDeleted => {
             state.active = None;
@@ -836,6 +851,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.live_jobs.clear();
             state.pending_ask = None;
             state.error = None;
+            state.transcript_extra = 0;
         }
         DesktopAction::ConversationOpened(conversation) => {
             let switched = state
@@ -848,6 +864,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.queued.clear();
                 state.live_jobs.clear();
                 state.sending = false;
+                state.transcript_extra = 0;
             }
             let session_id = conversation.session_id.clone();
             state.active = Some(conversation);
@@ -1005,6 +1022,9 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::AskAnswered => {
             state.pending_ask = None;
             state.ask_answers.clear();
+        }
+        DesktopAction::TranscriptRevealMore => {
+            state.transcript_extra = state.transcript_extra.saturating_add(TRANSCRIPT_PAGE);
         }
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
@@ -1647,6 +1667,38 @@ mod tests {
         );
         assert!(state.sessions[0].active, "reload keeps the open mark");
         assert!(!state.sessions[1].active);
+    }
+
+    #[test]
+    fn transcript_start_keeps_a_fixed_tail() {
+        assert_eq!(transcript_start(10, 0), 0);
+        assert_eq!(transcript_start(TRANSCRIPT_TAIL, 0), 0);
+        assert_eq!(transcript_start(TRANSCRIPT_TAIL + 7, 0), 7);
+        assert_eq!(transcript_start(TRANSCRIPT_TAIL + 7, TRANSCRIPT_PAGE), 0);
+    }
+
+    #[test]
+    fn revealing_earlier_messages_resets_when_the_session_changes() {
+        let mut state = WorkspaceState::default();
+        reduce(&mut state, DesktopAction::TranscriptRevealMore);
+        assert_eq!(state.transcript_extra, TRANSCRIPT_PAGE);
+        reduce(
+            &mut state,
+            DesktopAction::SessionCreated(summary("ses1-a", 0)),
+        );
+        assert_eq!(state.transcript_extra, 0);
+        reduce(&mut state, DesktopAction::TranscriptRevealMore);
+        reduce(
+            &mut state,
+            DesktopAction::ConversationOpened(ActiveConversation {
+                session_id: "ses1-b".to_owned(),
+                branch_id: "br-b".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                streaming: None,
+            }),
+        );
+        assert_eq!(state.transcript_extra, 0);
     }
 
     #[test]

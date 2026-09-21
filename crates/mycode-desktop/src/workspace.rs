@@ -1569,6 +1569,10 @@ impl Workspace {
         );
     }
 
+    pub(super) fn on_reveal_transcript(&mut self, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::TranscriptRevealMore, cx);
+    }
+
     pub(super) fn on_dismiss_error(&mut self, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::DismissError, cx);
     }
