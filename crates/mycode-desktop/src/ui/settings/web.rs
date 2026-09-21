@@ -1,0 +1,333 @@
+//! The Web settings page: vendor search backends with their key inputs, the
+//! custom backend rows, and the add-backend form.
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::theme::Theme;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Styled, Window, div, px,
+};
+
+use super::widgets::{labeled_field, row_header, settings_card};
+use crate::view_model::DesktopAction;
+use crate::workspace::Workspace;
+
+pub(super) fn render_web_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
+    };
+    let keyed = settings.providers_with_keys.clone();
+    let builtin_ids: Vec<String> = mycode_config::builtin_web_backends()
+        .into_iter()
+        .map(|backend| backend.id)
+        .collect();
+    let vendor_rows: Vec<AnyElement> = settings
+        .web_backends
+        .iter()
+        .enumerate()
+        .filter(|(_, backend)| builtin_ids.contains(&backend.id))
+        .map(|(index, backend)| {
+            let key_input = workspace.web_key_input(&backend.id, window, cx);
+            vendor_backend_row(
+                VendorBackend {
+                    id: backend.id.clone(),
+                    kind: backend.kind.clone(),
+                    endpoint: backend.endpoint.clone(),
+                    enabled: backend.enabled,
+                    keyed: keyed.iter().any(|id| id == &format!("web-{}", backend.id)),
+                    index,
+                },
+                key_input,
+                cx,
+            )
+        })
+        .collect();
+    let custom_rows: Vec<AnyElement> = settings
+        .web_backends
+        .iter()
+        .enumerate()
+        .filter(|(_, backend)| !builtin_ids.contains(&backend.id))
+        .map(|(index, backend)| {
+            backend_row(
+                backend.id.clone(),
+                backend.kind.clone(),
+                backend.endpoint.clone(),
+                backend.enabled,
+                index,
+                cx,
+            )
+        })
+        .collect();
+    let backend_form_element = render_backend_form(workspace, window, cx);
+    let theme = cx.theme();
+    let custom_empty = custom_rows.is_empty();
+    div()
+        .id("web-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(settings_card(
+            "web",
+            "Web search",
+            Some(
+                "Querit and AnySearch are ready: paste the API key and turn one on. \
+                 Authorization is sent as Bearer automatically — do not type Bearer yourself. \
+                 Environment variables QUERIT_API_KEY / ANYSEARCH_API_KEY also work.",
+            ),
+            theme,
+            vendor_rows,
+        ))
+        .child(settings_card(
+            "web-custom",
+            "Custom backends",
+            Some(
+                "A Querit-compatible endpoint (POST /v1/search, POST /v1/contents) \
+                 or another AnySearch-compatible host.",
+            ),
+            theme,
+            vec![
+                div()
+                    .when(custom_empty, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .opacity(0.5)
+                                .whitespace_normal()
+                                .child("No custom backends"),
+                        )
+                    })
+                    .children(custom_rows)
+                    .into_any_element(),
+                backend_form_element,
+            ],
+        ))
+        .into_any_element()
+}
+
+struct VendorBackend {
+    id: String,
+    kind: String,
+    endpoint: String,
+    enabled: bool,
+    keyed: bool,
+    index: usize,
+}
+
+fn vendor_backend_row(
+    backend: VendorBackend,
+    key_input: Entity<InputState>,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let VendorBackend {
+        id,
+        kind,
+        endpoint,
+        enabled,
+        keyed,
+        index,
+    } = backend;
+    let theme = cx.theme();
+    let title = match kind.as_str() {
+        "querit" => "Querit",
+        "anysearch" => "AnySearch",
+        other => other,
+    };
+    // The vendor header adds the key marker beside the title, so it keeps
+    // its own column instead of the plain two-line row_header.
+    let header = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(title.to_owned()),
+                )
+                .child(Icon::new(IconName::KeyRound).small().text_color(if keyed {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .opacity(0.6)
+                .whitespace_normal()
+                .child(endpoint),
+        );
+    div()
+        .id(format!("vendor-backend-{id}"))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap_3()
+                .child(header)
+                .child(
+                    Switch::new(format!("backend-toggle-{id}"))
+                        .checked(enabled)
+                        .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                            workspace.apply_action(
+                                DesktopAction::SettingsBackendToggled(index, *checked),
+                                cx,
+                            );
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(28.))
+                        .child(Input::new(&key_input)),
+                )
+                .child(
+                    Button::new(format!("web-key-save-{id}"))
+                        .label("Save key")
+                        .small()
+                        .outline()
+                        .on_click({
+                            let id = id.clone();
+                            cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_save_web_key(&id, cx);
+                            })
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
+fn backend_row(
+    id: String,
+    kind: String,
+    endpoint: String,
+    enabled: bool,
+    index: usize,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .id(format!("backend-row-{id}"))
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap_3()
+        .p_2()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(theme.border)
+        .child(row_header(&id, format!("{kind} \u{b7} {endpoint}")))
+        .child(
+            Switch::new(format!("backend-toggle-{id}"))
+                .checked(enabled)
+                .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                    workspace
+                        .apply_action(DesktopAction::SettingsBackendToggled(index, *checked), cx);
+                })),
+        )
+        .child(crate::ui::icon_button(
+            format!("backend-remove-{id}"),
+            IconName::Trash,
+            cx.listener(move |workspace, _, _, cx| {
+                workspace.on_remove_backend(index, cx);
+            }),
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// Inline add-backend form state.
+pub(crate) struct BackendForm {
+    /// Backend identity input.
+    pub id: Entity<InputState>,
+    /// Backend kind input (`querit` or `custom`).
+    pub kind: Entity<InputState>,
+    /// HTTPS endpoint input.
+    pub endpoint: Entity<InputState>,
+}
+
+impl BackendForm {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Entity<Self> {
+        let mut make = |placeholder: &'static str| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let id = make("id, e.g. querit-main");
+        let kind = make("querit | anysearch | custom");
+        let endpoint = make("https://search.example.com");
+        cx.new(|_| Self { id, kind, endpoint })
+    }
+}
+
+fn render_backend_form(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = workspace.backend_form(window, cx);
+    let theme: &Theme = cx.theme();
+    div()
+        .id("backend-form")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_md()
+        .bg(theme.secondary)
+        .child(div().text_xs().opacity(0.7).child("Add web search backend"))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_sm()
+                .child(labeled_field("id", form.read(cx).id.clone()))
+                .child(labeled_field("kind", form.read(cx).kind.clone()))
+                .child(labeled_field("endpoint", form.read(cx).endpoint.clone())),
+        )
+        .child(
+            Button::new("backend-add")
+                .label("Add backend")
+                .small()
+                .outline()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_add_backend(cx);
+                })),
+        )
+        .into_any_element()
+}

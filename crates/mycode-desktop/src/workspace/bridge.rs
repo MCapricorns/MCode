@@ -1,0 +1,538 @@
+//! The bridge half of the workspace: folding core events and replies into
+//! actions, and driving one model turn end to end.
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::{Context, Window};
+
+use mycode_app::{BranchId, BridgeCommand, BridgeEvent, BridgeReply, SessionId};
+
+use crate::view_model::{CHAT_CANCELLED, DesktopAction, SettingsState, UpdateState};
+use crate::workspace::Workspace;
+
+impl Workspace {
+    pub(super) fn apply_event(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
+        let active_session = self.vm.active.as_ref().map(|c| c.session_id.clone());
+        let matches_active = |session_id: &str| active_session.as_deref() == Some(session_id);
+        let action = match event {
+            BridgeEvent::ChatText { session_id, delta } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ChatDelta(delta)
+            }
+            BridgeEvent::ChatThinking { session_id, delta } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ChatThinkingDelta(delta)
+            }
+            BridgeEvent::AssistantStep { session_id, entry } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::AssistantStepCommitted(entry)
+            }
+            BridgeEvent::ChatDone {
+                session_id,
+                head,
+                entry,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                // Refresh the sidebar so the session title picks up the turn.
+                self.dispatch(BridgeCommand::ListSessions, cx);
+                self.apply_action(DesktopAction::ChatDone { head, entry }, cx);
+                self.pump_queued_send(cx);
+                return;
+            }
+            BridgeEvent::ChatFailed {
+                session_id,
+                message,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                let cancelled = message == CHAT_CANCELLED;
+                self.apply_action(DesktopAction::ChatFailed(message), cx);
+                // A user interrupt frees the turn; queued follow-ups start next.
+                // Provider errors keep the queue so a failed retry cannot loop.
+                if cancelled {
+                    self.pump_queued_send(cx);
+                }
+                return;
+            }
+            BridgeEvent::Notice {
+                session_id,
+                message,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::Failed(message)
+            }
+            BridgeEvent::UsageRecorded {
+                session_id,
+                provider,
+                model,
+                input,
+                output,
+                cache,
+                elapsed_ms,
+                entry,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::UsageRecorded {
+                    provider,
+                    model,
+                    input,
+                    output,
+                    cache,
+                    elapsed_ms,
+                    entry,
+                }
+            }
+            BridgeEvent::TodoUpdated { session_id, tasks } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::TodoUpdated(tasks)
+            }
+            BridgeEvent::AskRequested {
+                session_id,
+                questions,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::AskRequested(questions)
+            }
+            BridgeEvent::ToolStarted {
+                session_id,
+                call_id,
+                name,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ToolStarted { call_id, name }
+            }
+            BridgeEvent::ToolProgress {
+                session_id,
+                call_id,
+                name,
+                message,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ToolProgress {
+                    call_id,
+                    name,
+                    message,
+                }
+            }
+            BridgeEvent::ToolCompleted { session_id, entry } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ToolResultAppended(entry)
+            }
+            BridgeEvent::CatalogUpdated { .. } => {
+                self.dispatch(BridgeCommand::GetCatalog, cx);
+                return;
+            }
+            BridgeEvent::CopilotSignedIn => {
+                // The provider entry and key landed; refresh the settings
+                // projection so the row and keyed badge appear immediately.
+                self.dispatch(BridgeCommand::LoadSettings, cx);
+                DesktopAction::CopilotSignInFinished(Ok(()))
+            }
+            BridgeEvent::CopilotSignInFailed { message } => {
+                DesktopAction::CopilotSignInFinished(Err(message))
+            }
+            BridgeEvent::UpdateAvailable { offer } => {
+                let version = offer.version.clone();
+                let notes_url = offer.notes_url.clone();
+                self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
+                DesktopAction::UpdateStateChanged(UpdateState::Available { version, notes_url })
+            }
+        };
+        self.apply_action(action, cx);
+    }
+
+    pub(super) fn apply_reply(&mut self, reply: BridgeReply, cx: &mut Context<Self>) {
+        match reply {
+            BridgeReply::Sessions(Ok(sessions)) => {
+                self.apply_action(DesktopAction::SessionsLoaded(sessions), cx);
+                self.bind_unbound_to_active_project(cx);
+            }
+            BridgeReply::Created(Ok(summary)) => {
+                let session_id = SessionId::parse(&summary.session_id).expect("core session id");
+                self.apply_action(DesktopAction::SessionCreated(summary), cx);
+                self.dispatch(BridgeCommand::OpenSession(session_id), cx);
+                if let Some(project) = self.pending_project.take() {
+                    self.bind_project(&project, cx);
+                }
+                self.dispatch(BridgeCommand::ListSessions, cx);
+            }
+            BridgeReply::Conversation(Ok(conversation)) => {
+                let session_id = conversation.session_id.clone();
+                self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
+                self.dispatch(BridgeCommand::ListResources { session_id }, cx);
+                self.refresh_skills(cx);
+            }
+            BridgeReply::Resources(Ok(files)) => {
+                self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
+            }
+            BridgeReply::ProjectFiles(Ok(files)) => {
+                self.apply_action(DesktopAction::MentionFiles(files), cx);
+            }
+            // A failed mention search just leaves the menu empty.
+            BridgeReply::ProjectFiles(Err(_)) => {}
+            BridgeReply::CopilotSignInStarted(Ok(info)) => {
+                self.apply_action(
+                    DesktopAction::CopilotSignInStarted(crate::view_model::CopilotSignIn {
+                        user_code: info.user_code,
+                        verification_uri: info.verification_uri,
+                    }),
+                    cx,
+                );
+            }
+            BridgeReply::CopilotSignInStarted(Err(message)) => {
+                self.apply_action(DesktopAction::CopilotSignInFinished(Err(message)), cx);
+            }
+            BridgeReply::AskAnswered(Ok(())) => {}
+            BridgeReply::Sent(Ok((head, entry))) => {
+                self.apply_action(DesktopAction::MessageSent { head, entry }, cx);
+                self.begin_chat_turn(cx);
+            }
+            BridgeReply::Settings(Ok((settings, revision, provider_keys, mcp_keys))) => {
+                let revision = revision.get();
+                let mut state = SettingsState::from_settings(&settings, revision, provider_keys);
+                state.mcp_with_keys = mcp_keys;
+                // Apply the persisted theme only when it differs from the
+                // live one: reloads (import, sign-in) must not clobber a
+                // runtime toggle that has not been saved yet.
+                let mode = if state.theme == "light" {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                if cx.theme().mode != mode {
+                    Theme::change(mode, None, cx);
+                    crate::ui::desk::apply(Theme::global_mut(cx));
+                    Theme::sync_base(cx);
+                }
+                self.ua_sync_pending = true;
+                self.apply_action(DesktopAction::SettingsLoaded(state), cx);
+                self.apply_runtime_shell();
+            }
+            BridgeReply::Exported(Ok(_summary)) => {}
+            BridgeReply::Exported(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::Failed(format!("export failed: {message}")),
+                    cx,
+                );
+            }
+            BridgeReply::Imported(Ok(summary)) => {
+                // Reload everything the bundle may have replaced.
+                self.dispatch(BridgeCommand::LoadSettings, cx);
+                self.dispatch(BridgeCommand::LoadUiState, cx);
+                self.dispatch(BridgeCommand::ListSessions, cx);
+                if summary.sessions > 0 {
+                    self.apply_action(
+                        DesktopAction::Failed(format!(
+                            "imported {} new session(s); restart to see restored history",
+                            summary.sessions
+                        )),
+                        cx,
+                    );
+                }
+            }
+            BridgeReply::Imported(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::Failed(format!("import failed: {message}")),
+                    cx,
+                );
+            }
+            BridgeReply::Recalled(Ok((conversation, edit))) => {
+                let prefill = edit.clone();
+                self.apply_action(
+                    DesktopAction::ConversationOpened((*conversation).clone()),
+                    cx,
+                );
+                if prefill.is_some() {
+                    self.pending_composer_prefill = prefill;
+                }
+                cx.notify();
+            }
+            BridgeReply::SessionDeleted(Ok(())) => {
+                self.apply_action(DesktopAction::SessionDeleted, cx);
+                self.dispatch(BridgeCommand::ListSessions, cx);
+            }
+            BridgeReply::SettingsSaved(Ok(revision)) => {
+                self.apply_action(DesktopAction::SettingsSaved(revision.get()), cx);
+            }
+            BridgeReply::ProviderKeySaved(Ok((provider_keys, mcp_keys))) => {
+                // Refresh the key markers in place: reloading settings here
+                // would race the concurrently running settings save and wipe
+                // the just-added provider (and any other unsaved edits).
+                self.apply_action(
+                    DesktopAction::ProviderKeySaved {
+                        provider_keys,
+                        mcp_keys,
+                    },
+                    cx,
+                );
+            }
+            BridgeReply::ChatStarted(Ok(())) => {}
+            // The turn unwinds over the event channel; the reply itself
+            // carries no state.
+            BridgeReply::ChatCancelled(_) => {}
+            BridgeReply::McpTools {
+                server_id,
+                outcome: Ok(tools),
+            } => {
+                self.apply_action(DesktopAction::McpToolsListed { server_id, tools }, cx);
+            }
+            BridgeReply::McpTools {
+                server_id,
+                outcome: Err(message),
+            } => {
+                self.apply_action(DesktopAction::McpProbeFailed { server_id, message }, cx);
+            }
+            BridgeReply::RolledBack(Ok(restored)) => {
+                let message = if restored.is_empty() {
+                    "nothing to roll back".to_owned()
+                } else {
+                    format!("restored {} file(s)", restored.len())
+                };
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+            BridgeReply::Catalog(Ok(info)) => {
+                self.pending_catalog_refresh = false;
+                self.apply_action(
+                    DesktopAction::CatalogLoaded {
+                        document: info.document,
+                        fetched_at: info.fetched_at,
+                    },
+                    cx,
+                );
+            }
+            BridgeReply::Catalog(Err(message)) => {
+                if self.pending_catalog_refresh {
+                    self.pending_catalog_refresh = false;
+                    self.apply_action(DesktopAction::Failed(message), cx);
+                }
+            }
+            BridgeReply::UiState(Ok(ui_state)) => {
+                self.apply_action(
+                    DesktopAction::UiStateLoaded {
+                        recents: ui_state.recent_projects,
+                        last_project: ui_state.last_project,
+                        auto_update: ui_state.auto_update,
+                        selected_provider: ui_state.selected_provider,
+                        selected_model: ui_state.selected_model,
+                        session_projects: ui_state.session_projects,
+                    },
+                    cx,
+                );
+                self.bind_unbound_to_active_project(cx);
+                self.refresh_skills(cx);
+            }
+            BridgeReply::UiState(Err(_)) => {}
+            BridgeReply::UiStateSaved(Ok(())) => {}
+            BridgeReply::UiStateSaved(Err(message)) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+            BridgeReply::ProjectSet(Ok(())) => {}
+            BridgeReply::ProjectSet(Err(message)) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+            BridgeReply::UpdateChecked(Ok(None)) => {
+                self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::UpToDate), cx);
+            }
+            BridgeReply::UpdateChecked(Ok(Some(offer))) => {
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Available {
+                        version: offer.version,
+                        notes_url: offer.notes_url,
+                    }),
+                    cx,
+                );
+            }
+            BridgeReply::UpdateChecked(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message)),
+                    cx,
+                );
+            }
+            BridgeReply::UpdateDownloaded(Ok(prepared)) => {
+                self.apply_action(DesktopAction::UpdateStaged(prepared), cx);
+            }
+            BridgeReply::UpdateDownloaded(Err(message)) => {
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message)),
+                    cx,
+                );
+            }
+            BridgeReply::Sessions(Err(message))
+            | BridgeReply::Created(Err(message))
+            | BridgeReply::Conversation(Err(message))
+            | BridgeReply::Sent(Err(message))
+            | BridgeReply::Settings(Err(message))
+            | BridgeReply::SettingsSaved(Err(message))
+            | BridgeReply::ProviderKeySaved(Err(message))
+            | BridgeReply::ChatStarted(Err(message))
+            | BridgeReply::RolledBack(Err(message))
+            | BridgeReply::Recalled(Err(message))
+            | BridgeReply::SessionDeleted(Err(message))
+            | BridgeReply::Resources(Err(message))
+            | BridgeReply::AskAnswered(Err(message)) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+            }
+        }
+    }
+
+    /// Starts one model turn over the active conversation using the picked
+    /// provider/model, falling back to the first enabled provider.
+    fn begin_chat_turn(&mut self, cx: &mut Context<Self>) {
+        let Some(conversation) = self.vm.active.clone() else {
+            self.apply_action(DesktopAction::Failed("no open session".to_owned()), cx);
+            return;
+        };
+        let (Some(session), Some(branch)) = (
+            SessionId::parse(&conversation.session_id),
+            BranchId::parse(&conversation.branch_id),
+        ) else {
+            self.apply_action(
+                DesktopAction::Failed("the open session could not be read".to_owned()),
+                cx,
+            );
+            return;
+        };
+        let expected_head = crate::workspace::parse_head(&conversation.head);
+        let Some(settings) = self.vm.settings.as_ref() else {
+            self.apply_action(
+                DesktopAction::Failed("settings are still loading".to_owned()),
+                cx,
+            );
+            return;
+        };
+        let selected_provider = self.vm.selected_provider.clone();
+        let selected_model = self.vm.selected_model.clone();
+        let provider = settings
+            .providers
+            .iter()
+            .find(|provider| provider.enabled && Some(&provider.id) == selected_provider.as_ref())
+            .or_else(|| settings.providers.iter().find(|provider| provider.enabled));
+        let Some(provider) = provider else {
+            self.apply_action(
+                DesktopAction::Failed(
+                    "no enabled provider — add one with its API key in Settings".to_owned(),
+                ),
+                cx,
+            );
+            return;
+        };
+        let model = selected_model
+            .filter(|model| provider.models.contains(model))
+            .or_else(|| provider.models.first().cloned());
+        let Some(model) = model else {
+            self.apply_action(
+                DesktopAction::Failed("the provider has no models configured".to_owned()),
+                cx,
+            );
+            return;
+        };
+        // The bridge rebuilds the turn history from the ledger's typed
+        // events, so tool_use/tool_result pairing survives replay.
+        self.dispatch(
+            BridgeCommand::ChatTurn {
+                session,
+                branch,
+                expected_head,
+                provider_id: provider.id.clone(),
+                model,
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn send(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_text(draft, true, Some(window), cx);
+    }
+
+    /// Enqueues a follow-up while a turn is running; the composer stays free
+    /// for the next draft. The queue is capped so a stuck turn cannot grow
+    /// without bound.
+    pub(super) fn enqueue_follow_up(
+        &mut self,
+        draft: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.vm.queued.len() >= crate::view_model::MAX_QUEUED_MESSAGES {
+            return;
+        }
+        self.apply_action(DesktopAction::MessageQueued(draft), cx);
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// Starts the next queued follow-up once the in-flight turn is idle.
+    /// Does not wipe the composer: the user may already be typing another
+    /// message behind the queue.
+    pub(super) fn pump_queued_send(&mut self, cx: &mut Context<Self>) {
+        if self.vm.sending || self.vm.queued.is_empty() {
+            return;
+        }
+        let draft = self.vm.queued[0].clone();
+        self.apply_action(DesktopAction::QueuedMessageTaken, cx);
+        self.send_text(draft, false, None, cx);
+    }
+
+    fn send_text(
+        &mut self,
+        draft: String,
+        clear_composer: bool,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        if draft.trim().is_empty() {
+            return;
+        }
+        let Some(conversation) = self.vm.active.clone() else {
+            return;
+        };
+        let (Some(session), Some(branch)) = (
+            SessionId::parse(&conversation.session_id),
+            BranchId::parse(&conversation.branch_id),
+        ) else {
+            return;
+        };
+        let expected_head = crate::workspace::parse_head(&conversation.head);
+        self.apply_action(DesktopAction::TurnArmed, cx);
+        if clear_composer {
+            self.vm.composer_draft.clear();
+            if let Some(window) = window {
+                self.composer
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+            }
+        }
+        cx.notify();
+        self.dispatch(
+            BridgeCommand::SendMessage {
+                session,
+                branch,
+                expected_head,
+                text: draft,
+            },
+            cx,
+        );
+    }
+}

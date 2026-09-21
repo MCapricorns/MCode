@@ -1,7 +1,8 @@
 //! GPUI rendering for the workspace in the Desk look (docs/design/demo.html):
-//! a flat trading-desk ledger — hairline panels, near-zero radius, dense mono
-//! type — over the existing project/sidebar/conversation/settings structure.
-//! Functionality is unchanged; only the visual skin moves.
+//! tinted panels on a mint-to-violet ambient wash, hairline borders, small
+//! radii (3px chips and rows, 12-16px on the theme's own controls), dense
+//! mono captions, and signal-color lamps over the
+//! project/sidebar/conversation/settings structure.
 mod chat;
 mod context;
 pub(crate) mod desk;
@@ -24,7 +25,7 @@ use gpui_kit::{
 use crate::view_model::{MainView, UpdateState, cache_percent};
 use crate::workspace::Workspace;
 
-pub(crate) use settings::{BackendForm, McpForm, ProviderForm};
+pub(crate) use settings::{BackendForm, McpForm, ProviderForm, build_mcp_server};
 
 /// How much of the desk chrome fits the current window width.
 ///
@@ -416,8 +417,9 @@ fn tape_stat(
         .child(div().text_color(color).child(value.to_owned()))
 }
 
-/// Compact token-count spelling: 12.3k / 1.2M (mirrors context.rs).
-fn compact_count(count: u64) -> String {
+/// Compact token-count spelling: 12.3k / 1.2M. The one spelling shared by
+/// the tape and the inspector.
+pub(super) fn compact_count(count: u64) -> String {
     if count >= 1_000_000 {
         format!("{:.1}M", count as f64 / 1_000_000.0)
     } else if count >= 1_000 {
@@ -451,6 +453,34 @@ pub(super) fn icon_button(
         .hover(|this| this.bg(theme.secondary))
         .child(Icon::new(icon).with_size(px(14.)))
         .on_click(on_click)
+}
+
+/// A hover-revealed delete affordance: hidden until the parent row's group
+/// hovers, so rows stay clean at rest. Used by the welcome recents, the
+/// session rows, and the project menu rows.
+pub(super) fn hover_delete_button(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: IconName,
+    group: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(20.))
+        .rounded(px(2.))
+        .flex_shrink_0()
+        .opacity(0.0)
+        .group_hover(group, |this| this.opacity(1.0))
+        .cursor_pointer()
+        .text_color(theme.muted_foreground)
+        .hover(|this| this.bg(theme.secondary))
+        .on_click(on_click)
+        .child(Icon::new(icon).xsmall())
 }
 
 pub(super) fn short_id(id: &str) -> String {

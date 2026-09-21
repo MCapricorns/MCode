@@ -108,7 +108,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                                 row.input,
                                 row.input.saturating_add(row.output).max(1),
                                 desk.cyan,
-                                &compact(row.input),
+                                &super::compact_count(row.input),
                                 theme,
                             ))
                             .child(bar_row(
@@ -116,7 +116,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                                 row.output,
                                 row.input.saturating_add(row.output).max(1),
                                 desk.amber,
-                                &compact(row.output),
+                                &super::compact_count(row.output),
                                 theme,
                             ))
                             .when_some(share, |this, share| {
@@ -176,8 +176,8 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     desk.cyan,
                     &format!(
                         "{} / {} ({percent}%)",
-                        compact(turn.input),
-                        compact(context_window)
+                        super::compact_count(turn.input),
+                        super::compact_count(context_window)
                     ),
                     theme,
                 ));
@@ -185,7 +185,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                 children.push(kv_row(
                     "last-turn-Context",
                     "CONTEXT",
-                    &compact(turn.input),
+                    &super::compact_count(turn.input),
                     theme,
                 ));
             }
@@ -197,7 +197,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                     share,
                     100,
                     desk.green,
-                    &format!("{share}% of {}", compact(turn.input)),
+                    &format!("{share}% of {}", super::compact_count(turn.input)),
                     theme,
                 ));
             }
@@ -206,7 +206,7 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                 turn.output,
                 turn.input.max(turn.output).max(1),
                 desk.amber,
-                &compact(turn.output),
+                &super::compact_count(turn.output),
                 theme,
             ));
             if turn.elapsed_ms > 0 {
@@ -528,14 +528,4 @@ fn bar_row(
                 .child(figure.to_owned()),
         )
         .into_any_element()
-}
-
-fn compact(count: u64) -> String {
-    if count >= 1_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else if count >= 1_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else {
-        count.to_string()
-    }
 }

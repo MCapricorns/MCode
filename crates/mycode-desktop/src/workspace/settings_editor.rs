@@ -1,0 +1,722 @@
+//! The settings editor half of the workspace: form entities, provider and
+//! backend rows, MCP forms, subagent routes, the platform shell, and the
+//! save pipeline they all feed.
+use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::{AppContext as _, Context, Entity, Window};
+
+use mycode_app::BridgeCommand;
+
+use crate::ui::{BackendForm, McpForm, ProviderForm, build_mcp_server};
+use crate::view_model::DesktopAction;
+use crate::workspace::Workspace;
+
+impl Workspace {
+    pub(crate) fn settings_ua_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if self.ua_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(mycode_config::default_user_agent())
+            });
+            cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    workspace.apply_action(DesktopAction::SettingsUserAgentChanged(text), cx);
+                }
+            })
+            .detach();
+            self.ua_input = Some(input);
+        }
+        let input = self.ua_input.clone().expect("ua input");
+        if self.ua_sync_pending {
+            let target = self
+                .vm
+                .settings
+                .as_ref()
+                .map(|settings| settings.user_agent.clone())
+                .unwrap_or_default();
+            let current = input.read(cx).value().to_string();
+            if current != target {
+                input.update(cx, |state, cx| state.set_value(target, window, cx));
+            }
+            self.ua_sync_pending = false;
+        }
+        input
+    }
+
+    pub(crate) fn provider_form(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ProviderForm> {
+        self.provider_form
+            .get_or_insert_with(|| ProviderForm::new(window, cx))
+            .clone()
+    }
+
+    pub(crate) fn on_add_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.provider_form.clone() else {
+            return;
+        };
+        let id = form.read(cx).id.read(cx).value().trim().to_string();
+        let kind = form.read(cx).kind.clone();
+        let base_url = form.read(cx).base_url.read(cx).value().trim().to_string();
+        let model = form.read(cx).model.read(cx).value().trim().to_string();
+        let api_key = form.read(cx).api_key.read(cx).value().trim().to_string();
+        let context_limit = super::parse_token_field(&form.read(cx).context_limit.read(cx).value());
+        let max_output = super::parse_token_field(&form.read(cx).max_output.read(cx).value());
+        if id.is_empty() || base_url.is_empty() || model.is_empty() {
+            self.apply_action(
+                DesktopAction::Failed("fill id, base URL, and model".to_owned()),
+                cx,
+            );
+            return;
+        }
+        let (context_limit, max_output) = match (context_limit, max_output) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => {
+                self.apply_action(
+                    DesktopAction::Failed(
+                        "context window and max output must be plain numbers".to_owned(),
+                    ),
+                    cx,
+                );
+                return;
+            }
+        };
+        self.apply_action(
+            DesktopAction::SettingsProviderAdded(mycode_config::ProviderSettings {
+                id: id.clone(),
+                kind,
+                base_url,
+                models: vec![model],
+                enabled: true,
+                context_limit,
+                max_output,
+            }),
+            cx,
+        );
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: id,
+                    api_key,
+                },
+                cx,
+            );
+        }
+        self.apply_action(
+            DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
+            cx,
+        );
+    }
+
+    pub(crate) fn on_remove_provider(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::SettingsProviderRemoved(index), cx);
+    }
+
+    // ---- provider presets from the catalog ----
+
+    /// The filter input for the provider preset picker.
+    pub(crate) fn preset_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if self.preset_search_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter providers…"));
+            cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = entity.read(cx).value().to_string();
+                    workspace.apply_action(DesktopAction::PresetSearchChanged(text), cx);
+                }
+            })
+            .detach();
+            self.preset_search_input = Some(input);
+        }
+        self.preset_search_input
+            .clone()
+            .expect("preset search input")
+    }
+
+    pub(crate) fn on_open_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        self.preset_key_input = None;
+        self.apply_action(
+            DesktopAction::ActivePresetChanged(Some(provider_id.to_owned())),
+            cx,
+        );
+    }
+
+    pub(crate) fn on_close_preset(&mut self, cx: &mut Context<Self>) {
+        self.preset_key_input = None;
+        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+    }
+
+    /// Starts an OAuth device-flow sign-in with the checked model list.
+    pub(crate) fn on_start_oauth_sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some(provider_id) = self.vm.active_preset.clone() else {
+            return;
+        };
+        let models = self.vm.preset_models.clone();
+        self.dispatch(
+            BridgeCommand::StartOAuthSignIn {
+                provider_id,
+                models,
+            },
+            cx,
+        );
+    }
+
+    pub(crate) fn preset_key_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.preset_key_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+            })
+            .clone()
+    }
+
+    /// Adds one catalog preset: provider entry plus stored key, then saves.
+    pub(crate) fn on_add_preset(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        let Some(catalog) = self.vm.catalog.clone() else {
+            return;
+        };
+        let Some(preset) = catalog.provider(provider_id) else {
+            return;
+        };
+        // Checked models in catalog order; an empty selection falls back to
+        // the catalog's first model.
+        let checked = self.vm.preset_models.clone();
+        let mut models: Vec<String> = preset
+            .models
+            .iter()
+            .filter(|entry| checked.contains(&entry.id))
+            .map(|entry| entry.id.clone())
+            .collect();
+        if models.is_empty() {
+            let Some(first) = preset.models.first() else {
+                return;
+            };
+            models.push(first.id.clone());
+        }
+        let model = models[0].clone();
+        // Unique id: the catalog spelling, suffixed when already configured.
+        let mut id = preset.id.clone();
+        let mut suffix = 2;
+        while self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
+        {
+            id = format!("{}-{suffix}", preset.id);
+            suffix += 1;
+        }
+        let api_key = self
+            .preset_key_input
+            .clone()
+            .map(|input| input.read(cx).value().trim().to_owned())
+            .unwrap_or_default();
+        // Drop the input entity so the pasted key never lingers on screen.
+        self.preset_key_input = None;
+        self.apply_action(
+            DesktopAction::SettingsProviderAdded(mycode_config::ProviderSettings {
+                id: id.clone(),
+                kind: preset.kind.clone(),
+                base_url: preset.base_url.clone(),
+                models,
+                enabled: true,
+                context_limit: None,
+                max_output: None,
+            }),
+            cx,
+        );
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: id.clone(),
+                    api_key,
+                },
+                cx,
+            );
+        }
+        self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
+        self.apply_action(DesktopAction::ProviderSelected(id.clone()), cx);
+        self.apply_action(DesktopAction::ModelSelected(model), cx);
+        self.on_save_settings(cx);
+        self.persist_ui_state(cx);
+    }
+
+    // ---- web search backends ----
+
+    pub(crate) fn backend_form(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<BackendForm> {
+        self.backend_form
+            .get_or_insert_with(|| BackendForm::new(window, cx))
+            .clone()
+    }
+
+    pub(crate) fn on_add_backend(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.backend_form.clone() else {
+            return;
+        };
+        let id = form.read(cx).id.read(cx).value().trim().to_string();
+        let kind = form.read(cx).kind.read(cx).value().trim().to_string();
+        let endpoint = form.read(cx).endpoint.read(cx).value().trim().to_string();
+        if id.is_empty() || kind.is_empty() || endpoint.is_empty() {
+            self.apply_action(
+                DesktopAction::Failed("fill id, kind, and endpoint".to_owned()),
+                cx,
+            );
+            return;
+        }
+        self.apply_action(
+            DesktopAction::SettingsBackendAdded(mycode_config::WebBackendSettings {
+                id,
+                kind,
+                endpoint,
+                enabled: false,
+            }),
+            cx,
+        );
+    }
+
+    pub(crate) fn on_remove_backend(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::SettingsBackendRemoved(index), cx);
+    }
+
+    pub(crate) fn web_key_input(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.web_key_inputs
+            .entry(id.to_owned())
+            .or_insert_with(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx).placeholder("paste API key (Bearer is added)")
+                })
+            })
+            .clone()
+    }
+
+    pub(crate) fn on_save_web_key(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(input) = self.web_key_inputs.get(id).cloned() else {
+            return;
+        };
+        let api_key = mycode_config::normalize_api_key(&input.read(cx).value());
+        self.dispatch(
+            BridgeCommand::SaveProviderKey {
+                provider_id: format!("web-{id}"),
+                api_key,
+            },
+            cx,
+        );
+    }
+
+    // ---- MCP servers ----
+
+    pub(crate) fn mcp_form(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<McpForm> {
+        self.mcp_form
+            .get_or_insert_with(|| McpForm::new(window, cx))
+            .clone()
+    }
+
+    pub(crate) fn mcp_key_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.mcp_key_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("paste API key here"))
+            })
+            .clone()
+    }
+
+    /// Adds the server the custom form currently describes: the pure builder
+    /// next to [`McpForm`] validates the fields, this method dispatches.
+    pub(crate) fn on_add_mcp(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.mcp_form.clone() else {
+            return;
+        };
+        let (id, transport, endpoint, command, env_line, api_key) = {
+            let read = form.read(cx);
+            (
+                read.id.read(cx).value().trim().to_string(),
+                read.transport.clone(),
+                read.endpoint.read(cx).value().trim().to_string(),
+                read.command.read(cx).value().trim().to_string(),
+                read.env.read(cx).value().trim().to_string(),
+                read.api_key.read(cx).value().trim().to_string(),
+            )
+        };
+        if id.is_empty() {
+            self.apply_action(DesktopAction::Failed("fill id".to_owned()), cx);
+            return;
+        }
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
+        {
+            self.apply_action(
+                DesktopAction::Failed(format!("an MCP server named '{id}' already exists")),
+                cx,
+            );
+            return;
+        }
+        let server = match build_mcp_server(&id, &transport, &endpoint, &command, &env_line) {
+            Ok(server) => server,
+            Err(message) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+                return;
+            }
+        };
+        self.apply_action(DesktopAction::SettingsMcpAdded(server), cx);
+        if !api_key.is_empty() {
+            self.dispatch(
+                BridgeCommand::SaveProviderKey {
+                    provider_id: format!("mcp-{id}"),
+                    api_key,
+                },
+                cx,
+            );
+        }
+    }
+
+    pub(crate) fn mcp_json_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        self.mcp_json_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .placeholder("Paste mcp.json or a Claude Desktop / Cursor config…")
+                        .auto_grow(4, 16)
+                })
+            })
+            .clone()
+    }
+
+    pub(crate) fn on_import_mcp_json(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = self.mcp_json_input.clone() else {
+            return;
+        };
+        let raw = input.read(cx).value().to_string();
+        let imported = match mycode_config::parse_mcp_import(&raw) {
+            Ok(imported) => imported,
+            Err(message) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+                return;
+            }
+        };
+        let mut existing: Vec<String> = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| {
+                settings
+                    .mcp_servers
+                    .iter()
+                    .map(|server| server.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for row in imported {
+            if existing.contains(&row.server.id) {
+                self.apply_action(
+                    DesktopAction::Failed(format!(
+                        "an MCP server named '{}' already exists",
+                        row.server.id
+                    )),
+                    cx,
+                );
+                continue;
+            }
+            let server_id = row.server.id.clone();
+            existing.push(server_id.clone());
+            let api_key = row.api_key.clone();
+            self.apply_action(DesktopAction::SettingsMcpAdded(row.server), cx);
+            if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
+                self.dispatch(
+                    BridgeCommand::SaveProviderKey {
+                        provider_id: format!("mcp-{server_id}"),
+                        api_key,
+                    },
+                    cx,
+                );
+            }
+        }
+    }
+
+    // ---- subagent routes ----
+
+    pub(crate) fn on_subagent_role_enabled(
+        &mut self,
+        role: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        next.role_mut(role).enabled = enabled;
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+    }
+
+    pub(crate) fn on_toggle_subagent_menu(
+        &mut self,
+        role: &str,
+        field: &str,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let next = open.then(|| (role.to_owned(), field.to_owned()));
+        self.apply_action(DesktopAction::SubagentMenuToggled(next), cx);
+    }
+
+    pub(crate) fn on_set_subagent_thinking(
+        &mut self,
+        role: &str,
+        thinking: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        let entry = next.role_mut(role);
+        entry.thinking = thinking.filter(|level| level != "inherit" && level != "default");
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+    }
+
+    pub(crate) fn on_set_subagent_route(
+        &mut self,
+        role: &str,
+        provider: Option<String>,
+        model: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        let entry = next.role_mut(role);
+        if provider.as_deref() == Some("inherit") || model.as_deref() == Some("inherit") {
+            entry.provider = None;
+            entry.model = None;
+        } else if let Some(provider) = provider {
+            let model = model.or_else(|| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|item| item.id == provider)
+                    .and_then(|item| item.models.first().cloned())
+            });
+            match model {
+                Some(model) => {
+                    entry.provider = Some(provider);
+                    entry.model = Some(model);
+                }
+                None => {
+                    entry.provider = None;
+                    entry.model = None;
+                }
+            }
+        } else if let Some(model) = model {
+            let fallback = self.vm.selected_provider.clone().or_else(|| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|item| item.enabled)
+                    .map(|item| item.id.clone())
+            });
+            match fallback {
+                Some(provider) => {
+                    entry.provider = Some(provider);
+                    entry.model = Some(model);
+                }
+                None => {
+                    entry.provider = None;
+                    entry.model = None;
+                }
+            }
+        }
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+    }
+
+    // ---- platform shell ----
+
+    pub(crate) fn on_detect_shell(&mut self, cx: &mut Context<Self>) {
+        let Some(detected) = mycode_tools::detect_default_shell() else {
+            self.apply_action(
+                DesktopAction::Failed(
+                    "No usable shell was found. Browse to pwsh, powershell, cmd, or bash."
+                        .to_owned(),
+                ),
+                cx,
+            );
+            return;
+        };
+        self.set_shell_preference(
+            detected.kind.as_str(),
+            &detected.program.to_string_lossy(),
+            "auto",
+            cx,
+        );
+        self.on_save_settings(cx);
+    }
+
+    pub(crate) fn on_browse_shell(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose a shell executable".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.first() else {
+                return;
+            };
+            let program = path.to_string_lossy().into_owned();
+            let kind = mycode_tools::ShellKind::from_program(path);
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.set_shell_preference(kind.as_str(), &program, "user", cx);
+                workspace.on_save_settings(cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn on_set_shell_kind(&mut self, kind: &str, cx: &mut Context<Self>) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let current = settings.tools.shell.clone().unwrap_or_default();
+        if current.kind == kind && !current.program.is_empty() {
+            return;
+        }
+        if let Some(detected) =
+            mycode_tools::detect_default_shell().filter(|detected| detected.kind.as_str() == kind)
+        {
+            self.set_shell_preference(kind, &detected.program.to_string_lossy(), "user", cx);
+        } else if !current.program.is_empty()
+            && mycode_tools::ShellKind::from_program(std::path::Path::new(&current.program))
+                .as_str()
+                == kind
+        {
+            self.set_shell_preference(kind, &current.program, "user", cx);
+        } else {
+            self.apply_action(
+                DesktopAction::Failed(format!(
+                    "No {kind} executable was found. Use Browse to pick one."
+                )),
+                cx,
+            );
+        }
+        self.on_save_settings(cx);
+    }
+
+    fn set_shell_preference(
+        &mut self,
+        kind: &str,
+        program: &str,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut tools = settings.tools.clone();
+        tools.shell = Some(mycode_config::ShellSettings {
+            kind: kind.to_owned(),
+            program: program.to_owned(),
+            source: source.to_owned(),
+        });
+        self.apply_action(DesktopAction::SettingsToolsChanged(tools), cx);
+        self.apply_runtime_shell();
+    }
+
+    /// Pushes the configured shell into the tool runtime's process-global
+    /// slot so newly spawned tool children use it.
+    pub(super) fn apply_runtime_shell(&mut self) {
+        let shell = self.vm.settings.as_ref().and_then(|settings| {
+            let configured = settings.tools.shell.as_ref()?;
+            let program = configured.program.trim();
+            if program.is_empty() {
+                return None;
+            }
+            let kind = mycode_tools::ShellKind::parse(&configured.kind).unwrap_or_else(|| {
+                mycode_tools::ShellKind::from_program(std::path::Path::new(program))
+            });
+            Some(mycode_tools::DetectedShell {
+                kind,
+                program: std::path::PathBuf::from(program),
+            })
+        });
+        mycode_tools::set_runtime_shell(shell);
+    }
+
+    pub(super) fn bind_unbound_to_active_project(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.vm.project_dir.clone() else {
+            return;
+        };
+        let before = self.vm.session_projects.len();
+        self.apply_action(DesktopAction::UnboundSessionsAssigned(project), cx);
+        if self.vm.session_projects.len() != before {
+            self.persist_ui_state(cx);
+        }
+    }
+
+    /// Persists the settings document under CAS when local edits exist.
+    pub(crate) fn on_save_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(settings) = self.vm.settings.clone() else {
+            return;
+        };
+        if settings.saving || !settings.dirty {
+            return;
+        }
+        let document = settings.to_settings();
+        if let Err(message) = document.validate() {
+            self.apply_action(
+                DesktopAction::Failed(format!("invalid settings: {message}")),
+                cx,
+            );
+            return;
+        }
+        self.vm.settings.as_mut().expect("settings").saving = true;
+        let revision = mycode_config::AuthorityRevision::new(settings.revision)
+            .unwrap_or(mycode_config::AuthorityRevision::ABSENT);
+        cx.notify();
+        self.dispatch(
+            BridgeCommand::SaveSettings {
+                expected_revision: revision,
+                settings: document,
+            },
+            cx,
+        );
+    }
+}

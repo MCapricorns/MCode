@@ -2,14 +2,17 @@
 //! Day and night each stay on their own surface: light stays light, dark
 //! stays dark, with a mint-to-violet ambient wash behind the glass.
 use gpui_kit::component::theme::{Theme, ThemeMode};
-use gpui_kit::{Background, Hsla, black, linear_color_stop, linear_gradient};
+use gpui_kit::{
+    Background, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Stateful,
+    Styled as _, black, div, linear_color_stop, linear_gradient, px,
+};
 
 fn is_dark(theme: &Theme) -> bool {
     theme.mode == ThemeMode::Dark
 }
 
 /// Linear interpolation between two colors in HSL space; `t` 0 keeps `from`.
-pub(super) fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
+fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
     Hsla {
         h: from.h + (to.h - from.h) * t,
         s: from.s + (to.s - from.s) * t,
@@ -19,7 +22,7 @@ pub(super) fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
 }
 
 /// Rotates a color's hue for gradient endpoints.
-pub(super) fn hue_shift(color: Hsla, degrees: f32) -> Hsla {
+fn hue_shift(color: Hsla, degrees: f32) -> Hsla {
     Hsla {
         h: color.h + degrees,
         ..color
@@ -93,4 +96,38 @@ pub(super) fn accent(theme: &Theme, angle: f32) -> Background {
         linear_color_stop(theme.green, 0.),
         linear_color_stop(hue_shift(theme.magenta, 12.), 1.),
     )
+}
+
+/// A small mono tag chip: the bordered, letterspaced desk label used for
+/// ledger tags and capability chips. The chip sits in a row so a flex-col
+/// parent cannot stretch it full width.
+pub(super) fn mono_chip(label: &str, color: Hsla, border: Hsla, theme: &Theme) -> impl IntoElement {
+    div().flex().flex_row().child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .px(px(7.))
+            .py(px(2.))
+            .border_1()
+            .border_color(border)
+            .rounded(px(2.))
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(color)
+            .child(label.to_owned()),
+    )
+}
+
+/// The shared floating-panel recipe: hairline glass border, near-opaque
+/// popover fill, popover ink, and a soft shadow at the desk's tight radius.
+pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .rounded(px(3.))
+        .border_1()
+        .border_color(glass_border(theme))
+        .bg(popover(theme))
+        .text_color(theme.popover_foreground)
+        .shadow_lg()
 }

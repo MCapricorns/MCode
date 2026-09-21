@@ -255,28 +255,18 @@ fn session_row(
                     .child(summary.event_count.to_string()),
             )
         })
-        .child(
-            div()
-                .id(format!("session-delete-{}", summary.session_id))
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(20.))
-                .rounded(px(2.))
-                .flex_shrink_0()
-                .opacity(0.0)
-                .group_hover("session-row", |this| this.opacity(1.0))
-                .cursor_pointer()
-                .text_color(theme.muted_foreground)
-                .hover(|this| this.bg(theme.sidebar_accent))
-                .on_click({
-                    let session_id = session_id.clone();
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_delete_session(&session_id, cx);
-                    })
+        .child(super::hover_delete_button(
+            format!("session-delete-{}", summary.session_id),
+            IconName::Trash,
+            "session-row",
+            {
+                let session_id = session_id.clone();
+                cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_delete_session(&session_id, cx);
                 })
-                .child(Icon::new(IconName::Trash).xsmall()),
-        )
+            },
+            cx,
+        ))
 }
 
 /// Collapsed header for another project's session group; clicking switches
@@ -432,20 +422,13 @@ pub(super) fn render_project_menu_layer(
                 })),
         )
         .child(
-            div()
-                .id("project-menu")
+            skin::popover_panel("project-menu", theme)
                 .absolute()
                 .top(px(40.))
                 .left(px(8.))
                 .w(px(244.))
                 .max_h(px(430.))
                 .overflow_y_scroll()
-                .rounded(px(3.))
-                .border_1()
-                .border_color(skin::glass_border(theme))
-                .bg(skin::popover(theme))
-                .text_color(theme.popover_foreground)
-                .shadow_lg()
                 .p_1()
                 .flex()
                 .flex_col()
@@ -565,28 +548,18 @@ fn project_menu_row(
                         .child(path.clone()),
                 ),
         )
-        .child(
-            div()
-                .id(format!("project-remove-{}", short_id(path.as_str())))
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(20.))
-                .rounded(px(2.))
-                .flex_shrink_0()
-                .opacity(0.0)
-                .group_hover("project-row", |this| this.opacity(1.0))
-                .cursor_pointer()
-                .text_color(theme.muted_foreground)
-                .hover(|this| this.bg(theme.sidebar_accent))
-                .on_click({
-                    let path = path.clone();
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_remove_recent(&path, cx);
-                    })
+        .child(super::hover_delete_button(
+            format!("project-remove-{}", short_id(path.as_str())),
+            IconName::X,
+            "project-row",
+            {
+                let path = path.clone();
+                cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_remove_recent(&path, cx);
                 })
-                .child(Icon::new(IconName::X).xsmall()),
-        )
+            },
+            cx,
+        ))
 }
 
 fn menu_action_row(
