@@ -377,7 +377,8 @@ fn public_contract_keeps_shell_name_and_unsandboxed_boundary() {
     assert!(spec.params_schema["properties"]["command"].is_object());
     assert!(spec.params_schema["properties"]["timeout_secs"].is_object());
     assert!(spec.description.contains("platform-shell"));
-    assert!(spec.description.contains("PowerShell 7"));
+    assert!(spec.description.contains("configurable"));
+    assert!(spec.description.contains("pwsh"));
     assert!(spec.description.contains("unsandboxed"));
     assert!(spec.description.contains("not a sandbox"));
     assert!(spec.description.contains("no Core permission prompt"));
@@ -387,6 +388,61 @@ fn public_contract_keeps_shell_name_and_unsandboxed_boundary() {
     assert!(dyn_tool.mutates_fs());
     assert!(!dyn_tool.requires_file_preflight());
     assert!(!dyn_tool.requires_search_preflight());
+}
+
+#[test]
+fn powershell_51_args_include_output_format_text_before_encoded_command() {
+    let args = powershell_args("ZgA=".into(), ShellKind::PowerShell);
+    let output_format = args
+        .iter()
+        .position(|argument| argument == "-OutputFormat")
+        .expect("-OutputFormat");
+    assert_eq!(
+        args.get(output_format + 1).map(String::as_str),
+        Some("Text")
+    );
+    let encoded = args
+        .iter()
+        .position(|argument| argument == "-EncodedCommand")
+        .expect("-EncodedCommand");
+    assert!(output_format < encoded);
+}
+
+#[test]
+fn clixml_stderr_is_sanitized_to_readable_error_text() {
+    let fixture = concat!(
+        "#< CLIXML\n",
+        r#"<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04">"#,
+        r#"<S S="Error">CantActivateDocumentInPipeline: boom_x000D__x000A_</S>"#,
+        "</Objs>\n",
+    );
+    let cleaned = sanitize_captured_shell_text(fixture);
+    assert!(!cleaned.contains("#< CLIXML"), "{cleaned}");
+    assert!(
+        cleaned.contains("CantActivateDocumentInPipeline: boom"),
+        "{cleaned}"
+    );
+    assert!(!cleaned.contains("_x000D_"), "{cleaned}");
+
+    let mut stderr = CapturedStream::new();
+    stderr.retained = fixture.as_bytes().to_vec();
+    stderr.total_bytes = u64::try_from(stderr.retained.len()).unwrap();
+    let result = format_result(
+        None,
+        "fixture",
+        "powershell.exe",
+        CapturedStream::default(),
+        stderr,
+        0,
+        true,
+        None,
+    );
+    let text = text_of(&result);
+    assert!(!text.contains("#< CLIXML"), "{text}");
+    assert!(
+        text.contains("CantActivateDocumentInPipeline: boom"),
+        "{text}"
+    );
 }
 
 #[test]

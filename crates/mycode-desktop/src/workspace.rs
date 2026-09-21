@@ -99,8 +99,9 @@ impl Workspace {
     ) -> Entity<Self> {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Message MYCode…  (Enter to send, Shift+Enter for a new line)")
+                .placeholder("Message MYCode…")
                 .auto_grow(1, 10)
+                .submit_on_enter(true)
         });
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
@@ -391,6 +392,7 @@ impl Workspace {
         match reply {
             BridgeReply::Sessions(Ok(sessions)) => {
                 self.apply_action(DesktopAction::SessionsLoaded(sessions), cx);
+                self.bind_unbound_to_active_project(cx);
             }
             BridgeReply::Created(Ok(summary)) => {
                 let session_id = SessionId::parse(&summary.session_id).expect("core session id");
@@ -451,6 +453,7 @@ impl Workspace {
                 }
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
+                self.apply_runtime_shell(cx);
             }
             BridgeReply::Exported(Ok(_summary)) => {}
             BridgeReply::Exported(Err(message)) => {
@@ -562,6 +565,7 @@ impl Workspace {
                     },
                     cx,
                 );
+                self.bind_unbound_to_active_project(cx);
                 self.refresh_skills(cx);
             }
             BridgeReply::UiState(Err(_)) => {}
@@ -629,6 +633,10 @@ impl Workspace {
             SessionId::parse(&conversation.session_id),
             BranchId::parse(&conversation.branch_id),
         ) else {
+            self.apply_action(
+                DesktopAction::Failed("the open session could not be read".to_owned()),
+                cx,
+            );
             return;
         };
         let expected_head = parse_head(&conversation.head);
@@ -886,10 +894,11 @@ impl Workspace {
         else {
             return;
         };
-        let Ok(body) = mycode_config::read_resource(&skill.path) else {
-            return;
-        };
-        self.pending_composer_prefill = Some(format!("/{slug}\n\n{body}\n\n"));
+        let path = skill.path.display();
+        self.pending_composer_prefill = Some(format!(
+            "/{slug}\n\nFollow the `{title}` skill. Read `{path}` and apply it before continuing.\n",
+            title = skill.title
+        ));
         cx.notify();
     }
 
@@ -994,11 +1003,30 @@ impl Workspace {
         self.dispatch(BridgeCommand::CreateSession, cx);
     }
 
-    /// Switches the sidebar's active project filter (no session rebinding).
+    /// Switches the sidebar's active project and binds the open chat to it.
     pub(super) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
-        self.apply_action(DesktopAction::ActiveProjectChanged(project), cx);
-        self.refresh_skills(cx);
+        self.apply_action(DesktopAction::ActiveProjectChanged(project.clone()), cx);
+        if let Some(project) = project {
+            if let Some(session_id) = self.vm.active.as_ref().map(|c| c.session_id.clone()) {
+                self.apply_action(
+                    DesktopAction::SessionProjectBound {
+                        session_id: session_id.clone(),
+                        project: project.clone(),
+                    },
+                    cx,
+                );
+                self.dispatch(
+                    BridgeCommand::SetProjectDir {
+                        session_id,
+                        path: Some(project.clone()),
+                    },
+                    cx,
+                );
+            }
+            self.apply_action(DesktopAction::UnboundSessionsAssigned(project), cx);
+            self.refresh_skills(cx);
+        }
         self.persist_ui_state(cx);
     }
 
@@ -1098,6 +1126,10 @@ impl Workspace {
             self.apply_action(DesktopAction::ReasoningMenuToggled(false), cx);
             dismissed = true;
         }
+        if self.vm.subagent_menu.is_some() {
+            self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+            dismissed = true;
+        }
         if self.vm.preset_model_menu_open {
             self.apply_action(DesktopAction::PresetModelMenuToggled(false), cx);
             dismissed = true;
@@ -1134,7 +1166,10 @@ impl Workspace {
     }
 
     pub(super) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let draft = self.vm.composer_draft.clone();
+        let draft = self.composer.read(cx).value().to_string();
+        if draft != self.vm.composer_draft {
+            self.apply_action(DesktopAction::ComposerChanged(draft.clone()), cx);
+        }
         if self.vm.sending {
             if !draft.trim().is_empty() {
                 self.enqueue_follow_up(draft, window, cx);
@@ -1345,7 +1380,18 @@ impl Workspace {
             .as_ref()
             .map(|conversation| conversation.session_id.clone())
             .expect("active session");
+        self.apply_action(
+            DesktopAction::SessionProjectBound {
+                session_id: session_id.clone(),
+                project: project.to_owned(),
+            },
+            cx,
+        );
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        self.apply_action(
+            DesktopAction::UnboundSessionsAssigned(project.to_owned()),
+            cx,
+        );
         self.dispatch(
             BridgeCommand::SetProjectDir {
                 session_id: session_id.clone(),
@@ -2022,47 +2068,21 @@ impl Workspace {
         self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
     }
 
-    pub(super) fn on_cycle_subagent_thinking(&mut self, role: &str, cx: &mut Context<Workspace>) {
-        let Some((provider, model, mut next)) = self.vm.settings.as_ref().map(|settings| {
-            let route = settings.subagents.role(role);
-            (
-                route
-                    .and_then(|entry| entry.provider.clone())
-                    .or_else(|| self.vm.selected_provider.clone()),
-                route
-                    .and_then(|entry| entry.model.clone())
-                    .or_else(|| self.vm.selected_model.clone()),
-                settings.subagents.clone(),
-            )
-        }) else {
-            return;
-        };
-        let levels = crate::view_model::reasoning_levels_for(
-            &self.vm,
-            provider.as_deref(),
-            model.as_deref(),
-        );
-        let entry = next.role_mut(role);
-        let current = entry.thinking.as_deref().unwrap_or("default");
-        let next_level = levels
-            .iter()
-            .position(|level| level == current)
-            .and_then(|index| levels.get(index + 1))
-            .or_else(|| levels.first())
-            .map(String::as_str)
-            .unwrap_or("default");
-        entry.thinking = if next_level == "default" {
-            None
-        } else {
-            Some(next_level.to_owned())
-        };
-        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
-    }
-
-    pub(super) fn on_cycle_subagent_provider(
+    pub(super) fn on_toggle_subagent_menu(
         &mut self,
         role: &str,
-        ids: &[String],
+        field: &str,
+        open: bool,
+        cx: &mut Context<Workspace>,
+    ) {
+        let next = open.then(|| (role.to_owned(), field.to_owned()));
+        self.apply_action(DesktopAction::SubagentMenuToggled(next), cx);
+    }
+
+    pub(super) fn on_set_subagent_thinking(
+        &mut self,
+        role: &str,
+        thinking: Option<String>,
         cx: &mut Context<Workspace>,
     ) {
         let Some(settings) = self.vm.settings.as_ref() else {
@@ -2070,26 +2090,179 @@ impl Workspace {
         };
         let mut next = settings.subagents.clone();
         let entry = next.role_mut(role);
-        entry.provider = cycle_optional(entry.provider.as_deref(), ids);
-        if entry.provider.is_none() {
+        entry.thinking = thinking.filter(|level| level != "inherit" && level != "default");
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
+    }
+
+    pub(super) fn on_set_subagent_route(
+        &mut self,
+        role: &str,
+        provider: Option<String>,
+        model: Option<String>,
+        cx: &mut Context<Workspace>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        let entry = next.role_mut(role);
+        if provider.as_deref() == Some("inherit") || model.as_deref() == Some("inherit") {
+            entry.provider = None;
             entry.model = None;
+        } else if let Some(provider) = provider {
+            let model = model.or_else(|| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|item| item.id == provider)
+                    .and_then(|item| item.models.first().cloned())
+            });
+            match model {
+                Some(model) => {
+                    entry.provider = Some(provider);
+                    entry.model = Some(model);
+                }
+                None => {
+                    entry.provider = None;
+                    entry.model = None;
+                }
+            }
+        } else if let Some(model) = model {
+            let fallback = self.vm.selected_provider.clone().or_else(|| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|item| item.enabled)
+                    .map(|item| item.id.clone())
+            });
+            match fallback {
+                Some(provider) => {
+                    entry.provider = Some(provider);
+                    entry.model = Some(model);
+                }
+                None => {
+                    entry.provider = None;
+                    entry.model = None;
+                }
+            }
         }
         self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
     }
 
-    pub(super) fn on_cycle_subagent_model(
-        &mut self,
-        role: &str,
-        models: &[String],
-        cx: &mut Context<Workspace>,
-    ) {
+    pub(super) fn on_detect_shell(&mut self, cx: &mut Context<Self>) {
+        let Some(detected) = mycode_tools::detect_default_shell() else {
+            self.apply_action(
+                DesktopAction::Failed(
+                    "No usable shell was found. Browse to pwsh, powershell, cmd, or bash."
+                        .to_owned(),
+                ),
+                cx,
+            );
+            return;
+        };
+        self.set_shell_preference(
+            detected.kind.as_str(),
+            &detected.program.to_string_lossy(),
+            "auto",
+            cx,
+        );
+        self.on_save_settings(cx);
+    }
+
+    pub(super) fn on_browse_shell(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose a shell executable".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.first() else {
+                return;
+            };
+            let program = path.to_string_lossy().into_owned();
+            let kind = mycode_tools::ShellKind::from_program(path);
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.set_shell_preference(kind.as_str(), &program, "user", cx);
+                workspace.on_save_settings(cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn on_set_shell_kind(&mut self, kind: &str, cx: &mut Context<Self>) {
         let Some(settings) = self.vm.settings.as_ref() else {
             return;
         };
-        let mut next = settings.subagents.clone();
-        let entry = next.role_mut(role);
-        entry.model = cycle_optional(entry.model.as_deref(), models);
-        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+        let current = settings.tools.shell.clone().unwrap_or_default();
+        if current.kind == kind && !current.program.is_empty() {
+            return;
+        }
+        if let Some(detected) = mycode_tools::detect_default_shell()
+            .filter(|detected| detected.kind.as_str() == kind)
+        {
+            self.set_shell_preference(kind, &detected.program.to_string_lossy(), "user", cx);
+        } else if !current.program.is_empty()
+            && mycode_tools::ShellKind::from_program(std::path::Path::new(&current.program)).as_str()
+                == kind
+        {
+            self.set_shell_preference(kind, &current.program, "user", cx);
+        } else {
+            self.apply_action(
+                DesktopAction::Failed(format!(
+                    "No {kind} executable was found. Use Browse to pick one."
+                )),
+                cx,
+            );
+        }
+        self.on_save_settings(cx);
+    }
+
+    fn set_shell_preference(&mut self, kind: &str, program: &str, source: &str, cx: &mut Context<Self>) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut tools = settings.tools.clone();
+        tools.shell = Some(mycode_config::ShellSettings {
+            kind: kind.to_owned(),
+            program: program.to_owned(),
+            source: source.to_owned(),
+        });
+        self.apply_action(DesktopAction::SettingsToolsChanged(tools), cx);
+        self.apply_runtime_shell(cx);
+    }
+
+    fn apply_runtime_shell(&mut self, _cx: &mut Context<Self>) {
+        let shell = self.vm.settings.as_ref().and_then(|settings| {
+            let configured = settings.tools.shell.as_ref()?;
+            let program = configured.program.trim();
+            if program.is_empty() {
+                return None;
+            }
+            let kind = mycode_tools::ShellKind::parse(&configured.kind)
+                .unwrap_or_else(|| mycode_tools::ShellKind::from_program(std::path::Path::new(program)));
+            Some(mycode_tools::DetectedShell {
+                kind,
+                program: std::path::PathBuf::from(program),
+            })
+        });
+        mycode_tools::set_runtime_shell(shell);
+    }
+
+    fn bind_unbound_to_active_project(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.vm.project_dir.clone() else {
+            return;
+        };
+        let before = self.vm.session_projects.len();
+        self.apply_action(DesktopAction::UnboundSessionsAssigned(project), cx);
+        if self.vm.session_projects.len() != before {
+            self.persist_ui_state(cx);
+        }
     }
 
     pub(super) fn on_save_settings(&mut self, cx: &mut Context<Self>) {
@@ -2118,19 +2291,6 @@ impl Workspace {
             },
             cx,
         );
-    }
-}
-
-fn cycle_optional(current: Option<&str>, options: &[String]) -> Option<String> {
-    if options.is_empty() {
-        return None;
-    }
-    match current {
-        None => Some(options[0].clone()),
-        Some(value) => options
-            .iter()
-            .position(|item| item == value)
-            .and_then(|index| options.get(index + 1).cloned()),
     }
 }
 

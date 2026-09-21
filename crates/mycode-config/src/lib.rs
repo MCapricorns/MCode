@@ -75,7 +75,7 @@ pub use pack_installation::{
 #[doc(inline)]
 pub use resources::{
     MAX_RESOURCE_BYTES, MAX_RESOURCES, MAX_TOTAL_PROMPT_CHARS, ResourceFile, SkillFile,
-    discover_resources, discover_skills, read_resource, render_resource_prompt,
+    discover_resources, discover_skills, read_resource, render_resource_prompt, render_skill_catalog,
 };
 #[doc(inline)]
 pub use root_composition::{
@@ -102,7 +102,8 @@ pub use settings::{
     AppSettings, AppearanceSettings, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
     MAX_PROVIDERS, MAX_SETTINGS_BYTES, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES,
     MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND,
-    SETTINGS_PATH, SubagentRoleSettings, SubagentSettings, UsageSettings, VALID_PROVIDER_KINDS,
+    SETTINGS_PATH, ShellSettings, SubagentRoleSettings, SubagentSettings, ToolsSettings,
+    UsageSettings, VALID_PROVIDER_KINDS, VALID_SHELL_KINDS,
     VALID_WEB_KINDS, WebBackendSettings, WebSettings, builtin_mcp_servers, builtin_web_backends,
     default_user_agent, read_app_settings, replace_app_settings, split_command_line,
 };

@@ -10,6 +10,7 @@ gpui-kit = "0.6"
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
 mycode-providers = { path = "../mycode-providers" }
+mycode-tools = { path = "../mycode-tools" }
 tokio = { workspace = true, features = ["sync"] }
 
 [target.'cfg(windows)'.build-dependencies]

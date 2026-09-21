@@ -1,18 +1,23 @@
 //! `shell` — run a platform-native shell command in the session cwd.
 //!
-//! The public name is `shell`. There is no `bash` alias. Windows uses
-//! PowerShell 7; POSIX hosts use an explicit POSIX shell candidate list.
-//! Launch always goes through structured exec: one cwd/env/PATH snapshot per
-//! call, allowlisted environment, pinned identity, and contained spawn.
-//! Candidate fallback is allowed only for a typed executable-not-found
-//! result. Execution is unsandboxed current-user file and network authority;
-//! environment filtering is not a sandbox. Valid calls run directly with no
-//! Core permission prompt. Use this tool for pipelines, redirection,
-//! expansion, and scripts; filesystem and search tools stay in-process.
+//! The public name is `shell`. There is no `bash` alias. Windows resolves one
+//! configured or detected shell (`pwsh`, Windows PowerShell, `cmd`, or Git
+//! bash). POSIX hosts use an explicit POSIX shell candidate list. Launch
+//! always goes through structured exec: one cwd/env/PATH snapshot per call,
+//! allowlisted environment, pinned identity, and contained spawn. Candidate
+//! fallback is allowed only for a typed executable-not-found result. Execution
+//! is unsandboxed current-user file and network authority; environment
+//! filtering is not a sandbox. Valid calls run directly with no Core
+//! permission prompt. Use this tool for pipelines, redirection, expansion,
+//! and scripts; filesystem and search tools stay in-process.
 use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+#[path = "shell_detect.rs"]
+mod detect;
+pub use detect::{
+    DetectedShell, ShellKind, detect_default_shell, runtime_shell, set_runtime_shell,
+};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -44,7 +49,7 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 #[cfg(any(windows, test))]
 const WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS: usize = 32_767;
 
-/// PowerShell arguments placed before the directly encoded user script.
+/// PowerShell 7 arguments placed before the directly encoded user script.
 #[cfg(any(windows, test))]
 const POWERSHELL_ARGUMENTS: &[&str] = &[
     "-NoLogo",
@@ -52,6 +57,20 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
     "-NonInteractive",
     "-ExecutionPolicy",
     "Bypass",
+    "-EncodedCommand",
+];
+
+/// Windows PowerShell 5.1 arguments. `-OutputFormat Text` must precede
+/// `-EncodedCommand` so redirected streams stay human text instead of CLIXML.
+#[cfg(any(windows, test))]
+const POWERSHELL_51_ARGUMENTS: &[&str] = &[
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-OutputFormat",
+    "Text",
     "-EncodedCommand",
 ];
 
@@ -64,6 +83,9 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
 #[cfg(windows)]
 const POWERSHELL_UTF8_PRELUDE: &str =
     "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }";
+
+#[cfg(windows)]
+const POWERSHELL_ERRORVIEW_PRELUDE: &str = "try { $ErrorView = 'NormalView' } catch { }";
 
 #[cfg(windows)]
 const WINDOWS_SHELL_EXECUTABLE: &str = "pwsh.exe";
@@ -87,6 +109,7 @@ const SHELL_CANDIDATES: &[ShellCandidate] = &[
 pub(crate) use crate::builtin::process::{MAX_RETAINED_OUTPUT_BYTES, read_bounded};
 
 /// Whether another shell candidate may be attempted.
+#[cfg(any(not(windows), test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellCandidateAction {
     /// PATH or path lookup missed the executable.
@@ -96,6 +119,7 @@ pub(crate) enum ShellCandidateAction {
 }
 
 /// Classifies a prepare failure for shell candidate fallback.
+#[cfg(any(not(windows), test))]
 #[must_use]
 pub(crate) fn shell_candidate_action(error: &ResolveError) -> ShellCandidateAction {
     if error.is_not_found() {
@@ -147,15 +171,16 @@ impl Default for ShellTool {
 /// Arguments for [`ShellTool`].
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShellArgs {
-    /// Command to execute with the platform shell (POSIX shell on
-    /// macOS/Linux, PowerShell 7 on Windows) using the session cwd.
+    /// Command to execute with the configurable platform shell (pwsh,
+    /// powershell, cmd, or bash on Windows; POSIX shell on macOS/Linux)
+    /// using the session cwd.
     pub command: String,
     /// Timeout in seconds for this command (default: 120).
     pub timeout_secs: Option<u64>,
 }
 
 struct PreparedShell {
-    identifier: &'static str,
+    identifier: String,
     invocation: PreparedInvocation,
     lease: ExecutionLease,
 }
@@ -172,13 +197,14 @@ impl Tool for ShellTool {
     fn description(&self) -> &str {
         "Execute a platform-shell script for pipelines, redirection, expansion, \
          and shell syntax. Filesystem and search tools stay in-process; do not \
-         use this tool to read, write, edit, grep, or find files. Windows uses \
-         PowerShell 7 (`pwsh.exe`); POSIX hosts use a POSIX shell. Execution is \
-         unsandboxed current-user execution with normal file and network access; \
-         environment filtering is not a sandbox. Same-account processes outside \
-         this host are outside the security boundary. Captured stdout/stderr is \
-         truncated beyond 50 KiB; a non-zero exit is an error result, not a \
-         tool failure. Default timeout: 120 s. There is no Core permission prompt."
+         use this tool to read, write, edit, grep, or find files. The platform \
+         shell is configurable (pwsh, powershell, cmd, or bash); POSIX hosts \
+         use a POSIX shell by default. Execution is unsandboxed current-user \
+         execution with normal file and network access; environment filtering \
+         is not a sandbox. Same-account processes outside this host are outside \
+         the security boundary. Captured stdout/stderr is truncated beyond \
+         50 KiB; a non-zero exit is an error result, not a tool failure. \
+         Default timeout: 120 s. There is no Core permission prompt."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -264,7 +290,7 @@ impl Tool for ShellTool {
                 format_result(
                     Some(status),
                     &command,
-                    shell_identifier,
+                    &shell_identifier,
                     stdout,
                     stderr,
                     duration_ms,
@@ -286,7 +312,7 @@ impl Tool for ShellTool {
             } => Ok(with_identity(
                 timed_out_result(
                     &command,
-                    shell_identifier,
+                    &shell_identifier,
                     stdout,
                     stderr,
                     duration_ms,
@@ -319,92 +345,18 @@ async fn prepare_shell(
     }
 }
 
-/// Adaptively locates a PowerShell interpreter: any installed PowerShell 7
-/// (well-known install roots beyond PATH), then the inbox Windows
-/// PowerShell 5.1. Returns `None` only when nothing usable exists locally,
-/// leaving the pinned network provision as the last resort.
 #[cfg(windows)]
-fn discover_windows_powershell() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(program_files) = std::env::var_os("ProgramFiles") {
-        candidates.push(
-            PathBuf::from(&program_files)
-                .join("PowerShell")
-                .join("7")
-                .join("pwsh.exe"),
-        );
-        // Store (MSIX) installs live in versioned directories such as
-        // `Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe`; the directory
-        // name changes per release, so scan for the prefix. Listing
-        // WindowsApps can be ACL-denied; that just skips this source.
-        candidates.extend(fuzzy_windows_apps_pwsh(&PathBuf::from(&program_files)));
-    }
-    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
-        candidates.push(
-            PathBuf::from(program_files_x86)
-                .join("PowerShell")
-                .join("7")
-                .join("pwsh.exe"),
-        );
-    }
-    if let Some(local_app_data) = std::env::var_os("LocalAppData") {
-        candidates.push(
-            PathBuf::from(local_app_data)
-                .join("Microsoft")
-                .join("WindowsApps")
-                .join("pwsh.exe"),
-        );
-    }
-    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
-        candidates.push(
-            PathBuf::from(user_profile)
-                .join("scoop")
-                .join("shims")
-                .join("pwsh.exe"),
-        );
-    }
-    if let Some(system_root) = std::env::var_os("SystemRoot") {
-        candidates.push(
-            PathBuf::from(system_root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
-        );
-    }
-    // Skip 0-byte Store execution aliases: they exist() but cannot be
-    // pinned. Prefer a real PE (Program Files / package dir) or inbox
-    // Windows PowerShell.
-    candidates
-        .into_iter()
-        .find(|path| powershell_image_looks_pinnable(path))
+fn no_usable_shell_error() -> ToolError {
+    ToolError::Execution("No usable shell was found. Set tools.shell in Settings → General.".into())
 }
 
 #[cfg(windows)]
-fn powershell_image_looks_pinnable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.len() > 64)
-}
-
-/// Finds `pwsh.exe` inside versioned `Microsoft.PowerShell_*` package
-/// directories under a WindowsApps root, newest version first.
-#[cfg(windows)]
-fn fuzzy_windows_apps_pwsh(windows_apps: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(windows_apps) else {
-        return Vec::new();
-    };
-    let mut packages: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("Microsoft.PowerShell_"))
-        })
-        .collect();
-    // Descending lexical order puts the highest version first for the
-    // stable `Major.Minor.Patch.Build` naming scheme.
-    packages.sort_unstable_by(|a, b| b.cmp(a));
-    packages
-        .into_iter()
-        .map(|package| package.join("pwsh.exe"))
-        .filter(|pwsh| pwsh.exists())
-        .collect()
+fn shell_file_name(program: &Path) -> String {
+    program
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| ShellKind::from_program(program).as_str().to_owned())
 }
 
 #[cfg(windows)]
@@ -415,92 +367,55 @@ async fn prepare_windows_shell(
     cancel: &tokio_util::sync::CancellationToken,
     deadline: &mut std::pin::Pin<&mut tokio::time::Sleep>,
 ) -> Result<Option<PreparedShell>, ToolError> {
-    let encoded = encode_powershell_command(
-        &powershell_script(command),
-        Path::new(WINDOWS_SHELL_EXECUTABLE),
-    )?;
-    let args = powershell_args(encoded);
+    let command = command.to_owned();
     let pin_cwd = cwd.to_path_buf();
-    let pin_args = args;
     let pin_work = run_blocking_supervised("shell resolution", cancel, move |worker_cancel| {
+        let detected = runtime_shell()
+            .or_else(detect_default_shell)
+            .ok_or_else(no_usable_shell_error)?;
+        let identifier = shell_file_name(&detected.program);
+        let args = windows_shell_args(&detected, &command)?;
+        let program = detected.program.to_str().ok_or_else(|| {
+            ToolError::InvalidArgs(
+                "shell program path is not valid Unicode and cannot be recorded".into(),
+            )
+        })?;
         let env = snapshot_child_environment()?;
-        let prepared = match prepare_from_snapshot(
-            &pin_cwd,
-            WINDOWS_SHELL_EXECUTABLE,
-            &pin_args,
-            &env,
-            &worker_cancel,
-        ) {
-            Ok(prepared) => Some(prepared),
-            Err(error) => match shell_candidate_action(&error) {
-                ShellCandidateAction::TryNext => None,
-                ShellCandidateAction::FailClosed => return Err(error.into_tool_error()),
-            },
-        };
-        Ok((prepared, env, lease))
+        let invocation = prepare_from_snapshot(&pin_cwd, program, &args, &env, &worker_cancel)
+            .map_err(ResolveError::into_tool_error)?;
+        Ok(PreparedShell {
+            identifier,
+            invocation,
+            lease,
+        })
     });
     tokio::pin!(pin_work);
-    let first = tokio::select! {
+    let prepared = tokio::select! {
         biased;
         _ = cancel.cancelled() => return Err(command_cancelled_error(None)),
         _ = deadline.as_mut() => return Ok(None),
         prepared = &mut pin_work => prepared?,
     };
-    let (invocation, env, lease) = first;
-    match invocation {
-        Some(invocation) => Ok(Some(PreparedShell {
-            identifier: WINDOWS_SHELL_EXECUTABLE,
-            invocation,
-            lease,
-        })),
-        None => {
-            // Prefer the inbox Windows PowerShell over a network provision:
-            // a large pinned download inside a tool call reads as a hang.
-            let managed = match discover_windows_powershell() {
-                Some(path) => path,
-                None => {
-                    tokio::select! {
-                        biased;
-                        _ = cancel.cancelled() => return Err(command_cancelled_error(None)),
-                        _ = deadline.as_mut() => return Ok(None),
-                        managed = crate::builtin::powershell::ensure_pwsh() => managed?,
-                    }
-                }
+    Ok(Some(prepared))
+}
+
+#[cfg(windows)]
+fn windows_shell_args(detected: &DetectedShell, command: &str) -> Result<Vec<String>, ToolError> {
+    match detected.kind {
+        ShellKind::Pwsh | ShellKind::PowerShell => {
+            let script = powershell_script_for(command, detected.kind);
+            let encoded = match detected.kind {
+                ShellKind::PowerShell => encode_powershell_command_with(
+                    &script,
+                    &detected.program,
+                    POWERSHELL_51_ARGUMENTS,
+                )?,
+                _ => encode_powershell_command(&script, &detected.program)?,
             };
-            let encoded = encode_powershell_command(&powershell_script(command), &managed)?;
-            let args = powershell_args(encoded);
-            let managed_program = managed.to_str().ok_or_else(|| {
-                ToolError::InvalidArgs(
-                    "managed PowerShell path is not valid Unicode and cannot be recorded".into(),
-                )
-            })?;
-            let managed_program = managed_program.to_owned();
-            let pin_cwd = cwd.to_path_buf();
-            let pin_work =
-                run_blocking_supervised("shell resolution", cancel, move |worker_cancel| {
-                    let invocation = prepare_from_snapshot(
-                        &pin_cwd,
-                        &managed_program,
-                        &args,
-                        &env,
-                        &worker_cancel,
-                    )
-                    .map_err(ResolveError::into_tool_error)?;
-                    Ok((invocation, lease))
-                });
-            tokio::pin!(pin_work);
-            let (invocation, lease) = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Err(command_cancelled_error(None)),
-                _ = deadline.as_mut() => return Ok(None),
-                prepared = &mut pin_work => prepared?,
-            };
-            Ok(Some(PreparedShell {
-                identifier: WINDOWS_SHELL_EXECUTABLE,
-                invocation,
-                lease,
-            }))
+            Ok(powershell_args(encoded, detected.kind))
         }
+        ShellKind::Cmd => Ok(vec!["/c".to_owned(), command.to_owned()]),
+        ShellKind::Bash => Ok(vec!["-c".to_owned(), command.to_owned()]),
     }
 }
 
@@ -522,7 +437,7 @@ async fn prepare_posix_shell(
             {
                 Ok(invocation) => {
                     return Ok(PreparedShell {
-                        identifier: candidate.executable,
+                        identifier: candidate.executable.to_owned(),
                         invocation,
                         lease,
                     });
@@ -550,13 +465,29 @@ async fn prepare_posix_shell(
     Ok(Some(prepared))
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn powershell_script(command: &str) -> String {
-    let mut script = String::with_capacity(command.len() + POWERSHELL_UTF8_PRELUDE.len() + 4);
+    powershell_script_for(command, ShellKind::Pwsh)
+}
+
+#[cfg(windows)]
+fn powershell_prelude(kind: ShellKind) -> String {
+    match kind {
+        ShellKind::PowerShell => {
+            format!("{POWERSHELL_UTF8_PRELUDE}\n{POWERSHELL_ERRORVIEW_PRELUDE}")
+        }
+        _ => POWERSHELL_UTF8_PRELUDE.to_owned(),
+    }
+}
+
+#[cfg(windows)]
+fn powershell_script_for(command: &str, kind: ShellKind) -> String {
+    let prelude = powershell_prelude(kind);
+    let mut script = String::with_capacity(command.len() + prelude.len() + 4);
     if command.is_empty() {
         // PowerShell 7 rejects an empty -EncodedCommand payload as not Base64.
         script.push_str("#\n");
-        script.push_str(POWERSHELL_UTF8_PRELUDE);
+        script.push_str(&prelude);
         return script;
     }
     let prologue = powershell_prologue_units(command);
@@ -564,7 +495,7 @@ fn powershell_script(command: &str) -> String {
     if !script.is_empty() && !script.ends_with('\n') {
         script.push('\n');
     }
-    script.push_str(POWERSHELL_UTF8_PRELUDE);
+    script.push_str(&prelude);
     script.push('\n');
     script.push_str(&command[prologue..]);
     script
@@ -633,14 +564,19 @@ fn scan_param_line(line: &str, paren_depth: &mut i64, quote: &mut Option<char>) 
     }
 }
 
-#[cfg(windows)]
-fn powershell_args(encoded_command: String) -> Vec<String> {
-    let mut args = Vec::with_capacity(POWERSHELL_ARGUMENTS.len() + 1);
-    args.extend(
-        POWERSHELL_ARGUMENTS
-            .iter()
-            .map(|argument| (*argument).to_owned()),
-    );
+#[cfg(any(windows, test))]
+fn powershell_fixed_arguments(kind: ShellKind) -> &'static [&'static str] {
+    match kind {
+        ShellKind::PowerShell => POWERSHELL_51_ARGUMENTS,
+        _ => POWERSHELL_ARGUMENTS,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn powershell_args(encoded_command: String, kind: ShellKind) -> Vec<String> {
+    let fixed = powershell_fixed_arguments(kind);
+    let mut args = Vec::with_capacity(fixed.len() + 1);
+    args.extend(fixed.iter().map(|argument| (*argument).to_owned()));
     args.push(encoded_command);
     args
 }
@@ -740,6 +676,67 @@ fn with_identity(
     result
 }
 
+const CLIXML_MARKER: &str = "#< CLIXML";
+
+/// Turns redirected PowerShell 5.1 CLIXML blobs into readable text.
+#[must_use]
+pub(crate) fn sanitize_captured_shell_text(text: &str) -> String {
+    if !text.contains(CLIXML_MARKER) {
+        return text.to_owned();
+    }
+    let errors = extract_clixml_s_nodes(text, "Error");
+    if errors.is_empty() {
+        return strip_clixml_header(text);
+    }
+    let mut lines = errors;
+    lines.extend(extract_clixml_s_nodes(text, "Warning"));
+    lines.join("\n")
+}
+
+fn extract_clixml_s_nodes(text: &str, kind: &str) -> Vec<String> {
+    let open = format!(r#"<S S="{kind}">"#);
+    let mut nodes = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(&open) {
+        let after = &rest[start + open.len()..];
+        let Some(end) = after.find("</S>") else {
+            break;
+        };
+        nodes.push(decode_clixml_text(&after[..end]));
+        rest = &after[end + 4..];
+    }
+    nodes
+}
+
+fn decode_clixml_text(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("_x000D_", "\r")
+        .replace("_x000A_", "\n")
+        .replace("_x0009_", "\t")
+        .trim_end()
+        .to_owned()
+}
+
+fn strip_clixml_header(text: &str) -> String {
+    let Some(start) = text.find(CLIXML_MARKER) else {
+        return text.to_owned();
+    };
+    let prefix = text[..start].trim_end_matches(['\r', '\n']);
+    let rest = &text[start + CLIXML_MARKER.len()..];
+    let suffix = rest
+        .rfind("</Objs>")
+        .map(|end| rest[end + "</Objs>".len()..].trim_start_matches(['\r', '\n']))
+        .unwrap_or("");
+    match (prefix.is_empty(), suffix.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => prefix.to_owned(),
+        (true, false) => suffix.to_owned(),
+        (false, false) => format!("{prefix}\n{suffix}"),
+    }
+}
+
 /// Assemble the tool result from collected output.
 ///
 /// `status == None` marks a command that did not finish (timeout path);
@@ -758,8 +755,8 @@ fn format_result(
     forced_error: bool,
     notice: Option<&str>,
 ) -> ToolResult {
-    let stdout_text = decode_captured_text(&stdout.retained);
-    let stderr_text = decode_captured_text(&stderr.retained);
+    let stdout_text = sanitize_captured_shell_text(&decode_captured_text(&stdout.retained));
+    let stderr_text = sanitize_captured_shell_text(&decode_captured_text(&stderr.retained));
 
     let mut text = String::new();
     if !stdout_text.trim().is_empty() {
@@ -836,30 +833,52 @@ pub(crate) fn encode_powershell_command(
     command: &str,
     executable: &Path,
 ) -> Result<String, ToolError> {
+    encode_powershell_command_with(command, executable, POWERSHELL_ARGUMENTS)
+}
+
+#[cfg(any(windows, test))]
+fn encode_powershell_command_with(
+    command: &str,
+    executable: &Path,
+    arguments: &[&str],
+) -> Result<String, ToolError> {
     let command_byte_len = command
         .encode_utf16()
         .count()
         .checked_mul(2)
-        .ok_or_else(|| command_too_long(executable, None))?;
-    let encoded_len =
-        base64_encoded_len(command_byte_len).ok_or_else(|| command_too_long(executable, None))?;
-    let command_line_units = powershell_command_line_units(executable, encoded_len)
-        .ok_or_else(|| command_too_long(executable, Some(encoded_len)))?;
+        .ok_or_else(|| command_too_long_with(executable, None, arguments))?;
+    let encoded_len = base64_encoded_len(command_byte_len)
+        .ok_or_else(|| command_too_long_with(executable, None, arguments))?;
+    let command_line_units = powershell_command_line_units_with(executable, encoded_len, arguments)
+        .ok_or_else(|| command_too_long_with(executable, Some(encoded_len), arguments))?;
     if command_line_units > WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS {
-        return Err(command_too_long(executable, Some(encoded_len)));
+        return Err(command_too_long_with(
+            executable,
+            Some(encoded_len),
+            arguments,
+        ));
     }
 
     Ok(BASE64_STANDARD.encode(utf16le_bytes(command, command_byte_len)))
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn powershell_command_line_units(executable: &Path, encoded_len: usize) -> Option<usize> {
+    powershell_command_line_units_with(executable, encoded_len, POWERSHELL_ARGUMENTS)
+}
+
+#[cfg(any(windows, test))]
+fn powershell_command_line_units_with(
+    executable: &Path,
+    encoded_len: usize,
+    arguments: &[&str],
+) -> Option<usize> {
     // `std::process::Command` quotes argv[0] on Windows even when it contains no
     // spaces. Structured exec quotes argv0 the same way. Every fixed argument
     // and Base64 character needs no extra quoting; an empty Base64 argument is
     // represented as `""`.
     let mut units = executable_utf16_units(executable).checked_add(2)?;
-    for argument in POWERSHELL_ARGUMENTS {
+    for argument in arguments {
         units = units
             .checked_add(1)?
             .checked_add(argument.encode_utf16().count())?;
@@ -886,9 +905,14 @@ fn executable_utf16_units(executable: &Path) -> usize {
         .count()
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn maximum_encoded_command_chars(executable: &Path) -> Option<usize> {
-    let one_character_line = powershell_command_line_units(executable, 1)?;
+    maximum_encoded_command_chars_with(executable, POWERSHELL_ARGUMENTS)
+}
+
+#[cfg(any(windows, test))]
+fn maximum_encoded_command_chars_with(executable: &Path, arguments: &[&str]) -> Option<usize> {
+    let one_character_line = powershell_command_line_units_with(executable, 1, arguments)?;
     WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS.checked_sub(one_character_line.checked_sub(1)?)
 }
 
@@ -907,8 +931,12 @@ fn utf16le_bytes(value: &str, byte_len: usize) -> Vec<u8> {
 }
 
 #[cfg(any(windows, test))]
-fn command_too_long(executable: &Path, encoded_len: Option<usize>) -> ToolError {
-    let maximum = maximum_encoded_command_chars(executable)
+fn command_too_long_with(
+    executable: &Path,
+    encoded_len: Option<usize>,
+    arguments: &[&str],
+) -> ToolError {
+    let maximum = maximum_encoded_command_chars_with(executable, arguments)
         .map_or_else(|| "unrepresentable".to_owned(), |value| value.to_string());
     let encoded =
         encoded_len.map_or_else(|| "overflowed usize".to_owned(), |value| value.to_string());

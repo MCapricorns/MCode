@@ -617,15 +617,100 @@ fn render_general_section(
                 .child(format!("Effective: {effective_ua}")),
         )
         .into_any_element();
+    let shell = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.tools.shell.clone());
+    let shell_kind = shell
+        .as_ref()
+        .map(|item| item.kind.clone())
+        .unwrap_or_else(|| "auto".to_owned());
+    let shell_program = shell
+        .as_ref()
+        .map(|item| item.program.clone())
+        .unwrap_or_default();
+    let shell_source = shell
+        .as_ref()
+        .map(|item| {
+            if item.source.is_empty() {
+                "auto".to_owned()
+            } else {
+                item.source.clone()
+            }
+        })
+        .unwrap_or_else(|| "auto".to_owned());
+    let shell_status = if shell_program.is_empty() {
+        "No shell found. Detect one or browse to pwsh, powershell, cmd, or bash.".to_owned()
+    } else {
+        format!("{shell_kind} · {shell_program} ({shell_source})")
+    };
+    let shell_kind_open = workspace.vm().subagent_menu.as_ref().is_some_and(|(role, field)| {
+        role == "shell" && field == "kind"
+    });
     let theme = cx.theme();
-    settings_card(
-        "appearance",
-        "Appearance",
-        Some("Theme applies immediately and is saved to settings right away."),
-        theme,
-        vec![theme_row, ua_field],
-    )
-    .into_any_element()
+    div()
+        .id("general-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(settings_card(
+            "appearance",
+            "Appearance",
+            Some("Theme applies immediately and is saved to settings right away."),
+            theme,
+            vec![theme_row, ua_field],
+        ))
+        .child(settings_card(
+            "shell",
+            "Shell",
+            Some(
+                "First launch detects pwsh, then Windows PowerShell, then cmd or Git bash. \
+                 Override it here if detection misses your install.",
+            ),
+            theme,
+            vec![
+                settings_row(
+                    "shell-current",
+                    "Current program",
+                    Some(shell_status.as_str()),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .child(
+                            Button::new("shell-detect")
+                                .label("Detect")
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_detect_shell(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("shell-browse")
+                                .label("Browse")
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_browse_shell(cx);
+                                })),
+                        )
+                        .into_any_element(),
+                ),
+                agent_choice_dropdown(
+                    "shell",
+                    "kind",
+                    "Kind",
+                    Some("Used to build the launch line"),
+                    &shell_kind,
+                    &["pwsh".to_owned(), "powershell".to_owned(), "cmd".to_owned(), "bash".to_owned()],
+                    shell_kind_open,
+                    cx,
+                ),
+            ],
+        ))
+        .into_any_element()
 }
 
 // ---- Models ----
@@ -1690,6 +1775,7 @@ fn render_agents_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyE
                 .and_then(|item| item.model.clone())
                 .unwrap_or_else(|| "inherit".to_owned());
             agent_role_card(
+                workspace,
                 role.name.clone(),
                 role.description.clone(),
                 role.isolation.as_str(),
@@ -1867,6 +1953,7 @@ fn render_skills_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyE
 
 #[allow(clippy::too_many_arguments)]
 fn agent_role_card(
+    workspace: &Workspace,
     name: String,
     description: String,
     isolation: &'static str,
@@ -1883,12 +1970,31 @@ fn agent_role_card(
     let thinking_label = thinking.clone();
     let provider_label = provider.clone();
     let model_label = model.clone();
-    let provider_ids: Vec<String> = providers.iter().map(|(id, _)| id.clone()).collect();
-    let models_for_provider: Vec<String> = providers
-        .iter()
-        .find(|(id, _)| *id == provider)
-        .map(|(_, models)| models.clone())
-        .unwrap_or_default();
+    let mut provider_ids: Vec<String> = vec!["inherit".to_owned()];
+    provider_ids.extend(providers.iter().map(|(id, _)| id.clone()));
+    let mut models_for_provider: Vec<String> = vec!["inherit".to_owned()];
+    models_for_provider.extend(
+        providers
+            .iter()
+            .find(|(id, _)| *id == provider)
+            .map(|(_, models)| models.clone())
+            .unwrap_or_default(),
+    );
+    let thinking_options = {
+        let mut levels = vec!["inherit".to_owned()];
+        levels.extend(crate::view_model::reasoning_levels_for(
+            workspace.vm(),
+            (provider != "inherit").then_some(provider.as_str()),
+            (model != "inherit").then_some(model.as_str()),
+        ));
+        levels
+    };
+    let open_field = workspace
+        .vm()
+        .subagent_menu
+        .as_ref()
+        .filter(|(open_role, _)| open_role == &name)
+        .map(|(_, field)| field.as_str());
     div()
         .id(format!("agent-role-{name}"))
         .w_full()
@@ -1946,48 +2052,166 @@ fn agent_role_card(
         .child(
             div()
                 .flex()
-                .flex_row()
-                .flex_wrap()
+                .flex_col()
                 .gap_2()
+                .child(agent_choice_dropdown(
+                    &role,
+                    "thinking",
+                    "Thinking",
+                    None,
+                    &thinking_label,
+                    &thinking_options,
+                    open_field == Some("thinking"),
+                    cx,
+                ))
+                .child(agent_choice_dropdown(
+                    &role,
+                    "provider",
+                    "Provider",
+                    None,
+                    &provider_label,
+                    &provider_ids,
+                    open_field == Some("provider"),
+                    cx,
+                ))
+                .child(agent_choice_dropdown(
+                    &role,
+                    "model",
+                    "Model",
+                    None,
+                    &model_label,
+                    &models_for_provider,
+                    open_field == Some("model"),
+                    cx,
+                )),
+        )
+        .into_any_element()
+}
+
+fn agent_choice_dropdown(
+    role: &str,
+    field: &str,
+    label: &str,
+    description: Option<&str>,
+    current: &str,
+    options: &[String],
+    open: bool,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let role_owned = role.to_owned();
+    let field_owned = field.to_owned();
+    div()
+        .id(format!("agent-dropdown-{role}-{field}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_4()
                 .child(
-                    Button::new(format!("agent-thinking-{name}"))
-                        .label(format!("think: {thinking_label}"))
-                        .small()
-                        .outline()
-                        .on_click({
-                            let role = role.clone();
-                            cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_cycle_subagent_thinking(&role, cx);
-                            })
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .min_w_0()
+                        .child(div().text_sm().child(label.to_owned()))
+                        .when_some(description, |this, description| {
+                            this.child(div().text_xs().opacity(0.5).child(description.to_owned()))
                         }),
                 )
                 .child(
-                    Button::new(format!("agent-provider-{name}"))
-                        .label(format!("provider: {provider_label}"))
+                    Button::new(format!("agent-dropdown-button-{role}-{field}"))
+                        .label(current.to_owned())
+                        .icon(IconName::ChevronDown)
                         .small()
                         .outline()
                         .on_click({
-                            let role = role.clone();
-                            let ids = provider_ids.clone();
+                            let role = role_owned.clone();
+                            let field = field_owned.clone();
                             cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_cycle_subagent_provider(&role, &ids, cx);
-                            })
-                        }),
-                )
-                .child(
-                    Button::new(format!("agent-model-{name}"))
-                        .label(format!("model: {model_label}"))
-                        .small()
-                        .outline()
-                        .on_click({
-                            let role = role.clone();
-                            let models = models_for_provider.clone();
-                            cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_cycle_subagent_model(&role, &models, cx);
+                                workspace.on_toggle_subagent_menu(&role, &field, !open, cx);
                             })
                         }),
                 ),
         )
+        .when(open, |this| {
+            this.child(
+                div()
+                    .id(format!("agent-dropdown-list-{role}-{field}"))
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .p_1()
+                    .max_h(px(220.))
+                    .overflow_y_scroll()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
+                    .children(options.iter().cloned().map(|option| {
+                        let selected = option == current;
+                        let role = role_owned.clone();
+                        let field = field_owned.clone();
+                        let pick = option.clone();
+                        div()
+                            .id(format!("agent-dropdown-{role}-{field}-{option}"))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .px_2()
+                            .h(px(28.))
+                            .rounded_md()
+                            .text_sm()
+                            .cursor_pointer()
+                            .hover(|this| this.bg(theme.secondary))
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                match field.as_str() {
+                                    "kind" if role == "shell" => {
+                                        workspace.on_set_shell_kind(&pick, cx);
+                                        workspace.on_toggle_subagent_menu(&role, &field, false, cx);
+                                    }
+                                    "thinking" => {
+                                        workspace.on_set_subagent_thinking(
+                                            &role,
+                                            Some(pick.clone()),
+                                            cx,
+                                        );
+                                    }
+                                    "provider" => {
+                                        workspace.on_set_subagent_route(
+                                            &role,
+                                            Some(pick.clone()),
+                                            None,
+                                            cx,
+                                        );
+                                    }
+                                    _ => {
+                                        workspace.on_set_subagent_route(
+                                            &role,
+                                            None,
+                                            Some(pick.clone()),
+                                            cx,
+                                        );
+                                    }
+                                }
+                            }))
+                            .child(option)
+                            .when(selected, |this| {
+                                this.child(
+                                    Icon::new(IconName::Check)
+                                        .xsmall()
+                                        .text_color(theme.primary),
+                                )
+                            })
+                    })),
+            )
+        })
         .into_any_element()
 }
 

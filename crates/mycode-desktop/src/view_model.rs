@@ -176,6 +176,8 @@ pub struct SettingsState {
     pub usage_enabled: bool,
     /// Subagent role enablement, model routes, and thinking overrides.
     pub subagents: mycode_config::SubagentSettings,
+    /// Tool-runtime preferences, including the platform shell.
+    pub tools: mycode_config::ToolsSettings,
     /// A save is in flight.
     pub saving: bool,
     /// Unsaved local edits exist.
@@ -203,6 +205,7 @@ impl SettingsState {
             mcp_with_keys: Vec::new(),
             usage_enabled: settings.usage.enabled,
             subagents: settings.subagents.clone(),
+            tools: settings.tools.clone(),
             saving: false,
             dirty: false,
         }
@@ -226,6 +229,7 @@ impl SettingsState {
             },
             reasoning_effort: self.reasoning.clone(),
             subagents: self.subagents.clone(),
+            tools: self.tools.clone(),
         }
     }
 }
@@ -337,7 +341,7 @@ impl SettingsSection {
     /// One-line hint under the nav label.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => "Theme, identity",
+            Self::General => "Theme, identity, shell",
             Self::Models => "Providers, keys",
             Self::Agents => "Roles, models",
             Self::Skills => "Slash commands",
@@ -466,6 +470,9 @@ pub struct WorkspaceState {
     pub model_menu_open: bool,
     /// Whether the thinking-effort submenu is open.
     pub reasoning_menu_open: bool,
+    /// Open Agents-page dropdown: (role name, field) where field is
+    /// `provider`, `model`, or `thinking`.
+    pub subagent_menu: Option<(String, String)>,
     /// Filter text for the provider preset picker.
     pub preset_search: String,
     /// The catalog provider currently being added, when any.
@@ -526,6 +533,12 @@ pub enum DesktopAction {
     SettingsBackendToggled(usize, bool),
     /// The settings editor changed subagent role routes.
     SettingsSubagentsChanged(mycode_config::SubagentSettings),
+    /// The settings editor changed the platform shell.
+    SettingsToolsChanged(mycode_config::ToolsSettings),
+    /// The Agents-page provider/model/thinking dropdown opened or closed.
+    SubagentMenuToggled(Option<(String, String)>),
+    /// Unbound sessions inherit the active project (repairs the missing bind).
+    UnboundSessionsAssigned(String),
     /// The settings editor toggled durable usage records.
     SettingsUsageToggled(bool),
     /// The settings editor added an MCP server.
@@ -688,6 +701,94 @@ pub enum DesktopAction {
 pub const MAX_COMPOSER_CHARS: usize = 64 * 1024;
 /// Follow-ups waiting behind one in-flight turn.
 pub const MAX_QUEUED_MESSAGES: usize = 8;
+
+/// Sidebar grouping of sessions relative to the active project filter.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupedSessions {
+    /// Sessions bound to the active project.
+    pub current: Vec<SessionSummary>,
+    /// Sessions with no project binding.
+    pub unbound: Vec<SessionSummary>,
+    /// Sessions bound to some other project, grouped by that path.
+    pub others: Vec<(String, Vec<SessionSummary>)>,
+}
+
+/// Compare project paths the way the sidebar groups them.
+#[must_use]
+pub fn same_project_path(left: &str, right: &str) -> bool {
+    normalize_project_key(left) == normalize_project_key(right)
+}
+
+fn normalize_project_key(path: &str) -> String {
+    let trimmed = path.trim().trim_end_matches(['/', '\\']);
+    if cfg!(windows) {
+        trimmed.replace('/', "\\").to_ascii_lowercase()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Groups sessions for the project-centric sidebar.
+#[must_use]
+pub fn group_sessions(
+    sessions: &[SessionSummary],
+    bindings: &[(String, String)],
+    active_project: Option<&str>,
+) -> GroupedSessions {
+    let mut grouped = GroupedSessions::default();
+    for session in sessions {
+        let project = bindings
+            .iter()
+            .find(|(id, _)| id == &session.session_id)
+            .map(|(_, project)| project.as_str());
+        match project {
+            Some(project)
+                if active_project.is_some_and(|active| same_project_path(active, project)) =>
+            {
+                grouped.current.push(session.clone());
+            }
+            Some(project) => match grouped
+                .others
+                .iter_mut()
+                .find(|(key, _)| same_project_path(key, project))
+            {
+                Some((_, rows)) => rows.push(session.clone()),
+                None => grouped.others.push((project.to_owned(), vec![session.clone()])),
+            },
+            None => grouped.unbound.push(session.clone()),
+        }
+    }
+    grouped
+}
+
+fn assign_unbound_sessions(state: &mut WorkspaceState, project: &str) {
+    let bound: std::collections::HashSet<String> = state
+        .session_projects
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for session in &state.sessions {
+        if bound.contains(&session.session_id) {
+            continue;
+        }
+        state
+            .session_projects
+            .insert(0, (session.session_id.clone(), project.to_owned()));
+    }
+    if let Some(active) = state.active.as_ref()
+        && !state
+            .session_projects
+            .iter()
+            .any(|(id, _)| id == &active.session_id)
+    {
+        state
+            .session_projects
+            .insert(0, (active.session_id.clone(), project.to_owned()));
+    }
+    state
+        .session_projects
+        .truncate(mycode_config::MAX_SESSION_PROJECTS);
+}
 
 /// Applies one action to the state.
 pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
@@ -1016,6 +1117,16 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.dirty = true;
             }
         }
+        DesktopAction::SettingsToolsChanged(tools) => {
+            if let Some(settings) = state.settings.as_mut() {
+                settings.tools = tools;
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::SubagentMenuToggled(menu) => state.subagent_menu = menu,
+        DesktopAction::UnboundSessionsAssigned(project) => {
+            assign_unbound_sessions(state, &project);
+        }
         DesktopAction::SettingsSaved(revision) => {
             if let Some(settings) = state.settings.as_mut() {
                 settings.revision = revision;
@@ -1108,10 +1219,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_projects,
         } => {
             state.recents = recents;
-            // The last project stays in the recents list only: a fresh start
-            // with no session open must not claim a project (the composer
-            // shows "Set folder" until the user picks one).
-            let _ = last_project;
+            state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;
             state.auto_update = auto_update;
             if selected_provider.is_some() {
@@ -2236,5 +2344,70 @@ mod tests {
         );
         assert_eq!(state.queued.len(), MAX_QUEUED_MESSAGES);
         assert!(!state.queued.iter().any(|item| item == "overflow"));
+    }
+
+    #[test]
+    fn session_project_bound_is_what_groups_this_project() {
+        let mut state = WorkspaceState::default();
+        state.sessions = vec![summary("ses-a", 0), summary("ses-b", 0)];
+        reduce(
+            &mut state,
+            DesktopAction::ProjectOpened(r"D:\my_private_pro\MCode".to_owned()),
+        );
+        let grouped = group_sessions(
+            &state.sessions,
+            &state.session_projects,
+            state.project_dir.as_deref(),
+        );
+        assert!(grouped.current.is_empty(), "ProjectOpened does not bind");
+        assert_eq!(grouped.unbound.len(), 2);
+
+        reduce(
+            &mut state,
+            DesktopAction::SessionProjectBound {
+                session_id: "ses-a".to_owned(),
+                project: r"D:\my_private_pro\MCode".to_owned(),
+            },
+        );
+        let grouped = group_sessions(
+            &state.sessions,
+            &state.session_projects,
+            Some(r"D:\my_private_pro\Mcode"),
+        );
+        assert_eq!(grouped.current.len(), 1);
+        assert_eq!(grouped.current[0].session_id, "ses-a");
+        assert_eq!(grouped.unbound.len(), 1);
+    }
+
+    #[test]
+    fn unbound_sessions_are_assigned_to_the_active_project() {
+        let mut state = WorkspaceState::default();
+        state.sessions = vec![summary("ses-a", 0), summary("ses-b", 0)];
+        reduce(
+            &mut state,
+            DesktopAction::UnboundSessionsAssigned(r"D:\proj".to_owned()),
+        );
+        let grouped = group_sessions(&state.sessions, &state.session_projects, Some(r"D:\proj"));
+        assert_eq!(grouped.current.len(), 2);
+        assert!(grouped.unbound.is_empty());
+    }
+
+    #[test]
+    fn paired_subagent_route_stays_valid() {
+        let mut settings = SettingsState::from_settings(&mycode_config::AppSettings::default(), 0, Vec::new());
+        settings.providers.push(mycode_config::ProviderSettings {
+            id: "openai-main".to_owned(),
+            kind: "openai-completions".to_owned(),
+            base_url: "https://api.openai.com/v1".to_owned(),
+            models: vec!["gpt-4.1".to_owned()],
+            enabled: true,
+            context_limit: None,
+            max_output: None,
+        });
+        settings.subagents.role_mut("scout").provider = Some("openai-main".to_owned());
+        settings.subagents.role_mut("scout").model = Some("gpt-4.1".to_owned());
+        assert!(settings.to_settings().validate().is_ok());
+        settings.subagents.role_mut("scout").model = None;
+        assert!(settings.to_settings().validate().is_err());
     }
 }

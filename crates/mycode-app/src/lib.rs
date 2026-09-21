@@ -1329,8 +1329,8 @@ impl mycode_tools::builtin::WebHost for BridgeWebHost {
 fn load_settings(
     home: &HomeLayout,
 ) -> Result<(AppSettings, AuthorityRevision, Vec<String>, Vec<String>), String> {
-    let settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
-    let revision = mycode_config::read_owned_file(
+    let mut settings = read_app_settings(home).map_err(|error| render_config_error(&error))?;
+    let mut revision = mycode_config::read_owned_file(
         home,
         mycode_config::SETTINGS_PATH,
         mycode_config::MAX_SETTINGS_BYTES,
@@ -1340,6 +1340,13 @@ fn load_settings(
     .transpose()
     .map_err(|()| "stored settings failed validation".to_owned())?
     .unwrap_or(AuthorityRevision::ABSENT);
+    let filled = fill_detected_shell(&mut settings);
+    if filled && revision == AuthorityRevision::ABSENT {
+        if let Ok(next) = replace_app_settings(home, revision, &settings) {
+            revision = next;
+        }
+    }
+    apply_runtime_shell(&settings);
     let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
     let (provider_keys, mcp_keys) = split_key_ids(&secrets);
     Ok((settings, revision, provider_keys, mcp_keys))
@@ -1364,8 +1371,47 @@ fn save_settings(
     expected_revision: AuthorityRevision,
     settings: &AppSettings,
 ) -> Result<AuthorityRevision, String> {
-    replace_app_settings(home, expected_revision, settings)
-        .map_err(|error| render_config_error(&error))
+    let revision = replace_app_settings(home, expected_revision, settings)
+        .map_err(|error| render_config_error(&error))?;
+    apply_runtime_shell(settings);
+    Ok(revision)
+}
+
+fn fill_detected_shell(settings: &mut AppSettings) -> bool {
+    if settings
+        .tools
+        .shell
+        .as_ref()
+        .is_some_and(|shell| !shell.program.trim().is_empty())
+    {
+        return false;
+    }
+    let Some(detected) = mycode_tools::detect_default_shell() else {
+        return false;
+    };
+    settings.tools.shell = Some(mycode_config::ShellSettings {
+        kind: detected.kind.as_str().to_owned(),
+        program: detected.program.to_string_lossy().into_owned(),
+        source: "auto".to_owned(),
+    });
+    true
+}
+
+fn apply_runtime_shell(settings: &AppSettings) {
+    let shell = settings.tools.shell.as_ref().and_then(|configured| {
+        let program = configured.program.trim();
+        if program.is_empty() {
+            return None;
+        }
+        let kind = mycode_tools::ShellKind::parse(&configured.kind).unwrap_or_else(|| {
+            mycode_tools::ShellKind::from_program(std::path::Path::new(program))
+        });
+        Some(mycode_tools::DetectedShell {
+            kind,
+            program: std::path::PathBuf::from(program),
+        })
+    });
+    mycode_tools::set_runtime_shell(shell);
 }
 
 fn render_config_error(error: &mycode_config::ConfigError) -> String {
@@ -2237,6 +2283,14 @@ Connected MCP servers add their tools to the list below.",
 ",
         );
         system_prompt.push_str(&part);
+    }
+    let user_home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from);
+    let skills = mycode_config::discover_skills(&cwd, user_home.as_deref());
+    if let Some(catalog) = mycode_config::render_skill_catalog(&skills) {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&catalog);
     }
     // The tool registry's usage hints ride along, so the model knows which
     // tools exist and how to call them (a custom prompt alone drops them).
@@ -3713,9 +3767,9 @@ mod tests {
         };
         let (document, revision, key_ids, mcp_ids) = settings.expect("settings load");
         assert!(key_ids.is_empty() && mcp_ids.is_empty());
-        assert_eq!(revision, AuthorityRevision::ABSENT);
         assert!(document.providers.is_empty());
         assert!(document.effective_user_agent().starts_with("pi ("));
+        let next_revision = revision.get() + 1;
 
         let BridgeReply::SettingsSaved(saved) = drive(
             &bridge,
@@ -3729,7 +3783,7 @@ mod tests {
         ) else {
             panic!("saved reply");
         };
-        assert_eq!(saved.expect("saved").get(), 1);
+        assert_eq!(saved.expect("saved").get(), next_revision);
 
         let BridgeReply::ProviderKeySaved(saved) = drive(
             &bridge,
@@ -3750,7 +3804,7 @@ mod tests {
         let (document, revision, key_ids, _mcp_ids) = reloaded.expect("settings reload");
         assert_eq!(key_ids, vec!["openai-main".to_owned()]);
         assert_eq!(document.user_agent, "mycode-desktop-test/1");
-        assert_eq!(revision.get(), 1);
+        assert_eq!(revision.get(), next_revision);
 
         bridge.shutdown();
         let _ = EventKind::Message;

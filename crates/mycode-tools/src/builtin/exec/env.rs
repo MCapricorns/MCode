@@ -62,8 +62,20 @@ const ALLOWED_NAMES: &[&str] = &[
     "TMPDIR",
     "USERNAME",
     "USERPROFILE",
+    "USERDOMAIN",
     "windir",
     "WINDIR",
+    "PATHEXT",
+    "COMSPEC",
+    "ComSpec",
+    "ProgramFiles",
+    "PROGRAMFILES",
+    "ProgramFiles(x86)",
+    "PROGRAMFILES(X86)",
+    "LOCALAPPDATA",
+    "LocalAppData",
+    "APPDATA",
+    "AppData",
 ];
 
 #[cfg(not(any(unix, windows)))]

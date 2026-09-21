@@ -4364,6 +4364,7 @@ dependencies = [
  "mycode-app",
  "mycode-config",
  "mycode-providers",
+ "mycode-tools",
  "tokio",
  "winresource",
 ]

@@ -803,12 +803,14 @@ fn render_composer(
     div()
         .id("composer")
         .flex()
+        .flex_col()
         .w_full()
         .border_t_1()
         .border_color(super::skin::glass_border(theme))
         .bg(super::skin::glass(theme))
         .px_4()
         .py_2()
+        .when_some(queue_panel, |this, queue| this.child(queue))
         .child(
             div()
                 .id("composer-card")
@@ -829,6 +831,9 @@ fn render_composer(
                         .flex()
                         .flex_row()
                         .gap_2()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .text_sm()
                         .child(
                             // The demo's amber `▸` prompt glyph.
@@ -841,11 +846,15 @@ fn render_composer(
                             div()
                                 .flex_1()
                                 .min_w_0()
+                                .overflow_hidden()
                                 .min_h(px(40.))
-                                .child(Textarea::new(&composer)),
+                                .child(
+                                    Textarea::new(&composer)
+                                        .appearance(false)
+                                        .bordered(false),
+                                ),
                         ),
                 )
-                .when_some(queue_panel, |this, queue| this.child(queue))
                 .child(
                     div()
                         .id("composer-chip-row")
@@ -943,10 +952,18 @@ fn render_composer(
                             )
                         })
                         .child(div().flex_1().min_w_0())
+                        .child(
+                            div()
+                                .text_xs()
+                                .flex_shrink_0()
+                                .text_color(theme.muted_foreground)
+                                .child("Enter to send"),
+                        )
                         .when(sending && has_draft, |this| {
                             this.child(
                                 Button::new("queue")
                                     .icon(IconName::List)
+                                    .label("Queue")
                                     .primary()
                                     .rounded(px(3.))
                                     .flex_shrink_0()
@@ -987,39 +1004,56 @@ fn render_composer(
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
 fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     div()
         .id("composer-queue")
         .flex()
         .flex_col()
         .gap_1()
-        .pt_1()
+        .mx_auto()
+        .w_full()
+        .max_w(rems(46.))
+        .pb_1()
         .child(
             div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("QUEUED · {}", items.len())),
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(super::lamp(desk.amber))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(desk.faint)
+                        .child(format!("QUEUED  {}", items.len())),
+                ),
         )
         .children(items.into_iter().enumerate().map(|(index, text)| {
-            let preview: SharedString = ellipsis(&text, 80).into();
+            let preview: SharedString = ellipsis(&text, 72).into();
             div()
                 .id(SharedString::from(format!("queued-{index}")))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_1()
-                .px_2()
-                .h(px(24.))
-                .rounded(px(3.))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.sidebar)
+                .gap_2()
+                .min_w_0()
+                .h(px(22.))
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(div().min_w_0().flex_1().truncate().child(preview))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .overflow_hidden()
+                        .truncate()
+                        .child(preview),
+                )
                 .child(
                     div()
                         .id(SharedString::from(format!("queued-remove-{index}")))
                         .cursor_pointer()
+                        .flex_shrink_0()
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             workspace.on_remove_queued(index, cx);
                         }))

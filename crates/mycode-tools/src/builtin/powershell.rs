@@ -128,11 +128,17 @@ enum ArtifactSource {
 
 /// Ensure that the pinned, managed `pwsh.exe` is available.
 ///
+/// Explicit provisioning only. The `shell` execute path must not call this.
+///
 /// # Errors
 ///
 /// Returns [`ToolError::Execution`] if the current architecture is unsupported,
 /// the pinned release metadata is invalid, the artifact cannot be downloaded,
 /// or any integrity, extraction, publication, or Authenticode check fails.
+#[expect(
+    dead_code,
+    reason = "kept for explicit managed pwsh provisioning; execute must not download"
+)]
 pub(crate) async fn ensure_pwsh() -> Result<PathBuf, ToolError> {
     let artifact = selected_artifact().map_err(|err| {
         ToolError::Execution(format!("invalid pinned PowerShell release matrix: {err}"))

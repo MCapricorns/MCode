@@ -362,57 +362,6 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
             ))
         })
         .child(insp_sec(
-            "skills",
-            Some(("SKILLS".to_owned(), None)),
-            if vm.skills.is_empty() {
-                vec![
-                    div()
-                        .text_xs()
-                        .text_color(desk.faint)
-                        .whitespace_normal()
-                        .child("No / skills in .agents — add them in Settings → Skills")
-                        .into_any_element(),
-                ]
-            } else {
-                vm.skills
-                    .iter()
-                    .map(|skill| {
-                        let slug = skill.slug.clone();
-                        let scope = if skill.global { "user" } else { "workspace" };
-                        div()
-                            .id(format!("skill-{slug}"))
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .py(px(6.))
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_use_skill(&slug, cx);
-                            }))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(desk.amber)
-                                    .whitespace_normal()
-                                    .child(format!("/{}", skill.slug)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(desk.faint)
-                                    .whitespace_normal()
-                                    .child(format!("{scope} · {}", skill.title)),
-                            )
-                            .into_any_element()
-                    })
-                    .collect()
-            },
-            theme,
-        ))
-        .child(insp_sec(
             "resources",
             Some(("PROMPT RESOURCES".to_owned(), None)),
             if vm.resources.is_empty() {

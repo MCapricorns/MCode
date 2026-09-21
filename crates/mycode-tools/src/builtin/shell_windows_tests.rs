@@ -63,7 +63,8 @@ fn powershell_quote(value: &str) -> String {
 }
 
 fn assert_execution_identity(details: &serde_json::Value) {
-    assert_eq!(details["shell"], "pwsh.exe");
+    let shell = details["shell"].as_str().unwrap();
+    assert!(matches!(shell, "pwsh.exe" | "powershell.exe"), "{details}");
     assert_eq!(details["image"], "pe");
     assert_eq!(
         details["digest_sha256"].as_str().unwrap().len(),
@@ -121,6 +122,11 @@ fn utf8_prelude_lands_after_statement_ordering_prologue() {
         powershell_script(""),
         format!("#\n{POWERSHELL_UTF8_PRELUDE}")
     );
+
+    let powershell_51 = powershell_script_for("Write-Output 'ok'", ShellKind::PowerShell);
+    assert!(powershell_51.contains("$ErrorView = 'NormalView'"));
+    assert!(powershell_51.contains("[Console]::OutputEncoding"));
+    assert!(powershell_51.ends_with("Write-Output 'ok'"));
 }
 
 #[tokio::test]

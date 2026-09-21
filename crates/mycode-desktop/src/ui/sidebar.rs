@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 
 use super::{project_label, short_id, skin};
-use crate::view_model::{MainView, SessionSummary};
+use crate::view_model::{MainView, SessionSummary, group_sessions, same_project_path};
 use crate::workspace::Workspace;
 
 /// Sidebar width.
@@ -30,24 +30,10 @@ pub(super) fn render_sidebar(
     let bindings = workspace.vm().session_projects.clone();
     let view = workspace.vm().view;
 
-    // Group sessions by their bound project.
-    let mut current: Vec<SessionSummary> = Vec::new();
-    let mut others: Vec<(String, Vec<SessionSummary>)> = Vec::new();
-    let mut unbound: Vec<SessionSummary> = Vec::new();
-    for session in sessions {
-        let project = bindings
-            .iter()
-            .find(|(id, _)| *id == session.session_id)
-            .map(|(_, project)| project.clone());
-        match project.as_deref() {
-            Some(project) if active_project.as_deref() == Some(project) => current.push(session),
-            Some(project) => match others.iter_mut().find(|(key, _)| key == project) {
-                Some((_, rows)) => rows.push(session),
-                None => others.push((project.to_owned(), vec![session])),
-            },
-            None => unbound.push(session),
-        }
-    }
+    let grouped = group_sessions(&sessions, &bindings, active_project.as_deref());
+    let current = grouped.current;
+    let others = grouped.others;
+    let unbound = grouped.unbound;
 
     let project_name: SharedString = active_project
         .as_deref()
@@ -485,7 +471,9 @@ pub(super) fn render_project_menu_layer(
                     )
                 })
                 .children(recents.iter().take(10).map(|project| {
-                    let selected = active.as_deref() == Some(project.as_str());
+                    let selected = active
+                        .as_deref()
+                        .is_some_and(|active| same_project_path(active, project));
                     project_menu_row(project_label(project), project, selected, cx)
                 }))
                 .child(div().h(px(1.)).mx_2().my_1().bg(theme.border))

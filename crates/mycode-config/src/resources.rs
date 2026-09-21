@@ -210,6 +210,30 @@ pub fn render_resource_prompt(files: &[ResourceFile]) -> Vec<String> {
     parts
 }
 
+/// Compact on-demand skill catalog for the system prompt.
+///
+/// Lists slug, title, and path only. Skill bodies stay on disk until the
+/// model reads the named file or the user inserts a `/slug` pointer.
+#[must_use]
+pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "Skills (on demand): use /slug or read the listed SKILL.md only when that \
+skill applies. Do not load every skill up front.",
+    );
+    for skill in files {
+        out.push_str(&format!(
+            "\n- /{slug} — {title} (`{path}`)",
+            slug = skill.slug,
+            title = skill.title,
+            path = skill.path.display()
+        ));
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +348,12 @@ mod tests {
         assert_eq!(skills[0].slug, "review");
         assert_eq!(skills[0].title, "Review");
         assert!(skills[0].global, "user-home skills are marked global");
+        let catalog = render_skill_catalog(&skills).expect("catalog");
+        assert!(catalog.contains("/review"), "{catalog}");
+        assert!(catalog.contains("on demand"), "{catalog}");
+        assert!(
+            !catalog.contains("Check the diff"),
+            "catalog must not embed SKILL.md: {catalog}"
+        );
     }
 }
