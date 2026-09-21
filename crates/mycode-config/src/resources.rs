@@ -54,8 +54,121 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
         workspace_root.join(".mycode").join("agents.md"),
         false,
     );
+    push(
+        "AGENTS.md",
+        workspace_root.join(".agents").join("AGENTS.md"),
+        false,
+    );
     push("AGENTS.md", home.root().join("AGENTS.md"), true);
+    if let Some(user_home) = home.root().parent() {
+        push(
+            "AGENTS.md",
+            user_home.join(".agents").join("AGENTS.md"),
+            true,
+        );
+    }
     files
+}
+
+/// One slash-command skill discovered under `.agents`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillFile {
+    /// Command slug without the leading `/`.
+    pub slug: String,
+    /// One-line title from the first heading or file stem.
+    pub title: String,
+    /// Absolute path of the skill markdown.
+    pub path: PathBuf,
+    /// Whether this file came from the user-global `.agents` tree.
+    pub global: bool,
+}
+
+/// Discovers `/` skills from the workspace and the user-global `.agents` tree.
+#[must_use]
+pub fn discover_skills(workspace_root: &Path, user_home: Option<&Path>) -> Vec<SkillFile> {
+    const MAX_SKILLS: usize = 24;
+    let mut skills = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut push_root = |root: &Path, global: bool| {
+        collect_skills(root, &mut skills, &mut seen, MAX_SKILLS, global);
+        collect_skills(
+            &root.join("skills"),
+            &mut skills,
+            &mut seen,
+            MAX_SKILLS,
+            global,
+        );
+    };
+    push_root(&workspace_root.join(".agents"), false);
+    if let Some(user_home) = user_home {
+        push_root(&user_home.join(".agents"), true);
+    }
+    skills
+}
+
+fn collect_skills(
+    dir: &Path,
+    skills: &mut Vec<SkillFile>,
+    seen: &mut std::collections::BTreeSet<String>,
+    max: usize,
+    global: bool,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if skills.len() >= max {
+            return;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            let skill = path.join("SKILL.md");
+            if skill.is_file() {
+                push_skill(&skill, path.file_name(), skills, seen, global);
+            }
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md") || name.ends_with(".md"))
+        {
+            push_skill(&path, path.file_stem(), skills, seen, global);
+        }
+    }
+}
+
+fn push_skill(
+    path: &Path,
+    stem: Option<&std::ffi::OsStr>,
+    skills: &mut Vec<SkillFile>,
+    seen: &mut std::collections::BTreeSet<String>,
+    global: bool,
+) {
+    let Some(stem) = stem.and_then(|stem| stem.to_str()) else {
+        return;
+    };
+    let slug = stem
+        .trim()
+        .trim_start_matches('.')
+        .replace([' ', '_'], "-")
+        .to_ascii_lowercase();
+    if slug.is_empty() || slug == "agents" || !seen.insert(slug.clone()) {
+        return;
+    }
+    let title = read_resource(path)
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
+                .map(str::to_owned)
+        })
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| slug.clone());
+    skills.push(SkillFile {
+        slug,
+        title,
+        path: path.to_path_buf(),
+        global,
+    });
 }
 
 /// Reads one resource file into bounded UTF-8 text.
@@ -178,5 +291,38 @@ mod tests {
         let (_parent, home) = layout();
         let files = discover_resources(&home, Path::new("/nowhere"));
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn discovers_agents_rules_and_skills() {
+        let (parent, home) = layout();
+        let workspace = parent.path().join("proj");
+        let user_agents = parent.path().join(".agents").join("skills").join("review");
+        std::fs::create_dir_all(workspace.join(".agents")).expect("workspace agents");
+        std::fs::create_dir_all(&user_agents).expect("user skill");
+        std::fs::create_dir_all(home.root()).expect("home");
+        std::fs::write(
+            workspace.join(".agents").join("AGENTS.md"),
+            "workspace agents rules",
+        )
+        .expect("workspace rules");
+        std::fs::write(
+            user_agents.join("SKILL.md"),
+            "# Review\n\nCheck the diff.\n",
+        )
+        .expect("skill");
+
+        let files = discover_resources(&home, &workspace);
+        assert!(
+            files.iter().any(|file| file
+                .path
+                .ends_with(std::path::Path::new(".agents").join("AGENTS.md"))),
+            "workspace .agents/AGENTS.md is a global-rules source: {files:?}"
+        );
+        let skills = discover_skills(&workspace, Some(parent.path()));
+        assert_eq!(skills.len(), 1, "{skills:?}");
+        assert_eq!(skills[0].slug, "review");
+        assert_eq!(skills[0].title, "Review");
+        assert!(skills[0].global, "user-home skills are marked global");
     }
 }

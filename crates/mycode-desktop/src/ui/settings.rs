@@ -161,6 +161,9 @@ pub(super) fn render_settings_view(
                                         SettingsSection::Agents => {
                                             render_agents_section(workspace, cx)
                                         }
+                                        SettingsSection::Skills => {
+                                            render_skills_section(workspace, cx)
+                                        }
                                         SettingsSection::Mcp => {
                                             render_mcp_section(workspace, window, cx)
                                         }
@@ -226,6 +229,13 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
                         .filter(|role| s.subagents.is_enabled(&role.name))
                         .count()
                 }),
+                lamp: None,
+            },
+        ),
+        (
+            SettingsSection::Skills,
+            NavBadge {
+                count: Some(vm.skills.len()),
                 lamp: None,
             },
         ),
@@ -1742,6 +1752,115 @@ fn render_agents_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyE
             Some("Scout is read-only. Artisan writes in a worktree. Steward cleans up. Sentinel reviews."),
             theme,
             role_cards,
+        ))
+        .into_any_element()
+}
+
+fn render_skills_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
+    let theme = cx.theme();
+    let skills = workspace.vm().skills.clone();
+    let rows: Vec<AnyElement> = if skills.is_empty() {
+        vec![
+            div()
+                .text_xs()
+                .opacity(0.5)
+                .whitespace_normal()
+                .child(
+                    "No skills yet. Add SKILL.md under the project .agents/skills/ \
+                     folder or ~/.agents/skills/.",
+                )
+                .into_any_element(),
+        ]
+    } else {
+        skills
+            .into_iter()
+            .map(|skill| {
+                let slug = skill.slug.clone();
+                let scope = if skill.global { "user" } else { "workspace" };
+                div()
+                    .id(format!("skill-row-{}", skill.slug))
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .justify_between()
+                    .gap_3()
+                    .p_3()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .child(format!("/{}", skill.slug)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.7)
+                                    .whitespace_normal()
+                                    .child(skill.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.45)
+                                    .whitespace_normal()
+                                    .child(format!("{scope} · {}", skill.path)),
+                            ),
+                    )
+                    .child(
+                        Button::new(format!("skill-use-{}", skill.slug))
+                            .label("Use")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_use_skill(&slug, cx);
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    };
+    div()
+        .id("skills-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    Button::new("skills-refresh")
+                        .icon(IconName::RefreshCw)
+                        .label("Refresh")
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_refresh_skills(cx);
+                        })),
+                ),
+        )
+        .child(settings_card(
+            "skills-catalog",
+            "Slash commands",
+            Some(
+                "Type / in the composer to insert a skill. Workspace \
+                 .agents/skills win over the same slug in ~/.agents.",
+            ),
+            theme,
+            rows,
         ))
         .into_any_element()
 }

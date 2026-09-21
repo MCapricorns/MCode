@@ -259,12 +259,7 @@ impl mycode_tools::builtin::TaskHost for BridgeTaskHost {
             )));
         }
         let isolation = resolve_isolation(&role, request.isolation.as_deref());
-        let _ = progress.progress(format!(
-            "task queued: {} ({}, {})",
-            request.description,
-            role.name,
-            isolation.as_str()
-        ));
+        let _ = progress.progress(format!("task|{}|queued|{}", role.name, request.description));
         let permit = tokio::select! {
             permit = self.slots.acquire() => permit.map_err(|_| fail("task slots closed".to_owned()))?,
             _ = cancel.cancelled() => return Err(fail("task cancelled".to_owned())),
@@ -358,12 +353,18 @@ impl BridgeTaskHost {
             })
         };
         let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
-        let description = request.description.clone();
+        let role_name = role.name.clone();
         let progress_sink = progress.clone();
         let forwarder = tokio::spawn(async move {
             while let Ok(event) = event_rx.recv().await {
-                if let mycode_core::events::AgentEvent::ToolStarted { name, .. } = event {
-                    let _ = progress_sink.progress(format!("{description}: {name}"));
+                match event {
+                    mycode_core::events::AgentEvent::ToolStarted { name, .. } => {
+                        let _ = progress_sink.progress(format!("task|{role_name}|tool|{name}"));
+                    }
+                    mycode_core::events::AgentEvent::ToolProgress { message, .. } => {
+                        let _ = progress_sink.progress(format!("task|{role_name}|step|{message}"));
+                    }
+                    _ => {}
                 }
             }
         });
@@ -380,13 +381,9 @@ impl BridgeTaskHost {
         system.push_str("\n\n");
         system.push_str(&mycode_agent::build_system_prompt(&registry));
         let mut config = AgentConfig::new().with_system_prompt(system);
-        if let Some(level) = thinking_for(role, &self.settings.subagents).effort() {
-            let level = match level {
-                "low" => mycode_core::ReasoningLevel::Low,
-                "medium" => mycode_core::ReasoningLevel::Medium,
-                "high" => mycode_core::ReasoningLevel::High,
-                _ => mycode_core::ReasoningLevel::Low,
-            };
+        if let Some(level) = thinking_for(role, &self.settings.subagents).effort()
+            && let Some(level) = mycode_core::ReasoningLevel::parse(level)
+        {
             config = config.with_reasoning(level);
         }
         let mut agent = Agent::new(config);

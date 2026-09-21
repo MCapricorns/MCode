@@ -131,9 +131,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_at(dir.path());
 
+        const CONTENT: &str = "hello mycode";
         let result = run_dyn(
             &WriteTool,
-            json!({"path": "deep/nested/new.txt", "content": "hello mycode"}),
+            json!({"path": "deep/nested/new.txt", "content": CONTENT}),
             &ctx,
         )
         .await
@@ -141,14 +142,14 @@ mod tests {
         assert!(!result.is_error);
 
         let on_disk = std::fs::read_to_string(dir.path().join("deep/nested/new.txt")).unwrap();
-        assert_eq!(on_disk, "hello mycode");
+        assert_eq!(on_disk, CONTENT);
+        let text = text_of(&result);
         assert!(
-            text_of(&result).starts_with("Wrote 11 bytes to "),
-            "{}",
-            text_of(&result)
+            text.starts_with(&format!("Wrote {} bytes to ", CONTENT.len())),
+            "{text}"
         );
         let details = result.details.unwrap();
-        assert_eq!(details["bytes_written"], "hello mycode".len());
+        assert_eq!(details["bytes_written"], CONTENT.len());
         assert_eq!(details["detached_hardlink"], false);
         assert!(
             details["revision"]

@@ -221,8 +221,8 @@ fn apply_day(theme: &mut Theme) {
 }
 
 /// Semantic Desk tokens for the signal colors and the faint ink level; theme
-/// colors cover the rest. The CRT screen stays dark in BOTH modes: a dark
-/// terminal on the bright day desk (`.term` in the demo).
+/// colors cover the rest. Day mode keeps tool output on a light surface so
+/// the window is not a dark CRT on a light desk.
 pub struct Desk {
     pub amber: Hsla,
     pub green: Hsla,
@@ -257,9 +257,9 @@ impl Desk {
                 cyan: hex(0x0F6E8F),
                 violet: hex(0x6A56C9),
                 faint: hex(0x97896F),
-                screen: hex(0x08090C),
-                screen_dim: hex(0x8B909B),
-                think_bg: hex_a(0x1C1810, 0.02),
+                screen: hex(0xF4F1E8),
+                screen_dim: hex(0x57503F),
+                think_bg: hex_a(0xA66A00, 0.06),
             }
         }
     }

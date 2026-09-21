@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 
 use super::{ellipsis, project_label, skin};
-use crate::view_model::{ConversationEntry, EntryKind};
+use crate::view_model::{ConversationEntry, EntryKind, selected_model_supports_reasoning};
 use crate::workspace::Workspace;
 
 pub(super) fn render_chat(
@@ -25,13 +25,14 @@ pub(super) fn render_chat(
     // frame made every notify (menu toggles, stream deltas) allocate all
     // message text again. The borrow is scoped so the welcome and composer
     // builders can still take `&mut Workspace`.
+    let sending = workspace.vm().sending;
     let (show_welcome, entry_elements, streaming_element) = {
         let active = workspace.vm().active.as_ref();
         let entries: &[ConversationEntry] = active
             .map(|conversation| conversation.entries.as_slice())
             .unwrap_or_default();
         let streaming = active.and_then(|c| c.streaming.as_ref());
-        let show_welcome = entries.is_empty() && streaming.is_none();
+        let show_welcome = entries.is_empty() && streaming.is_none() && !sending;
         // The Desk timeline pairs each tool call with its result (both share
         // `call_id`) so a call renders as one ledger block; unpaired entries
         // keep their flat order. Pairing is display-only: state is untouched.
@@ -61,7 +62,19 @@ pub(super) fn render_chat(
             index += 1;
         }
         let streaming_element = streaming
-            .map(|streaming| render_streaming_entry(streaming, cx.theme()).into_any_element());
+            .map(|streaming| render_streaming_entry(streaming, cx.theme()).into_any_element())
+            .or_else(|| {
+                sending.then(|| {
+                    render_streaming_entry(
+                        &crate::view_model::StreamingReply {
+                            status: "Waiting for the model".to_owned(),
+                            ..crate::view_model::StreamingReply::default()
+                        },
+                        cx.theme(),
+                    )
+                    .into_any_element()
+                })
+            });
         (show_welcome, elements, streaming_element)
     };
     let scroll_handle = workspace.conversation_scroll_handle().clone();
@@ -105,6 +118,9 @@ pub(super) fn render_chat(
         .when(workspace.vm().model_menu_open, |this| {
             this.child(render_model_menu(workspace, cx))
         })
+        .when(workspace.vm().reasoning_menu_open, |this| {
+            this.child(render_reasoning_menu(workspace, cx))
+        })
         .when(
             workspace
                 .vm()
@@ -117,14 +133,19 @@ pub(super) fn render_chat(
         .into_any_element()
 }
 
-/// The in-flight assistant turn: THINKING tag + dashed box, then AGENT text.
+/// The in-flight assistant turn: a live status line, then thinking and text.
 fn render_streaming_entry(
     streaming: &crate::view_model::StreamingReply,
     theme: &Theme,
 ) -> impl IntoElement {
     let desk = super::desk::Desk::of(theme);
+    let status = if streaming.status.is_empty() {
+        "Working".to_owned()
+    } else {
+        streaming.status.clone()
+    };
     desk_shell(
-        "stream".to_owned(),
+        "live".to_owned(),
         theme,
         div()
             .flex_1()
@@ -132,14 +153,14 @@ fn render_streaming_entry(
             .flex()
             .flex_col()
             .gap_2()
+            .child(ledger_tag(
+                &format!("WORKING · {status}"),
+                desk.amber,
+                desk.amber.opacity(0.45),
+                theme,
+            ))
             .when(!streaming.thinking.is_empty(), |this| {
-                this.child(ledger_tag(
-                    "THINKING · STREAMING",
-                    desk.faint,
-                    theme.border,
-                    theme,
-                ))
-                .child(thinking_box(
+                this.child(thinking_box(
                     "streaming-thinking".into(),
                     &streaming.thinking,
                     theme,
@@ -153,7 +174,18 @@ fn render_streaming_entry(
                     theme,
                 ))
                 .child(agent_text(streaming.text.clone(), theme))
-            }),
+            })
+            .when(
+                streaming.thinking.is_empty() && streaming.text.is_empty(),
+                |this| {
+                    this.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(status),
+                    )
+                },
+            ),
     )
 }
 
@@ -173,6 +205,7 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
     let web_ready = settings
         .as_ref()
         .is_some_and(|settings| settings.web_backends.iter().any(|backend| backend.enabled));
+    let skills_ready = !workspace.vm().skills.is_empty();
     div()
         .id("welcome")
         .flex()
@@ -190,9 +223,15 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                 .gap_1()
                 .text_xl()
                 .font_weight(gpui_kit::FontWeight::BOLD)
-                .child("MYCODE")
-                .child(div().text_color(desk.amber).child("//"))
-                .child("UI"),
+                .child("MYCODE"),
+        )
+        .child(
+            div()
+                .id("welcome-accent")
+                .w(px(72.))
+                .h(px(3.))
+                .rounded(px(2.))
+                .bg(super::skin::accent(theme, 90.)),
         )
         .child(
             div()
@@ -208,6 +247,7 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                 .flex_row()
                 .gap_1()
                 .child(capability_chip("AGENTS", agents_ready, desk.violet, theme))
+                .child(capability_chip("SKILLS", skills_ready, desk.amber, theme))
                 .child(capability_chip("MCP", mcp_ready, desk.amber, theme))
                 .child(capability_chip("WEB", web_ready, desk.cyan, theme))
                 .child(capability_chip("FILES", true, desk.green, theme)),
@@ -719,11 +759,19 @@ fn render_composer(
     if let Some(text) = workspace.take_composer_prefill() {
         composer.update(cx, |state, cx| state.set_value(text, window, cx));
     }
-    let theme = cx.theme();
     let model_label: SharedString = model_picker_label(workspace.vm()).into();
     let reasoning_label: SharedString = reasoning_chip_label(workspace.vm()).into();
     let has_session = workspace.vm().active.is_some();
     let sending = workspace.vm().sending;
+    let has_draft = !workspace.vm().composer_draft.trim().is_empty();
+    let queued = workspace.vm().queued.clone();
+    let has_queue = !queued.is_empty();
+    let queue_panel = if has_queue {
+        Some(render_queued_followups(queued, cx).into_any_element())
+    } else {
+        None
+    };
+    let theme = cx.theme();
     let session_project = workspace
         .vm()
         .active
@@ -743,21 +791,22 @@ fn render_composer(
         .unwrap_or_else(|| "Set folder".to_owned())
         .into();
     let has_project = session_project.is_some();
-    // Thinking effort rides the provider wire; without an enabled provider
-    // the control would be dead weight in the chip row.
-    let has_enabled_provider = workspace
+    // Thinking effort rides the provider wire; hide the chip when no
+    // provider is enabled or the catalog model does not reason.
+    let show_reasoning_chip = workspace
         .vm()
         .settings
         .as_ref()
-        .is_some_and(|settings| settings.providers.iter().any(|provider| provider.enabled));
+        .is_some_and(|settings| settings.providers.iter().any(|provider| provider.enabled))
+        && selected_model_supports_reasoning(workspace.vm());
 
     div()
         .id("composer")
         .flex()
         .w_full()
         .border_t_1()
-        .border_color(theme.border)
-        .bg(theme.sidebar)
+        .border_color(super::skin::glass_border(theme))
+        .bg(super::skin::glass(theme))
         .px_4()
         .py_2()
         .child(
@@ -796,6 +845,7 @@ fn render_composer(
                                 .child(Textarea::new(&composer)),
                         ),
                 )
+                .when_some(queue_panel, |this, queue| this.child(queue))
                 .child(
                     div()
                         .id("composer-chip-row")
@@ -865,7 +915,7 @@ fn render_composer(
                                 // it never displaces the send button.
                                 .child(div().min_w_0().truncate().child(model_label)),
                         )
-                        .when(has_enabled_provider, |this| {
+                        .when(show_reasoning_chip, |this| {
                             this.child(
                                 div()
                                     .id("composer-reasoning-chip")
@@ -885,41 +935,100 @@ fn render_composer(
                                     .text_color(theme.muted_foreground)
                                     .hover(|this| this.bg(theme.secondary))
                                     .on_click(cx.listener(|workspace, _, _, cx| {
-                                        let current = workspace
-                                            .vm()
-                                            .settings
-                                            .as_ref()
-                                            .and_then(|settings| settings.reasoning.clone())
-                                            .unwrap_or_else(|| "default".to_owned());
-                                        let levels = ["default", "low", "medium", "high"];
-                                        let index = levels
-                                            .iter()
-                                            .position(|level| *level == current)
-                                            .unwrap_or(0);
-                                        let next = levels[(index + 1) % levels.len()];
-                                        workspace.on_select_reasoning(next, cx);
+                                        let open = !workspace.vm().reasoning_menu_open;
+                                        workspace.on_toggle_reasoning_menu(open, cx);
                                     }))
                                     .child(Icon::new(IconName::Sparkles).xsmall().flex_shrink_0())
                                     .child(reasoning_label),
                             )
                         })
                         .child(div().flex_1().min_w_0())
-                        .child(
-                            Button::new("send")
-                                .icon(IconName::ArrowUp)
-                                .primary()
-                                .rounded(px(3.))
-                                .flex_shrink_0()
-                                .disabled(sending || !has_session)
-                                .on_click(cx.listener(|workspace, _, window, cx| {
-                                    workspace.on_send(window, cx);
-                                })),
-                        ),
+                        .when(sending && has_draft, |this| {
+                            this.child(
+                                Button::new("queue")
+                                    .icon(IconName::List)
+                                    .primary()
+                                    .rounded(px(3.))
+                                    .flex_shrink_0()
+                                    .on_click(cx.listener(|workspace, _, window, cx| {
+                                        workspace.on_send(window, cx);
+                                    })),
+                            )
+                        })
+                        .when(!sending, |this| {
+                            this.child(
+                                Button::new("send")
+                                    .icon(IconName::ArrowUp)
+                                    .primary()
+                                    .rounded(px(3.))
+                                    .flex_shrink_0()
+                                    .disabled(!has_session || (!has_draft && !has_queue))
+                                    .on_click(cx.listener(|workspace, _, window, cx| {
+                                        workspace.on_send(window, cx);
+                                    })),
+                            )
+                        })
+                        .when(sending, |this| {
+                            this.child(
+                                Button::new("stop")
+                                    .icon(IconName::X)
+                                    .danger()
+                                    .rounded(px(3.))
+                                    .flex_shrink_0()
+                                    .on_click(cx.listener(|workspace, _, _, cx| {
+                                        workspace.on_cancel_chat(cx);
+                                    })),
+                            )
+                        }),
                 ),
         )
 }
 
-/// One user bubble with hover actions: edit-and-resend (rewinds to before
+/// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
+fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id("composer-queue")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pt_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("QUEUED · {}", items.len())),
+        )
+        .children(items.into_iter().enumerate().map(|(index, text)| {
+            let preview: SharedString = ellipsis(&text, 80).into();
+            div()
+                .id(SharedString::from(format!("queued-{index}")))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .h(px(24.))
+                .rounded(px(3.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.sidebar)
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(div().min_w_0().flex_1().truncate().child(preview))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("queued-remove-{index}")))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_remove_queued(index, cx);
+                        }))
+                        .child(Icon::new(IconName::X).xsmall()),
+                )
+        }))
+}
+
+/// One user bubble with hover actions: edit-and-resend (rewinds to before)
 /// this message and prefills the composer) and recall (drops this message
 /// and everything after). The first message has no prior event to rewind
 /// to, so its actions hide.
@@ -1028,17 +1137,33 @@ fn render_user_entry(
         .into_any_element()
 }
 
-/// Composer chip label for the thinking-effort cycle button.
+/// Composer chip label for the thinking-effort submenu.
 fn reasoning_chip_label(vm: &crate::view_model::WorkspaceState) -> String {
-    match vm
+    let selected = vm
         .settings
         .as_ref()
         .and_then(|settings| settings.reasoning.as_deref())
-    {
-        Some("low") => "Thinking \u{b7} low".to_owned(),
-        Some("medium") => "Thinking \u{b7} med".to_owned(),
-        Some("high") => "Thinking \u{b7} high".to_owned(),
-        _ => "Thinking \u{b7} auto".to_owned(),
+        .filter(|level| {
+            crate::view_model::selected_reasoning_levels(vm)
+                .iter()
+                .any(|item| item == level)
+        })
+        .unwrap_or("default");
+    format!("Thinking \u{b7} {selected}")
+}
+
+fn reasoning_row_label(level: &str) -> String {
+    match level {
+        "default" => "Default \u{b7} provider".to_owned(),
+        "off" => "Off".to_owned(),
+        "on" => "On".to_owned(),
+        "minimal" => "Minimal".to_owned(),
+        "low" => "Low \u{b7} brief".to_owned(),
+        "medium" => "Medium \u{b7} balanced".to_owned(),
+        "high" => "High \u{b7} deep".to_owned(),
+        "xhigh" => "Extra high".to_owned(),
+        "max" => "Max".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -1074,9 +1199,9 @@ enum ModelMenuRow {
     },
     /// One configured model of the selected provider.
     Model { id: String, selected: bool },
-    /// One reasoning-effort level.
+    /// One reasoning-effort level advertised by the selected catalog model.
     Reasoning {
-        level: &'static str,
+        level: String,
         label: String,
         selected: bool,
     },
@@ -1160,18 +1285,11 @@ pub(super) fn render_model_menu(
             all
         })
         .unwrap_or(configured_models);
-    let selected_reasoning = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .and_then(|settings| settings.reasoning.clone())
-        .unwrap_or_else(|| "default".to_owned());
 
     let mut rows: Vec<ModelMenuRow> = vec![ModelMenuRow::Header {
         label: "PROVIDER",
         divider: false,
     }];
-    let has_providers = !providers.is_empty();
     if providers.is_empty() {
         rows.push(ModelMenuRow::Hint(
             "No enabled providers — add one in Settings \u{2192} Models",
@@ -1197,25 +1315,6 @@ pub(super) fn render_model_menu(
             id,
         }));
     }
-    // Thinking effort only matters once a provider is configured.
-    if has_providers {
-        rows.push(ModelMenuRow::Header {
-            label: "THINKING",
-            divider: true,
-        });
-        rows.extend(
-            ["default", "low", "medium", "high"].map(|level| ModelMenuRow::Reasoning {
-                selected: level == selected_reasoning,
-                label: match level {
-                    "low" => "Low \u{b7} brief".to_owned(),
-                    "medium" => "Medium \u{b7} balanced".to_owned(),
-                    "high" => "High \u{b7} deep".to_owned(),
-                    other => format!("{other} \u{b7} provider default"),
-                },
-                level,
-            }),
-        );
-    }
 
     let weak = cx.weak_entity();
     div()
@@ -1238,6 +1337,62 @@ pub(super) fn render_model_menu(
                 .p_2()
                 .max_h(px(420.))
                 .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .children(rows.iter().map(|row| model_menu_row(row, &weak, theme))),
+        )
+        .into_any_element()
+}
+
+/// Thinking-effort submenu, docked like the model picker so a click picks
+/// one level instead of cycling the chip.
+fn render_reasoning_menu(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let selected = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.reasoning.clone())
+        .filter(|level| {
+            crate::view_model::selected_reasoning_levels(workspace.vm())
+                .iter()
+                .any(|item| item == level)
+        })
+        .unwrap_or_else(|| "default".to_owned());
+    let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
+    let rows: Vec<ModelMenuRow> = std::iter::once(ModelMenuRow::Header {
+        label: "THINKING",
+        divider: false,
+    })
+    .chain(levels.into_iter().map(|level| ModelMenuRow::Reasoning {
+        selected: level == selected,
+        label: reasoning_row_label(&level),
+        level,
+    }))
+    .collect();
+
+    let weak = cx.weak_entity();
+    div()
+        .id("reasoning-menu-layer")
+        .w_full()
+        .px_4()
+        .pb_1()
+        .child(
+            div()
+                .id("reasoning-menu")
+                .mx_auto()
+                .w_full()
+                .max_w(rems(46.))
+                .rounded(px(3.))
+                .border_1()
+                .border_color(skin::glass_border(theme))
+                .bg(skin::popover(theme))
+                .text_color(theme.popover_foreground)
+                .shadow_lg()
+                .p_2()
                 .flex()
                 .flex_col()
                 .children(rows.iter().map(|row| model_menu_row(row, &weak, theme))),
@@ -1316,15 +1471,16 @@ fn model_menu_row(
             label,
             selected,
         } => {
-            let level = *level;
+            let level = level.clone();
             let weak = weak.clone();
             menu_row(
                 format!("reasoning-{level}"),
                 label.clone(),
                 *selected,
                 move |_, _, cx| {
+                    let picked = level.clone();
                     let _ = weak.update(cx, |workspace, cx| {
-                        workspace.on_select_reasoning(level, cx);
+                        workspace.on_select_reasoning(&picked, cx);
                     });
                 },
                 theme,

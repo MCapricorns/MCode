@@ -312,6 +312,17 @@ pub enum BridgeEvent {
         /// Tool name.
         name: String,
     },
+    /// Incremental tool progress (including nested subagent steps).
+    ToolProgress {
+        /// Session identity spelling.
+        session_id: String,
+        /// Provider-assigned call id when known.
+        call_id: String,
+        /// Tool name when known; empty for a nested progress line.
+        name: String,
+        /// One-line progress.
+        message: String,
+    },
     /// A tool call finished; its result is committed to the ledger.
     ToolCompleted {
         /// Session identity spelling.
@@ -1474,14 +1485,13 @@ async fn read_branch(
 
 /// Rebuilds the model-facing turn history from committed branch events.
 ///
-/// Assistant messages keep their tool_use blocks, and tool results replay as
-/// `Message::ToolResult`, so the wire sequence stays valid across turns.
-/// Thinking blocks are stripped from replay: their signatures are bound to
-/// the model that produced them, and gateways reject a cross-model replay
-/// (an M2 conversation continued on M3 fails with "invalid parameter").
-/// In-turn thinking (same model, same agentic loop) never passes through
-/// here, so tool_use continuation keeps its signatures on the wire.
-/// Usage and task bookkeeping never reach the provider.
+/// Assistant messages keep their tool_use and thinking blocks, and tool
+/// results replay as `Message::ToolResult`, so the wire sequence stays
+/// valid across turns. Thinking signatures stay on the replay: stripping
+/// them and then enabling thinking on the next turn makes Anthropic-compatible
+/// gateways return 400 "unrecognized chat message". Adapters that cannot
+/// replay thinking drop those blocks themselves. Usage and task bookkeeping
+/// never reach the provider.
 async fn ledger_history(
     service: &SessionService,
     session: &SessionId,
@@ -1505,13 +1515,15 @@ async fn ledger_history(
                     // Assistant messages are typed JSON; a parse miss means
                     // the payload is the user's plain-text message.
                     match serde_json::from_slice::<mycode_core::AssistantMessage>(&loaded.payload) {
-                        Ok(mut assistant) => {
-                            // Signatures are model-bound; replaying them to a
-                            // different model fails provider validation.
-                            assistant.blocks.retain(|block| {
-                                !matches!(block, mycode_core::ContentBlock::Thinking(_))
-                            });
-                            history.push(Message::Assistant(assistant));
+                        Ok(assistant) => {
+                            // Keep thinking blocks. Anthropic-compatible
+                            // gateways reject a later thinking-enabled turn
+                            // if prior signatures are stripped ("unrecognized
+                            // chat message"). Each wire adapter drops blocks
+                            // it cannot replay.
+                            if !assistant.blocks.is_empty() {
+                                history.push(Message::Assistant(assistant));
+                            }
                         }
                         Err(_) => history.push(Message::User(mycode_core::UserMessage::text(
                             decode_text(&loaded.payload),
@@ -1607,7 +1619,7 @@ fn search_project_files(root: &std::path::Path, query: &str) -> Vec<String> {
             };
             if meta.is_dir() {
                 if let Some(name) = path.file_name().and_then(|name| name.to_str())
-                    && (SKIP_DIRS.contains(&name) || name.starts_with('.'))
+                    && (SKIP_DIRS.contains(&name) || (name.starts_with('.') && name != ".agents"))
                 {
                     continue;
                 }
@@ -2304,11 +2316,11 @@ Connected MCP servers add their tools to the list below.",
     let _cancel_guard = CancelGuard::register(state.turn_cancels.clone(), &session_id, &cancel);
     let mut config = AgentConfig::new().with_system_prompt(system_prompt);
     if let Some(level) = settings.reasoning_effort.as_deref() {
-        let level = match level {
-            "low" => mycode_core::ReasoningLevel::Low,
-            "medium" => mycode_core::ReasoningLevel::Medium,
-            "high" => mycode_core::ReasoningLevel::High,
-            _ => return Err("settings reasoningEffort must be low, medium, or high".to_owned()),
+        let Some(level) = mycode_core::ReasoningLevel::parse(level) else {
+            return Err(
+                "settings reasoningEffort must be a models.dev option (off, on, minimal, low, medium, high, xhigh, max)"
+                    .to_owned(),
+            );
         };
         config = config.with_reasoning(level);
     }
@@ -2375,7 +2387,14 @@ Connected MCP servers add their tools to the list below.",
                         name,
                     });
                 }
-                mycode_core::events::AgentEvent::ToolProgress { .. } => {}
+                mycode_core::events::AgentEvent::ToolProgress { call_id, message } => {
+                    let _ = pump_events.send(BridgeEvent::ToolProgress {
+                        session_id: pump_session_id.clone(),
+                        call_id: call_id.to_string(),
+                        name: String::new(),
+                        message,
+                    });
+                }
                 mycode_core::events::AgentEvent::ToolCompleted {
                     call_id,
                     result: tool_result,
@@ -3412,7 +3431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ledger_history_strips_thinking_for_cross_model_replay() {
+    async fn ledger_history_keeps_thinking_for_same_thread_replay() {
         let (_parent, layout) = home();
         let service = SessionService::new(&layout);
         let created = service.create().await.expect("session created");
@@ -3428,8 +3447,6 @@ mod tests {
             .write(EventKind::Message, b"hello")
             .await
             .expect("user commit");
-        // A thinking assistant reply carrying a model-bound signature: the
-        // provider rejects replaying it to a different model.
         let mut thinking = mycode_core::ThinkingBlock::new("let me think");
         thinking.signature = Some("sig-m2".to_owned());
         let assistant = mycode_core::AssistantMessage {
@@ -3455,14 +3472,15 @@ mod tests {
         match &history[1] {
             Message::Assistant(replayed) => {
                 assert!(
-                    replayed
-                        .blocks
-                        .iter()
-                        .all(|block| !matches!(block, mycode_core::ContentBlock::Thinking(_))),
-                    "thinking never replays across turns"
+                    replayed.blocks.iter().any(|block| matches!(
+                        block,
+                        mycode_core::ContentBlock::Thinking(thinking)
+                            if thinking.signature.as_deref() == Some("sig-m2")
+                    )),
+                    "thinking signatures must replay so a later thinking turn stays valid"
                 );
                 assert!(matches!(
-                    &replayed.blocks[0],
+                    &replayed.blocks[1],
                     mycode_core::ContentBlock::Text(text) if text.text == "hi there"
                 ));
             }
@@ -3624,6 +3642,7 @@ mod tests {
             "src/deep/nested/mod.rs",
             "node_modules/skip.js",
             ".git/config",
+            ".agents/SKILL.md",
             "README.md",
         ] {
             let full = root.join(path);
@@ -3638,6 +3657,7 @@ mod tests {
                 "README.md".to_owned(),
                 "src/lib.rs".to_owned(),
                 "src/main.rs".to_owned(),
+                ".agents/SKILL.md".to_owned(),
                 "src/deep/nested/mod.rs".to_owned(),
             ]
         );

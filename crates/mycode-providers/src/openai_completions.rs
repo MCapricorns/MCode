@@ -38,13 +38,26 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        body["reasoning_effort"] = json!(match level {
-            ReasoningLevel::Low => "low",
-            ReasoningLevel::Medium => "medium",
-            ReasoningLevel::High => "high",
-        });
+        apply_reasoning_effort(&mut body, level);
     }
     body
+}
+
+fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
+    match level {
+        ReasoningLevel::Off => {
+            body["reasoning_effort"] = json!("none");
+            body["thinking"] = json!({ "type": "disabled" });
+        }
+        ReasoningLevel::On => {
+            body["thinking"] = json!({ "type": "enabled" });
+        }
+        other => {
+            if let Some(token) = other.effort_token() {
+                body["reasoning_effort"] = json!(token);
+            }
+        }
+    }
 }
 
 fn convert_tool(tool: &ToolSpec) -> Value {
@@ -90,6 +103,12 @@ fn convert_message(message: &Message, messages: &mut Vec<Value>) {
                 .collect();
             // Thinking blocks have no completions replay channel; providers
             // that need them expose their own reasoning fields.
+            // A thinking-only assistant becomes `{"role":"assistant"}` with
+            // no content; MiniMax and similar gateways reject that as
+            // "unrecognized chat message".
+            if text.is_empty() && tool_calls.is_empty() {
+                return;
+            }
             let mut wire = json!({"role": "assistant"});
             if !text.is_empty() {
                 wire["content"] = json!(text);
@@ -403,6 +422,52 @@ mod tests {
         assert_eq!(
             body["tools"][0]["function"]["name"], "read",
             "thinking block must not enter completions history"
+        );
+    }
+
+    #[test]
+    fn reasoning_tokens_follow_the_catalog_level() {
+        let off = build_body(
+            "test-model",
+            &Request::new().with_reasoning(ReasoningLevel::Off),
+        );
+        assert_eq!(off["reasoning_effort"], "none");
+        assert_eq!(off["thinking"]["type"], "disabled");
+
+        let on = build_body(
+            "test-model",
+            &Request::new().with_reasoning(ReasoningLevel::On),
+        );
+        assert_eq!(on["thinking"]["type"], "enabled");
+        assert!(on.get("reasoning_effort").is_none());
+
+        let high = build_body(
+            "test-model",
+            &Request::new().with_reasoning(ReasoningLevel::High),
+        );
+        assert_eq!(high["reasoning_effort"], "high");
+        let xhigh = build_body(
+            "test-model",
+            &Request::new().with_reasoning(ReasoningLevel::Xhigh),
+        );
+        assert_eq!(xhigh["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn thinking_only_assistant_is_omitted_from_completions_history() {
+        let request =
+            Request::new().with_message(Message::Assistant(mycode_core::AssistantMessage {
+                blocks: vec![ContentBlock::Thinking(mycode_core::ThinkingBlock::new(
+                    "hmm",
+                ))],
+                usage: None,
+                stop_reason: StopReason::Stop,
+            }));
+        let body = build_body("test-model", &request);
+        let messages = body["messages"].as_array().expect("messages");
+        assert!(
+            messages.is_empty(),
+            "empty assistant messages are unrecognized chat messages: {messages:?}"
         );
     }
 

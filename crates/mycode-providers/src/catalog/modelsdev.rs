@@ -58,8 +58,17 @@ struct ModelsDevModel {
     reasoning: bool,
     tool_call: bool,
     attachment: bool,
+    reasoning_options: Vec<ModelsDevReasoningOption>,
     limit: ModelsDevLimit,
     cost: ModelsDevCost,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ModelsDevReasoningOption {
+    #[serde(rename = "type")]
+    kind: String,
+    values: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -135,10 +144,13 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
             if !valid_model_id(&model_id) || clean_text(&model.status).is_some() {
                 continue;
             }
+            let (reasoning_toggle, reasoning_efforts) = reasoning_options(&model);
             models.push(CatalogModel {
                 id: model_id.clone(),
                 name: clean_text(&model.name).unwrap_or(model_id),
                 reasoning: model.reasoning,
+                reasoning_toggle,
+                reasoning_efforts,
                 tool_call: model.tool_call,
                 attachment: model.attachment,
                 context: model.limit.context,
@@ -161,6 +173,35 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
         });
     }
     normalize(providers)
+}
+
+fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
+    const MAX_EFFORTS: usize = 8;
+    let mut toggle = false;
+    let mut efforts = Vec::new();
+    for option in &model.reasoning_options {
+        match option.kind.as_str() {
+            "toggle" => toggle = true,
+            "effort" => {
+                for value in &option.values {
+                    let Some(token) = clean_text(value) else {
+                        continue;
+                    };
+                    let token = token.to_ascii_lowercase();
+                    if mycode_core::ReasoningLevel::parse(&token).is_none() && token != "default" {
+                        continue;
+                    }
+                    if !efforts.iter().any(|existing| existing == &token)
+                        && efforts.len() < MAX_EFFORTS
+                    {
+                        efforts.push(token);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (toggle, efforts)
 }
 
 /// Model ids keep the provider's own spelling: any nonempty printable id
@@ -241,5 +282,41 @@ mod tests {
                 "models": {"m1": {}}}}"#,
         );
         assert_eq!(vanilla.provider("acme").expect("acme").auth, "");
+    }
+
+    #[test]
+    fn reasoning_options_keep_toggle_and_effort_lists() {
+        let raw = br#"{
+            "acme": {"npm": "@ai-sdk/openai-compatible",
+                "api": "https://api.acme.dev/v1", "name": "Acme",
+                "models": {
+                    "toggle-only": {"name": "Toggle", "reasoning": true,
+                        "reasoning_options": [{"type": "toggle"}]},
+                    "efforts": {"name": "Efforts", "reasoning": true,
+                        "reasoning_options": [{"type": "effort",
+                            "values": ["none", "low", "HIGH", "made-up"]}]}
+                }}
+        }"#;
+        let document = parse_models_dev(raw);
+        let acme = document.provider("acme").expect("acme");
+        let toggle = acme
+            .models
+            .iter()
+            .find(|model| model.id == "toggle-only")
+            .expect("toggle");
+        assert!(toggle.reasoning && toggle.reasoning_toggle);
+        assert!(toggle.reasoning_efforts.is_empty());
+        assert_eq!(toggle.reasoning_levels(), vec!["default", "off", "on"]);
+
+        let efforts = acme
+            .models
+            .iter()
+            .find(|model| model.id == "efforts")
+            .expect("efforts");
+        assert_eq!(efforts.reasoning_efforts, vec!["none", "low", "high"]);
+        assert_eq!(
+            efforts.reasoning_levels(),
+            vec!["default", "off", "low", "high"]
+        );
     }
 }

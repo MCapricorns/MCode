@@ -89,12 +89,58 @@ def build_model(model_id: str, raw: dict) -> dict | None:
         "context": int(number(limit.get("context")) or 0),
         "output": int(number(limit.get("output")) or 0),
     }
+    toggle, efforts = reasoning_options(raw)
+    if toggle:
+        model["reasoningToggle"] = True
+    if efforts:
+        model["reasoningEfforts"] = efforts
     cost_in = number(cost.get("input"))
     cost_out = number(cost.get("output"))
     if cost_in is not None or cost_out is not None:
         model["costIn"] = cost_in
         model["costOut"] = cost_out
     return model
+
+
+REASONING_TOKENS = {
+    "off",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "on",
+    "default",
+}
+
+
+def reasoning_options(raw: dict) -> tuple[bool, list[str]]:
+    """Extract models.dev toggle / effort rows. Unknown tokens are dropped."""
+    options = raw.get("reasoning_options")
+    if not isinstance(options, list):
+        return False, []
+    toggle = False
+    efforts: list[str] = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        kind = option.get("type")
+        if kind == "toggle":
+            toggle = True
+            continue
+        if kind != "effort":
+            continue
+        values = option.get("values")
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            token = clean_text(value).lower()
+            if token not in REASONING_TOKENS or token in efforts or len(efforts) >= 8:
+                continue
+            efforts.append(token)
+    return toggle, efforts
 
 
 def build_provider(provider_id: str, raw: dict) -> dict | None:

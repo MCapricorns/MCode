@@ -13,7 +13,7 @@ use mycode_config::HomeLayout;
 
 use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{
-    DesktopAction, MainView, SettingsState, UpdateState, WorkspaceState, reduce,
+    CHAT_CANCELLED, DesktopAction, MainView, SettingsState, UpdateState, WorkspaceState, reduce,
 };
 use mycode_app::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 
@@ -211,7 +211,9 @@ impl Workspace {
                 }
                 // Refresh the sidebar so the session title picks up the turn.
                 self.dispatch(BridgeCommand::ListSessions, cx);
-                DesktopAction::ChatDone { head, entry }
+                self.apply_action(DesktopAction::ChatDone { head, entry }, cx);
+                self.pump_queued_send(cx);
+                return;
             }
             BridgeEvent::ChatFailed {
                 session_id,
@@ -220,7 +222,14 @@ impl Workspace {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ChatFailed(message)
+                let cancelled = message == CHAT_CANCELLED;
+                self.apply_action(DesktopAction::ChatFailed(message), cx);
+                // A user interrupt frees the turn; queued follow-ups start next.
+                // Provider errors keep the queue so a failed retry cannot loop.
+                if cancelled {
+                    self.pump_queued_send(cx);
+                }
+                return;
             }
             BridgeEvent::Notice {
                 session_id,
@@ -279,6 +288,21 @@ impl Workspace {
                 }
                 DesktopAction::ToolStarted { call_id, name }
             }
+            BridgeEvent::ToolProgress {
+                session_id,
+                call_id,
+                name,
+                message,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::ToolProgress {
+                    call_id,
+                    name,
+                    message,
+                }
+            }
             BridgeEvent::ToolCompleted { session_id, entry } => {
                 if !matches_active(&session_id) {
                     return;
@@ -321,10 +345,7 @@ impl Workspace {
                 self.refresh_mention_search(cx);
             }
             InputEvent::PressEnter { shift: false, .. } => {
-                let draft = self.vm.composer_draft.clone();
-                if !draft.trim().is_empty() && !self.vm.sending {
-                    self.send(draft, window, cx);
-                }
+                self.on_send(window, cx);
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
         }
@@ -334,9 +355,11 @@ impl Workspace {
         let grew = matches!(
             action,
             DesktopAction::MessageSent { .. }
+                | DesktopAction::TurnArmed
                 | DesktopAction::ChatDelta(_)
                 | DesktopAction::ChatThinkingDelta(_)
                 | DesktopAction::ToolStarted { .. }
+                | DesktopAction::ToolProgress { .. }
                 | DesktopAction::ToolResultAppended(_)
                 | DesktopAction::ChatDone { .. }
                 | DesktopAction::UsageRecorded { .. }
@@ -382,6 +405,7 @@ impl Workspace {
                 let session_id = conversation.session_id.clone();
                 self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
                 self.dispatch(BridgeCommand::ListResources { session_id }, cx);
+                self.refresh_skills(cx);
             }
             BridgeReply::Resources(Ok(files)) => {
                 self.apply_action(DesktopAction::ResourcesLoaded(files), cx);
@@ -538,6 +562,7 @@ impl Workspace {
                     },
                     cx,
                 );
+                self.refresh_skills(cx);
             }
             BridgeReply::UiState(Err(_)) => {}
             BridgeReply::UiStateSaved(Ok(())) => {}
@@ -655,6 +680,44 @@ impl Workspace {
     }
 
     fn send(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_text(draft, true, Some(window), cx);
+    }
+
+    /// Enqueues a follow-up while a turn is running; the composer stays free
+    /// for the next draft. The queue is capped so a stuck turn cannot grow
+    /// without bound.
+    fn enqueue_follow_up(&mut self, draft: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.vm.queued.len() >= crate::view_model::MAX_QUEUED_MESSAGES {
+            return;
+        }
+        self.apply_action(DesktopAction::MessageQueued(draft), cx);
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// Starts the next queued follow-up once the in-flight turn is idle.
+    /// Does not wipe the composer: the user may already be typing another
+    /// message behind the queue.
+    fn pump_queued_send(&mut self, cx: &mut Context<Self>) {
+        if self.vm.sending || self.vm.queued.is_empty() {
+            return;
+        }
+        let draft = self.vm.queued[0].clone();
+        self.apply_action(DesktopAction::QueuedMessageTaken, cx);
+        self.send_text(draft, false, None, cx);
+    }
+
+    fn send_text(
+        &mut self,
+        draft: String,
+        clear_composer: bool,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        if draft.trim().is_empty() {
+            return;
+        }
         let Some(conversation) = self.vm.active.clone() else {
             return;
         };
@@ -665,10 +728,14 @@ impl Workspace {
             return;
         };
         let expected_head = parse_head(&conversation.head);
-        self.vm.sending = true;
-        self.vm.composer_draft.clear();
-        self.composer
-            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.apply_action(DesktopAction::TurnArmed, cx);
+        if clear_composer {
+            self.vm.composer_draft.clear();
+            if let Some(window) = window {
+                self.composer
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+            }
+        }
         cx.notify();
         self.dispatch(
             BridgeCommand::SendMessage {
@@ -690,22 +757,83 @@ impl Workspace {
                 return;
             }
         };
-        if kind != crate::view_model::MentionKind::File
-            || self.mention_query.as_deref() == Some(fragment.as_str())
-        {
+        if self.mention_query.as_deref() == Some(fragment.as_str()) {
             return;
         }
         self.mention_query = Some(fragment.clone());
-        let Some(conversation) = self.vm.active.clone() else {
+        if kind == crate::view_model::MentionKind::Command {
+            self.merge_skill_commands(&fragment, cx);
+            return;
+        }
+        if kind != crate::view_model::MentionKind::File {
+            return;
+        }
+        let session_id = self
+            .vm
+            .active
+            .as_ref()
+            .map(|conversation| conversation.session_id.clone());
+        let Some(session_id) = session_id else {
             return;
         };
         self.dispatch(
             BridgeCommand::SearchProjectFiles {
-                session_id: conversation.session_id,
+                session_id,
                 query: fragment,
             },
             cx,
         );
+    }
+
+    fn skill_roots(&self) -> (std::path::PathBuf, Option<std::path::PathBuf>) {
+        let workspace = self
+            .vm
+            .project_dir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+        let user_home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from);
+        (workspace, user_home)
+    }
+
+    fn refresh_skills(&mut self, cx: &mut Context<Self>) {
+        let (workspace, user_home) = self.skill_roots();
+        let skills = mycode_config::discover_skills(&workspace, user_home.as_deref())
+            .into_iter()
+            .map(|skill| crate::view_model::SkillEntry {
+                slug: skill.slug,
+                title: skill.title,
+                path: skill.path.to_string_lossy().into_owned(),
+                global: skill.global,
+            })
+            .collect();
+        self.apply_action(DesktopAction::SkillsLoaded(skills), cx);
+    }
+
+    fn merge_skill_commands(&mut self, fragment: &str, cx: &mut Context<Self>) {
+        let (workspace, user_home) = self.skill_roots();
+        let skills = mycode_config::discover_skills(&workspace, user_home.as_deref());
+        if let Some(mention) = self.vm.mention.as_mut() {
+            for skill in skills {
+                if !skill.slug.starts_with(fragment) {
+                    continue;
+                }
+                let insert = format!("/{}", skill.slug);
+                if mention
+                    .items
+                    .iter()
+                    .any(|(existing, _)| existing == &insert)
+                {
+                    continue;
+                }
+                mention
+                    .items
+                    .push((insert, format!("/{} · {}", skill.slug, skill.title)));
+            }
+        }
+        cx.notify();
     }
 
     /// Accepts one mention row: rewrites the draft (files) or runs the
@@ -734,9 +862,35 @@ impl Workspace {
                     self.on_new_session(cx);
                 } else if insert == "/settings" {
                     self.on_show_main_view(crate::view_model::MainView::Settings, cx);
+                } else if let Some(slug) = insert.strip_prefix('/') {
+                    self.insert_skill_draft(slug, cx);
                 }
             }
         }
+    }
+
+    pub(super) fn on_refresh_skills(&mut self, cx: &mut Context<Self>) {
+        self.refresh_skills(cx);
+    }
+
+    pub(super) fn on_use_skill(&mut self, slug: &str, cx: &mut Context<Self>) {
+        self.insert_skill_draft(slug, cx);
+        self.on_show_main_view(crate::view_model::MainView::Chat, cx);
+    }
+
+    fn insert_skill_draft(&mut self, slug: &str, cx: &mut Context<Self>) {
+        let (workspace, user_home) = self.skill_roots();
+        let Some(skill) = mycode_config::discover_skills(&workspace, user_home.as_deref())
+            .into_iter()
+            .find(|skill| skill.slug == slug)
+        else {
+            return;
+        };
+        let Ok(body) = mycode_config::read_resource(&skill.path) else {
+            return;
+        };
+        self.pending_composer_prefill = Some(format!("/{slug}\n\n{body}\n\n"));
+        cx.notify();
     }
 
     /// Rewinds to just before the user message at `index` and prefills the
@@ -844,6 +998,7 @@ impl Workspace {
     pub(super) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
         self.apply_action(DesktopAction::ActiveProjectChanged(project), cx);
+        self.refresh_skills(cx);
         self.persist_ui_state(cx);
     }
 
@@ -857,6 +1012,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.apply_action(DesktopAction::ShowSettingsSection(section), cx);
+        if section == crate::view_model::SettingsSection::Skills {
+            self.refresh_skills(cx);
+        }
     }
 
     /// Switches the Models settings sub-page.
@@ -936,6 +1094,10 @@ impl Workspace {
             self.apply_action(DesktopAction::ModelMenuToggled(false), cx);
             dismissed = true;
         }
+        if self.vm.reasoning_menu_open {
+            self.apply_action(DesktopAction::ReasoningMenuToggled(false), cx);
+            dismissed = true;
+        }
         if self.vm.preset_model_menu_open {
             self.apply_action(DesktopAction::PresetModelMenuToggled(false), cx);
             dismissed = true;
@@ -967,37 +1129,72 @@ impl Workspace {
             self.apply_action(DesktopAction::ShowMainView(MainView::Chat), cx);
         }
         if !dismissed && self.vm.sending {
-            // Escape aborts the in-flight turn; the bridge answers with a
-            // `cancelled` failure event that resets the sending state.
-            if let Some(conversation) = self.vm.active.as_ref() {
-                self.dispatch(
-                    BridgeCommand::CancelChat {
-                        session_id: conversation.session_id.clone(),
-                    },
-                    cx,
-                );
-            }
+            self.on_cancel_chat(cx);
         }
     }
 
     pub(super) fn on_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.vm.composer_draft.clone();
-        if !draft.trim().is_empty() && !self.vm.sending {
-            self.send(draft, window, cx);
+        if self.vm.sending {
+            if !draft.trim().is_empty() {
+                self.enqueue_follow_up(draft, window, cx);
+            }
+            return;
         }
+        if !draft.trim().is_empty() {
+            self.send(draft, window, cx);
+            return;
+        }
+        self.pump_queued_send(cx);
+    }
+
+    pub(super) fn on_remove_queued(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx);
+    }
+
+    /// Aborts the in-flight turn; the bridge answers with a `cancelled`
+    /// failure event that resets the sending state.
+    pub(super) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
+        let Some(conversation) = self.vm.active.as_ref() else {
+            return;
+        };
+        if !self.vm.sending {
+            return;
+        }
+        self.dispatch(
+            BridgeCommand::CancelChat {
+                session_id: conversation.session_id.clone(),
+            },
+            cx,
+        );
     }
 
     /// Switches the main area between chat and settings.
     pub(super) fn on_show_main_view(&mut self, view: MainView, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ShowMainView(view), cx);
+        if view == MainView::Settings {
+            self.refresh_skills(cx);
+        }
     }
 
     pub(super) fn on_toggle_model_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
     }
 
+    pub(super) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
+    }
+
     pub(super) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ProviderSelected(provider_id.to_owned()), cx);
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.dirty)
+        {
+            self.on_save_settings(cx);
+        }
         self.persist_ui_state(cx);
     }
 
@@ -1024,21 +1221,39 @@ impl Workspace {
             self.on_save_settings(cx);
         }
         self.apply_action(DesktopAction::ModelSelected(model_id.to_owned()), cx);
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.dirty)
+        {
+            self.on_save_settings(cx);
+        }
         self.persist_ui_state(cx);
     }
 
     /// Persists the requested reasoning effort through the settings doc.
     pub(super) fn on_select_reasoning(&mut self, level: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ReasoningMenuToggled(false), cx);
         self.apply_action(DesktopAction::ModelMenuToggled(false), cx);
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_none_or(|settings| settings.saving)
+        {
+            return;
+        }
+        let levels = crate::view_model::selected_reasoning_levels(&self.vm);
         let Some(settings) = self.vm.settings.as_mut() else {
             return;
         };
-        if settings.saving {
+        settings.reasoning = if level == "default" || level.is_empty() {
+            None
+        } else if levels.iter().any(|item| item == level) {
+            Some(level.to_owned())
+        } else {
             return;
-        }
-        settings.reasoning = match level {
-            "low" | "medium" | "high" => Some(level.to_owned()),
-            _ => None,
         };
         settings.dirty = true;
         cx.notify();
@@ -1144,6 +1359,7 @@ impl Workspace {
             },
             cx,
         );
+        self.refresh_skills(cx);
         self.persist_ui_state(cx);
     }
 
@@ -1807,16 +2023,38 @@ impl Workspace {
     }
 
     pub(super) fn on_cycle_subagent_thinking(&mut self, role: &str, cx: &mut Context<Workspace>) {
-        let Some(settings) = self.vm.settings.as_ref() else {
+        let Some((provider, model, mut next)) = self.vm.settings.as_ref().map(|settings| {
+            let route = settings.subagents.role(role);
+            (
+                route
+                    .and_then(|entry| entry.provider.clone())
+                    .or_else(|| self.vm.selected_provider.clone()),
+                route
+                    .and_then(|entry| entry.model.clone())
+                    .or_else(|| self.vm.selected_model.clone()),
+                settings.subagents.clone(),
+            )
+        }) else {
             return;
         };
-        let mut next = settings.subagents.clone();
+        let levels = crate::view_model::reasoning_levels_for(
+            &self.vm,
+            provider.as_deref(),
+            model.as_deref(),
+        );
         let entry = next.role_mut(role);
-        entry.thinking = match entry.thinking.as_deref() {
-            None => Some("low".to_owned()),
-            Some("low") => Some("medium".to_owned()),
-            Some("medium") => Some("high".to_owned()),
-            _ => None,
+        let current = entry.thinking.as_deref().unwrap_or("default");
+        let next_level = levels
+            .iter()
+            .position(|level| level == current)
+            .and_then(|index| levels.get(index + 1))
+            .or_else(|| levels.first())
+            .map(String::as_str)
+            .unwrap_or("default");
+        entry.thinking = if next_level == "default" {
+            None
+        } else {
+            Some(next_level.to_owned())
         };
         self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
     }

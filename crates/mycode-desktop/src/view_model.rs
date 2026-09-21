@@ -26,6 +26,34 @@ pub struct ComposerMention {
     pub items: Vec<(String, String)>,
 }
 
+/// One in-flight or just-finished `task` subagent.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LiveJob {
+    /// Provider-assigned call id.
+    pub call_id: String,
+    /// Catalog role when known (`scout`, `artisan`, …).
+    pub role: String,
+    /// Human-facing brief from the parent turn.
+    pub label: String,
+    /// Latest nested tool or progress line.
+    pub step: String,
+    /// Whether the child has returned its answer.
+    pub done: bool,
+}
+
+/// One slash-command skill shown in settings and the inspector.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SkillEntry {
+    /// Command slug without the leading `/`.
+    pub slug: String,
+    /// One-line title from the skill heading.
+    pub title: String,
+    /// Absolute path of the skill markdown.
+    pub path: String,
+    /// Whether this file came from the user-global `.agents` tree.
+    pub global: bool,
+}
+
 /// An in-flight OAuth device-flow sign-in shown in the settings UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopilotSignIn {
@@ -56,7 +84,6 @@ fn parse_mention(text: &str) -> Option<ComposerMention> {
     }
     let token = text.split_whitespace().last().unwrap_or_default();
     if let Some(fragment) = token.strip_prefix('@')
-        && !fragment.is_empty()
         && !fragment.contains('@')
     {
         return Some(ComposerMention {
@@ -66,7 +93,6 @@ fn parse_mention(text: &str) -> Option<ComposerMention> {
         });
     }
     if let Some(fragment) = text.strip_prefix('/')
-        && !fragment.is_empty()
         && !fragment.contains(char::is_whitespace)
     {
         let items = COMPOSER_COMMANDS
@@ -139,8 +165,8 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
     /// Appearance theme: `light` or `dark`.
     pub theme: String,
-    /// Requested reasoning effort: `low`, `medium`, `high`; `None` keeps the
-    /// provider default.
+    /// Requested reasoning effort from the selected model's catalog options;
+    /// `None` keeps the provider default.
     pub reasoning: Option<String>,
     /// Provider ids that have a stored API key.
     pub providers_with_keys: Vec<String>,
@@ -252,6 +278,8 @@ pub enum SettingsSection {
     Models,
     /// Subagent roles and per-role model routes.
     Agents,
+    /// Slash-command skills from `.agents`.
+    Skills,
     /// MCP servers.
     Mcp,
     /// Web search backends.
@@ -269,6 +297,7 @@ impl SettingsSection {
             Self::General => "general",
             Self::Models => "models",
             Self::Agents => "agents",
+            Self::Skills => "skills",
             Self::Mcp => "mcp",
             Self::Web => "web",
             Self::Data => "data",
@@ -282,6 +311,7 @@ impl SettingsSection {
             Self::General => "General",
             Self::Models => "Models",
             Self::Agents => "Agents",
+            Self::Skills => "Skills",
             Self::Mcp => "MCP",
             Self::Web => "Web search",
             Self::Data => "Data",
@@ -296,6 +326,7 @@ impl SettingsSection {
             Self::General => IconName::SlidersHorizontal,
             Self::Models => IconName::Bot,
             Self::Agents => IconName::Sparkles,
+            Self::Skills => IconName::Terminal,
             Self::Mcp => IconName::PlugZap,
             Self::Web => IconName::Globe,
             Self::Data => IconName::Database,
@@ -309,6 +340,7 @@ impl SettingsSection {
             Self::General => "Theme, identity",
             Self::Models => "Providers, keys",
             Self::Agents => "Roles, models",
+            Self::Skills => "Slash commands",
             Self::Mcp => "Tool servers",
             Self::Web => "Search backends",
             Self::Data => "Usage, export",
@@ -318,7 +350,10 @@ impl SettingsSection {
 
     /// Nav groups in display order with their member sections.
     pub const GROUPS: &'static [(&'static str, &'static [SettingsSection])] = &[
-        ("WORKSPACE", &[Self::General, Self::Models, Self::Agents]),
+        (
+            "WORKSPACE",
+            &[Self::General, Self::Models, Self::Agents, Self::Skills],
+        ),
         ("CONNECT", &[Self::Mcp, Self::Web]),
         ("SYSTEM", &[Self::Data, Self::About]),
     ];
@@ -364,6 +399,8 @@ pub struct WorkspaceState {
     pub active: Option<ActiveConversation>,
     /// Composer draft text.
     pub composer_draft: String,
+    /// Follow-ups waiting for the in-flight turn to finish.
+    pub queued: Vec<String>,
     /// A send is in flight.
     pub sending: bool,
     /// Per-server tool names from the last listing, keyed by server id.
@@ -372,6 +409,10 @@ pub struct WorkspaceState {
     pub mcp_probing: Vec<String>,
     /// Prompt resources for the open session: (name, path).
     pub resources: Vec<(String, String)>,
+    /// Slash-command skills from the project and user `.agents` trees.
+    pub skills: Vec<SkillEntry>,
+    /// Live `task` subagent runs for the inspector panel.
+    pub live_jobs: Vec<LiveJob>,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Durable task list rows: (content, status).
@@ -423,6 +464,8 @@ pub struct WorkspaceState {
     pub selected_model: Option<String>,
     /// Whether the model picker dropdown is open.
     pub model_menu_open: bool,
+    /// Whether the thinking-effort submenu is open.
+    pub reasoning_menu_open: bool,
     /// Filter text for the provider preset picker.
     pub preset_search: String,
     /// The catalog provider currently being added, when any.
@@ -503,10 +546,18 @@ pub enum DesktopAction {
     McpProbeFailed { server_id: String, message: String },
     /// A tool call started on the open conversation.
     ToolStarted { call_id: String, name: String },
+    /// Incremental tool or subagent progress for the live status line.
+    ToolProgress {
+        call_id: String,
+        name: String,
+        message: String,
+    },
     /// A committed tool-result entry arrived.
     ToolResultAppended(ConversationEntry),
     /// Prompt resources discovered for the open session.
     ResourcesLoaded(Vec<(String, String)>),
+    /// Discovered slash-command skills for the current project.
+    SkillsLoaded(Vec<SkillEntry>),
     /// File matches for the active `@` mention arrived from the bridge.
     MentionFiles(Vec<String>),
     /// The Copilot device flow started; show the user code.
@@ -538,6 +589,14 @@ pub enum DesktopAction {
         /// MCP server ids with a stored key.
         mcp_keys: Vec<String>,
     },
+    /// The user queued a follow-up while a turn is in flight.
+    MessageQueued(String),
+    /// The user dismissed one queued follow-up.
+    QueuedMessageRemoved(usize),
+    /// The next queued follow-up was taken to send.
+    QueuedMessageTaken,
+    /// The user sent a prompt; show a working status before the first token.
+    TurnArmed,
     /// Incremental assistant text from the active model turn.
     ChatDelta(String),
     /// Incremental assistant reasoning from the active model turn.
@@ -599,6 +658,8 @@ pub enum DesktopAction {
     ModelSelected(String),
     /// The model picker dropdown opened or closed.
     ModelMenuToggled(bool),
+    /// The thinking-effort submenu opened or closed.
+    ReasoningMenuToggled(bool),
     /// The preset picker filter changed.
     PresetSearchChanged(String),
     /// A preset form opened or closed.
@@ -625,6 +686,8 @@ pub enum DesktopAction {
 
 /// Maximum composer text before the send is rejected locally.
 pub const MAX_COMPOSER_CHARS: usize = 64 * 1024;
+/// Follow-ups waiting behind one in-flight turn.
+pub const MAX_QUEUED_MESSAGES: usize = 8;
 
 /// Applies one action to the state.
 pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
@@ -657,14 +720,28 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 entries: Vec::new(),
                 streaming: None,
             });
+            state.live_jobs.clear();
         }
         DesktopAction::SessionDeleted => {
             state.active = None;
             state.sending = false;
+            state.queued.clear();
+            state.live_jobs.clear();
             state.pending_ask = None;
             state.error = None;
         }
         DesktopAction::ConversationOpened(conversation) => {
+            let switched = state
+                .active
+                .as_ref()
+                .map(|active| active.session_id.as_str())
+                != Some(conversation.session_id.as_str());
+            if switched {
+                // Queue and sending belong to the previous session's turn.
+                state.queued.clear();
+                state.live_jobs.clear();
+                state.sending = false;
+            }
             let session_id = conversation.session_id.clone();
             state.active = Some(conversation);
             for session in &mut state.sessions {
@@ -697,6 +774,24 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.copilot_sign_in = None;
             state.copilot_error = outcome.err();
         }
+        DesktopAction::MessageQueued(text) => {
+            let bounded: String = text.chars().take(MAX_COMPOSER_CHARS).collect();
+            if !bounded.trim().is_empty() && state.queued.len() < MAX_QUEUED_MESSAGES {
+                state.queued.push(bounded);
+            }
+            state.composer_draft.clear();
+            state.mention = None;
+        }
+        DesktopAction::QueuedMessageRemoved(index) => {
+            if index < state.queued.len() {
+                state.queued.remove(index);
+            }
+        }
+        DesktopAction::QueuedMessageTaken => {
+            if !state.queued.is_empty() {
+                state.queued.remove(0);
+            }
+        }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
@@ -704,10 +799,19 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
             state.composer_draft.clear();
         }
+        DesktopAction::TurnArmed => {
+            state.sending = true;
+            state.error = None;
+            set_streaming_status(state, "Waiting for the model");
+        }
         DesktopAction::ChatDelta(delta) => {
             append_streaming(state, false, delta);
         }
         DesktopAction::ToolStarted { call_id, name } => {
+            set_streaming_status(state, &format!("Running {name}"));
+            if name == "task" {
+                upsert_live_job(state, &call_id, "", "starting", false);
+            }
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(ConversationEntry {
                     event_id: format!("call-{call_id}"),
@@ -718,12 +822,29 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 });
             }
         }
+        DesktopAction::ToolProgress {
+            call_id,
+            name,
+            message,
+        } => {
+            let status = if name.is_empty() {
+                message.clone()
+            } else {
+                format!("{name}: {message}")
+            };
+            set_streaming_status(state, &status);
+            apply_live_job_progress(state, &call_id, &name, &message);
+        }
         DesktopAction::ToolResultAppended(entry) => {
+            if let Some(call_id) = entry.call_id.as_deref() {
+                finish_live_job(state, call_id);
+            }
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
             }
         }
         DesktopAction::ResourcesLoaded(files) => state.resources = files,
+        DesktopAction::SkillsLoaded(skills) => state.skills = skills,
         DesktopAction::UsageRecorded {
             provider,
             model,
@@ -768,7 +889,13 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::AssistantStepCommitted(entry) => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
-                conversation.streaming = None;
+            }
+            set_streaming_status(state, "Waiting for the next step");
+            if let Some(conversation) = state.active.as_mut()
+                && let Some(streaming) = conversation.streaming.as_mut()
+            {
+                streaming.text.clear();
+                streaming.thinking.clear();
             }
         }
         DesktopAction::ChatDone { head, entry } => {
@@ -785,6 +912,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 }
                 conversation.streaming = None;
             }
+            state.live_jobs.clear();
             state.sending = false;
         }
         DesktopAction::ChatFailed(message) => {
@@ -796,6 +924,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if message != CHAT_CANCELLED {
                 state.error = Some(message);
             }
+            state.live_jobs.clear();
             state.sending = false;
         }
         DesktopAction::Failed(message) => {
@@ -957,6 +1086,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             // renders above the destination view.
             state.project_menu_open = false;
             state.model_menu_open = false;
+            state.reasoning_menu_open = false;
             state.preset_model_menu_open = false;
             state.mention = None;
         }
@@ -1029,12 +1159,31 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                         .and_then(|provider| provider.models.first().cloned())
                 });
             state.model_menu_open = false;
+            if !selected_model_supports_reasoning(state) {
+                state.reasoning_menu_open = false;
+            }
+            clamp_reasoning_to_catalog(state);
         }
         DesktopAction::ModelSelected(model) => {
             state.selected_model = Some(model);
             state.model_menu_open = false;
+            if !selected_model_supports_reasoning(state) {
+                state.reasoning_menu_open = false;
+            }
+            clamp_reasoning_to_catalog(state);
         }
-        DesktopAction::ModelMenuToggled(open) => state.model_menu_open = open,
+        DesktopAction::ModelMenuToggled(open) => {
+            state.model_menu_open = open;
+            if open {
+                state.reasoning_menu_open = false;
+            }
+        }
+        DesktopAction::ReasoningMenuToggled(open) => {
+            state.reasoning_menu_open = open;
+            if open {
+                state.model_menu_open = false;
+            }
+        }
         DesktopAction::PresetSearchChanged(text) => state.preset_search = text,
         DesktopAction::ActivePresetChanged(preset) => {
             state.active_preset = preset.clone();
@@ -1124,6 +1273,180 @@ fn ensure_model_selection(state: &mut WorkspaceState) {
     state.selected_model = fallback.and_then(|provider| provider.models.first().cloned());
 }
 
+/// Whether the selected catalog model advertises reasoning.
+///
+/// Unknown catalog rows keep the control visible so custom providers are
+/// not locked out; the menu itself is built from `reasoning_options`.
+#[must_use]
+pub fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
+    let Some(catalog) = state.catalog.as_ref() else {
+        return true;
+    };
+    let Some(provider) = state
+        .selected_provider
+        .as_deref()
+        .and_then(|id| catalog.provider(id))
+    else {
+        return true;
+    };
+    match state.selected_model.as_deref() {
+        Some(model_id) => provider
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .map(|model| model.reasoning)
+            .unwrap_or(true),
+        None => provider.models.iter().any(|model| model.reasoning),
+    }
+}
+
+/// Thinking choices advertised for one catalog model.
+///
+/// Missing catalog rows yield only `default` so the UI never invents
+/// low/medium/high.
+#[must_use]
+pub fn reasoning_levels_for(
+    state: &WorkspaceState,
+    provider_id: Option<&str>,
+    model_id: Option<&str>,
+) -> Vec<String> {
+    let Some(catalog) = state.catalog.as_ref() else {
+        return vec!["default".to_owned()];
+    };
+    let (Some(provider_id), Some(model_id)) = (provider_id, model_id) else {
+        return vec!["default".to_owned()];
+    };
+    match catalog.model(provider_id, model_id) {
+        Some(model) => model.reasoning_levels(),
+        None => vec!["default".to_owned()],
+    }
+}
+
+/// Thinking choices for the composer chip's selected model.
+#[must_use]
+pub fn selected_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
+    reasoning_levels_for(
+        state,
+        state.selected_provider.as_deref(),
+        state.selected_model.as_deref(),
+    )
+}
+
+fn clamp_reasoning_to_catalog(state: &mut WorkspaceState) {
+    let levels = selected_reasoning_levels(state);
+    let Some(settings) = state.settings.as_mut() else {
+        return;
+    };
+    let Some(current) = settings.reasoning.as_deref() else {
+        return;
+    };
+    if !levels.iter().any(|level| level == current) {
+        settings.reasoning = None;
+        settings.dirty = true;
+    }
+}
+
+fn parse_task_progress(message: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = message.splitn(4, '|');
+    if parts.next()? != "task" {
+        return None;
+    }
+    Some((parts.next()?, parts.next()?, parts.next().unwrap_or("")))
+}
+
+fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: &str, done: bool) {
+    if let Some(job) = state
+        .live_jobs
+        .iter_mut()
+        .find(|job| !call_id.is_empty() && job.call_id == call_id)
+    {
+        if !role.is_empty() {
+            job.role = role.to_owned();
+        }
+        if !step.is_empty() {
+            job.step = step.to_owned();
+        }
+        job.done = done;
+        return;
+    }
+    if let Some(job) = state.live_jobs.iter_mut().rev().find(|job| !job.done) {
+        if call_id.is_empty() || job.call_id.is_empty() {
+            if !call_id.is_empty() {
+                job.call_id = call_id.to_owned();
+            }
+            if !role.is_empty() {
+                job.role = role.to_owned();
+            }
+            if !step.is_empty() {
+                job.step = step.to_owned();
+            }
+            job.done = done;
+            return;
+        }
+    }
+    state.live_jobs.push(LiveJob {
+        call_id: call_id.to_owned(),
+        role: role.to_owned(),
+        label: String::new(),
+        step: if step.is_empty() {
+            "starting".to_owned()
+        } else {
+            step.to_owned()
+        },
+        done,
+    });
+}
+
+fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str, message: &str) {
+    if name != "task" && !message.starts_with("task|") {
+        return;
+    }
+    if let Some((role, phase, detail)) = parse_task_progress(message) {
+        match phase {
+            "queued" => {
+                upsert_live_job(state, call_id, role, "queued", false);
+                if let Some(job) = live_job_mut(state, call_id) {
+                    job.label = detail.to_owned();
+                }
+            }
+            "done" => upsert_live_job(state, call_id, role, "done", true),
+            "tool" | "step" => upsert_live_job(state, call_id, role, detail, false),
+            other => upsert_live_job(state, call_id, role, other, false),
+        }
+        return;
+    }
+    upsert_live_job(state, call_id, "", message, false);
+}
+
+fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a mut LiveJob> {
+    if call_id.is_empty() {
+        return state.live_jobs.iter_mut().rev().find(|job| !job.done);
+    }
+    state
+        .live_jobs
+        .iter_mut()
+        .find(|job| job.call_id == call_id)
+}
+
+fn finish_live_job(state: &mut WorkspaceState, call_id: &str) {
+    if let Some(job) = live_job_mut(state, call_id) {
+        job.done = true;
+        if job.step.is_empty() || job.step == "starting" || job.step == "queued" {
+            job.step = "done".to_owned();
+        }
+    }
+}
+
+/// Ensures a live streaming bubble exists and updates its status line.
+fn set_streaming_status(state: &mut WorkspaceState, status: &str) {
+    if let Some(conversation) = state.active.as_mut() {
+        let streaming = conversation
+            .streaming
+            .get_or_insert_with(StreamingReply::default);
+        streaming.status = status.to_owned();
+    }
+}
+
 /// Buffers one streaming fragment into the active conversation.
 fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta: String) {
     if delta.is_empty() {
@@ -1133,6 +1456,11 @@ fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta: String) {
         let streaming = conversation
             .streaming
             .get_or_insert_with(StreamingReply::default);
+        streaming.status = if thinking {
+            "Thinking".to_owned()
+        } else {
+            "Writing".to_owned()
+        };
         let buffer = if thinking {
             &mut streaming.thinking
         } else {
@@ -1401,6 +1729,7 @@ mod tests {
         let mut state = WorkspaceState {
             project_menu_open: true,
             model_menu_open: true,
+            reasoning_menu_open: true,
             preset_model_menu_open: true,
             mention: Some(ComposerMention {
                 kind: MentionKind::File,
@@ -1412,6 +1741,7 @@ mod tests {
         reduce(&mut state, DesktopAction::ShowMainView(MainView::Settings));
         assert!(!state.project_menu_open);
         assert!(!state.model_menu_open);
+        assert!(!state.reasoning_menu_open);
         assert!(!state.preset_model_menu_open);
         assert!(state.mention.is_none());
 
@@ -1423,6 +1753,177 @@ mod tests {
         });
         reduce(&mut state, DesktopAction::MentionDismissed);
         assert!(state.mention.is_none());
+    }
+
+    #[test]
+    fn reasoning_and_model_menus_are_exclusive() {
+        let mut state = WorkspaceState::default();
+        reduce(&mut state, DesktopAction::ModelMenuToggled(true));
+        assert!(state.model_menu_open);
+        reduce(&mut state, DesktopAction::ReasoningMenuToggled(true));
+        assert!(state.reasoning_menu_open);
+        assert!(!state.model_menu_open);
+        reduce(&mut state, DesktopAction::ModelMenuToggled(true));
+        assert!(state.model_menu_open);
+        assert!(!state.reasoning_menu_open);
+    }
+
+    #[test]
+    fn catalog_reasoning_flag_gates_the_thinking_control() {
+        let mut state = WorkspaceState {
+            selected_provider: Some("acme".to_owned()),
+            selected_model: Some("plain".to_owned()),
+            reasoning_menu_open: true,
+            ..WorkspaceState::default()
+        };
+        let mut document = mycode_providers::catalog::CatalogDocument::default();
+        document
+            .providers
+            .push(mycode_providers::catalog::CatalogProvider {
+                id: "acme".to_owned(),
+                name: "Acme".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://api.acme.dev/v1".to_owned(),
+                doc: None,
+                auth: String::new(),
+                models: vec![
+                    mycode_providers::catalog::CatalogModel {
+                        id: "plain".to_owned(),
+                        reasoning: false,
+                        ..mycode_providers::catalog::CatalogModel::default()
+                    },
+                    mycode_providers::catalog::CatalogModel {
+                        id: "thinker".to_owned(),
+                        reasoning: true,
+                        ..mycode_providers::catalog::CatalogModel::default()
+                    },
+                ],
+            });
+        state.catalog = Some(std::sync::Arc::new(document));
+        assert!(!selected_model_supports_reasoning(&state));
+        reduce(
+            &mut state,
+            DesktopAction::ModelSelected("thinker".to_owned()),
+        );
+        assert!(selected_model_supports_reasoning(&state));
+        reduce(&mut state, DesktopAction::ReasoningMenuToggled(true));
+        reduce(&mut state, DesktopAction::ModelSelected("plain".to_owned()));
+        assert!(!selected_model_supports_reasoning(&state));
+        assert!(!state.reasoning_menu_open);
+    }
+
+    #[test]
+    fn reasoning_menu_follows_catalog_options() {
+        let mut state = WorkspaceState {
+            selected_provider: Some("acme".to_owned()),
+            selected_model: Some("toggle".to_owned()),
+            ..WorkspaceState::default()
+        };
+        let mut document = mycode_providers::catalog::CatalogDocument::default();
+        document
+            .providers
+            .push(mycode_providers::catalog::CatalogProvider {
+                id: "acme".to_owned(),
+                name: "Acme".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://api.acme.dev/v1".to_owned(),
+                doc: None,
+                auth: String::new(),
+                models: vec![
+                    mycode_providers::catalog::CatalogModel {
+                        id: "toggle".to_owned(),
+                        reasoning: true,
+                        reasoning_toggle: true,
+                        ..mycode_providers::catalog::CatalogModel::default()
+                    },
+                    mycode_providers::catalog::CatalogModel {
+                        id: "efforts".to_owned(),
+                        reasoning: true,
+                        reasoning_efforts: vec!["low".to_owned(), "high".to_owned()],
+                        ..mycode_providers::catalog::CatalogModel::default()
+                    },
+                ],
+            });
+        state.catalog = Some(std::sync::Arc::new(document));
+        assert_eq!(
+            selected_reasoning_levels(&state),
+            vec!["default", "off", "on"]
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ModelSelected("efforts".to_owned()),
+        );
+        assert_eq!(
+            selected_reasoning_levels(&state),
+            vec!["default", "low", "high"]
+        );
+    }
+
+    #[test]
+    fn task_progress_fills_the_subagent_panel() {
+        let mut state = opened_conversation();
+        reduce(
+            &mut state,
+            DesktopAction::ToolStarted {
+                call_id: "call-task".to_owned(),
+                name: "task".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ToolProgress {
+                call_id: "call-task".to_owned(),
+                name: String::new(),
+                message: "task|scout|queued|audit the parser".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ToolProgress {
+                call_id: "call-task".to_owned(),
+                name: String::new(),
+                message: "task|scout|tool|read".to_owned(),
+            },
+        );
+        assert_eq!(state.live_jobs.len(), 1);
+        assert_eq!(state.live_jobs[0].role, "scout");
+        assert_eq!(state.live_jobs[0].label, "audit the parser");
+        assert_eq!(state.live_jobs[0].step, "read");
+        assert!(!state.live_jobs[0].done);
+        reduce(
+            &mut state,
+            DesktopAction::ToolResultAppended(ConversationEntry {
+                event_id: "evt-1".to_owned(),
+                kind: EntryKind::ToolResult,
+                text: "done".into(),
+                call_id: Some("call-task".to_owned()),
+                thinking: String::new(),
+            }),
+        );
+        assert!(state.live_jobs[0].done);
+        reduce(
+            &mut state,
+            DesktopAction::ChatDone {
+                head: "head-2".to_owned(),
+                entry: ConversationEntry {
+                    event_id: "evt-2".to_owned(),
+                    kind: EntryKind::AssistantMessage,
+                    text: "ok".into(),
+                    call_id: None,
+                    thinking: String::new(),
+                },
+            },
+        );
+        assert!(state.live_jobs.is_empty());
+    }
+
+    #[test]
+    fn at_trigger_indexes_cwd_even_with_an_empty_fragment() {
+        let mut state = WorkspaceState::default();
+        reduce(&mut state, DesktopAction::ComposerChanged("@".to_owned()));
+        let mention = state.mention.expect("mention");
+        assert_eq!(mention.kind, MentionKind::File);
+        assert!(mention.fragment.is_empty());
     }
 
     #[test]
@@ -1553,6 +2054,24 @@ mod tests {
         }
     }
     #[test]
+    fn turn_armed_shows_working_status_before_the_first_token() {
+        let mut state = opened_conversation();
+        state.sending = false;
+        reduce(&mut state, DesktopAction::TurnArmed);
+        assert!(state.sending);
+        let streaming = state
+            .active
+            .as_ref()
+            .expect("conversation")
+            .streaming
+            .as_ref()
+            .expect("streaming");
+        assert_eq!(streaming.status, "Waiting for the model");
+        assert!(streaming.text.is_empty());
+        assert!(streaming.thinking.is_empty());
+    }
+
+    #[test]
     fn chat_stream_buffers_then_commits() {
         let mut state = opened_conversation();
         reduce(&mut state, DesktopAction::ChatDelta("hel".to_owned()));
@@ -1569,6 +2088,10 @@ mod tests {
         assert_eq!(
             conversation.streaming.as_ref().expect("streaming").thinking,
             "why"
+        );
+        assert_eq!(
+            conversation.streaming.as_ref().expect("streaming").status,
+            "Thinking"
         );
         assert!(state.sending, "sending until the turn ends");
 
@@ -1639,5 +2162,79 @@ mod tests {
         reduce(&mut state, DesktopAction::ChatDelta("ignored".to_owned()));
         assert!(state.active.is_none());
         assert!(!state.sending);
+    }
+
+    #[test]
+    fn follow_ups_queue_while_a_turn_is_in_flight() {
+        let mut state = opened_conversation();
+        reduce(
+            &mut state,
+            DesktopAction::MessageQueued("then check tests".to_owned()),
+        );
+        reduce(
+            &mut state,
+            DesktopAction::MessageQueued("then commit".to_owned()),
+        );
+        assert_eq!(
+            state.queued,
+            vec!["then check tests".to_owned(), "then commit".to_owned()]
+        );
+        assert!(state.composer_draft.is_empty());
+        reduce(&mut state, DesktopAction::QueuedMessageTaken);
+        assert_eq!(state.queued, vec!["then commit".to_owned()]);
+        reduce(&mut state, DesktopAction::QueuedMessageRemoved(0));
+        assert!(state.queued.is_empty());
+    }
+
+    #[test]
+    fn switching_sessions_drops_the_follow_up_queue() {
+        let mut state = opened_conversation();
+        state.queued.push("later".to_owned());
+        reduce(
+            &mut state,
+            DesktopAction::ConversationOpened(ActiveConversation {
+                session_id: "ses2-b".to_owned(),
+                branch_id: "br2-b".to_owned(),
+                head: "empty".to_owned(),
+                entries: Vec::new(),
+                streaming: None,
+            }),
+        );
+        assert!(state.queued.is_empty());
+        assert!(!state.sending);
+    }
+
+    #[test]
+    fn skills_panel_keeps_discovered_slash_commands() {
+        let mut state = WorkspaceState::default();
+        reduce(
+            &mut state,
+            DesktopAction::SkillsLoaded(vec![SkillEntry {
+                slug: "review".to_owned(),
+                title: "Review".to_owned(),
+                path: "/tmp/review/SKILL.md".to_owned(),
+                global: true,
+            }]),
+        );
+        assert_eq!(state.skills.len(), 1);
+        assert_eq!(state.skills[0].slug, "review");
+        assert!(state.skills[0].global);
+    }
+
+    #[test]
+    fn a_full_queue_rejects_another_follow_up() {
+        let mut state = opened_conversation();
+        for index in 0..MAX_QUEUED_MESSAGES {
+            reduce(
+                &mut state,
+                DesktopAction::MessageQueued(format!("item-{index}")),
+            );
+        }
+        reduce(
+            &mut state,
+            DesktopAction::MessageQueued("overflow".to_owned()),
+        );
+        assert_eq!(state.queued.len(), MAX_QUEUED_MESSAGES);
+        assert!(!state.queued.iter().any(|item| item == "overflow"));
     }
 }

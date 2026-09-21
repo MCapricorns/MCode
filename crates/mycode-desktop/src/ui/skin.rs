@@ -1,39 +1,103 @@
-//! Flat fills and borders for the Desk look (docs/design/demo.html): opaque
-//! panel surfaces on hairlines — the old glassmorphism helpers (translucent
-//! glass, gradient ambient, brand gradients) are gone with the redesign.
-//! Only what the surviving callsites use remains.
-use gpui_kit::Hsla;
+//! Frosted translucent panels and gradient accents over the active theme.
+//! Day and night each stay on their own surface: light stays light, dark
+//! stays dark, with a brand-tinted ambient wash behind the glass.
 use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::{Background, Hsla, black, linear_color_stop, linear_gradient};
 
 fn is_dark(theme: &Theme) -> bool {
     theme.mode == ThemeMode::Dark
 }
 
-/// Flat card fill matching `.tool`/`.composer` panels.
+/// Linear interpolation between two colors in HSL space; `t` 0 keeps `from`.
+pub(super) fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
+    Hsla {
+        h: from.h + (to.h - from.h) * t,
+        s: from.s + (to.s - from.s) * t,
+        l: from.l + (to.l - from.l) * t,
+        a: from.a + (to.a - from.a) * t,
+    }
+}
+
+/// Rotates a color's hue for gradient endpoints.
+pub(super) fn hue_shift(color: Hsla, degrees: f32) -> Hsla {
+    Hsla {
+        h: color.h + degrees,
+        ..color
+    }
+}
+
+/// Ambient gradient behind the window: theme background easing toward brand.
+pub(super) fn ambient(theme: &Theme) -> Background {
+    let dark = is_dark(theme);
+    let tint = mix(
+        theme.background,
+        theme.primary,
+        if dark { 0.18 } else { 0.08 },
+    );
+    linear_gradient(
+        160.,
+        linear_color_stop(theme.background, 0.),
+        linear_color_stop(tint, 1.),
+    )
+}
+
+/// Frosted panel fill used by the composer card.
 pub(super) fn glass(theme: &Theme) -> Hsla {
-    theme.muted
+    let dark = is_dark(theme);
+    let base = mix(
+        theme.background,
+        theme.foreground,
+        if dark { 0.06 } else { 0.02 },
+    );
+    Hsla {
+        a: if dark { 0.72 } else { 0.86 },
+        ..base
+    }
 }
 
-/// Flat rail fill matching `.rail`/`.insp` panels.
+/// Frosted sidebar / inspector fill, slightly brand-tinted.
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
-    theme.sidebar
+    let dark = is_dark(theme);
+    let base = mix(theme.sidebar, theme.primary, if dark { 0.10 } else { 0.04 });
+    Hsla {
+        a: if dark { 0.58 } else { 0.78 },
+        ..base
+    }
 }
 
-/// Hairline border for panels and cards.
+/// Border tone matching the frosted panels.
 pub(super) fn glass_border(theme: &Theme) -> Hsla {
-    theme.border
+    let dark = is_dark(theme);
+    let base = mix(
+        theme.border,
+        theme.foreground,
+        if dark { 0.12 } else { 0.04 },
+    );
+    Hsla {
+        a: if dark { 0.5 } else { 0.55 },
+        ..base
+    }
 }
 
-/// Floating menu fill: the second panel tone, opaque so overlapping rows stay
-/// readable without a blur trick.
+/// Near-opaque frosted popover fill.
 pub(super) fn popover(theme: &Theme) -> Hsla {
-    theme.popover
+    let base = mix(theme.popover, theme.background, 0.2);
+    Hsla { a: 0.94, ..base }
 }
 
 /// Scrim drawn over the app behind an open menu layer.
 pub(super) fn scrim(theme: &Theme) -> Hsla {
     Hsla {
-        a: if is_dark(theme) { 0.35 } else { 0.12 },
-        ..gpui_kit::black()
+        a: if is_dark(theme) { 0.35 } else { 0.10 },
+        ..black()
     }
+}
+
+/// Brand gradient for welcome and hero accents.
+pub(super) fn accent(theme: &Theme, angle: f32) -> Background {
+    linear_gradient(
+        angle,
+        linear_color_stop(theme.primary, 0.),
+        linear_color_stop(hue_shift(theme.primary, 45.), 1.),
+    )
 }

@@ -82,6 +82,9 @@ pub struct StreamingReply {
     pub text: String,
     /// Reasoning text so far.
     pub thinking: String,
+    /// One-line status shown even before the first token (waiting, thinking,
+    /// running a tool). Empty only after the turn ends.
+    pub status: String,
 }
 
 /// Upper bound kept for one streamed reply before further deltas are dropped.

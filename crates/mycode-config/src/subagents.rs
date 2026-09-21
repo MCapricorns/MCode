@@ -58,28 +58,45 @@ impl RoleIsolation {
 }
 
 /// Reasoning effort a role asks for by default.
+///
+/// Spellings match models.dev `reasoning_options` plus `default` (inherit).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RoleThinking {
     /// Leave the provider default alone.
     #[default]
     Default,
+    /// Disable reasoning when the vendor accepts an off switch.
+    Off,
+    /// Shortest advertised effort.
+    Minimal,
     /// Brief reasoning.
     Low,
     /// Balanced reasoning.
     Medium,
     /// Deep reasoning.
     High,
+    /// Above high, when the catalog advertises `xhigh`.
+    Xhigh,
+    /// Vendor maximum effort.
+    Max,
+    /// Enable reasoning on toggle-only models.
+    On,
 }
 
 impl RoleThinking {
-    /// Parses a level spelling, which is also the settings vocabulary.
+    /// Parses a catalog or settings spelling.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "default" => Some(Self::Default),
+            "off" | "none" => Some(Self::Off),
+            "minimal" => Some(Self::Minimal),
             "low" => Some(Self::Low),
             "medium" => Some(Self::Medium),
             "high" => Some(Self::High),
+            "xhigh" => Some(Self::Xhigh),
+            "max" => Some(Self::Max),
+            "on" => Some(Self::On),
             _ => None,
         }
     }
@@ -89,20 +106,30 @@ impl RoleThinking {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Default => "default",
+            Self::Off => "off",
+            Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::On => "on",
         }
     }
 
-    /// Returns the wire reasoning effort, or `None` for the provider default.
+    /// Returns the wire reasoning token, or `None` for the provider default.
     #[must_use]
     pub fn effort(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
+            Self::Off => Some("off"),
+            Self::Minimal => Some("minimal"),
             Self::Low => Some("low"),
             Self::Medium => Some("medium"),
             Self::High => Some("high"),
+            Self::Xhigh => Some("xhigh"),
+            Self::Max => Some("max"),
+            Self::On => Some("on"),
         }
     }
 }
@@ -414,7 +441,9 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
             }
             "thinking" => {
                 thinking = RoleThinking::parse(value).ok_or_else(|| {
-                    format!("thinking \"{value}\": must be default, low, medium, or high")
+                    format!(
+                        "thinking \"{value}\": must be a models.dev option (default, off, on, minimal, low, medium, high, xhigh, max)"
+                    )
                 })?;
             }
             "tools" => {
@@ -610,7 +639,7 @@ mod tests {
             ),
             (
                 "---\nname: ok\ndescription: x\nthinking: extreme\n---\nbody\n",
-                "must be default, low, medium, or high",
+                "must be a models.dev option",
             ),
             (
                 "---\nname: ok\ndescription: x\nmodel: gpt-5\n---\nbody\n",
@@ -674,16 +703,27 @@ mod tests {
     #[test]
     fn thinking_levels_map_to_wire_effort() {
         assert_eq!(RoleThinking::Default.effort(), None);
+        assert_eq!(RoleThinking::Off.effort(), Some("off"));
+        assert_eq!(RoleThinking::On.effort(), Some("on"));
+        assert_eq!(RoleThinking::Minimal.effort(), Some("minimal"));
         assert_eq!(RoleThinking::Low.effort(), Some("low"));
         assert_eq!(RoleThinking::Medium.effort(), Some("medium"));
         assert_eq!(RoleThinking::High.effort(), Some("high"));
-        for level in ["default", "low", "medium", "high"] {
+        assert_eq!(RoleThinking::Xhigh.effort(), Some("xhigh"));
+        assert_eq!(RoleThinking::Max.effort(), Some("max"));
+        for level in [
+            "default", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max",
+        ] {
             assert_eq!(
                 RoleThinking::parse(level).expect(level).as_str(),
                 level,
                 "round trip"
             );
         }
+        assert_eq!(
+            RoleThinking::parse("none").map(RoleThinking::as_str),
+            Some("off")
+        );
         assert!(RoleThinking::parse("auto").is_none());
     }
 }

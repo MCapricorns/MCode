@@ -17,10 +17,10 @@ use super::{CatalogDocument, parse_snapshot};
 pub const CATALOG_CACHE_PATH: &str = "catalog-cache.json";
 /// Maximum encoded cache size.
 pub const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
-/// Cache format version. Bumped to 2 when the snapshot gained OAuth
-/// (`auth`) provider presets, so pre-Copilot caches fall back to the
-/// bundled baseline instead of hiding the sign-in flow.
-pub const CACHE_FORMAT_VERSION: u32 = 2;
+/// Cache format version. Bumped to 3 when the snapshot gained models.dev
+/// `reasoning_options` (toggle / effort lists), so stale caches fall back
+/// to the bundled baseline instead of inventing low/medium/high.
+pub const CACHE_FORMAT_VERSION: u32 = 3;
 /// Cache kind tag.
 pub const CACHE_KIND: &str = "mycode-providers-cache";
 /// Maximum cloud document size accepted.

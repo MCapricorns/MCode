@@ -74,8 +74,8 @@ pub use pack_installation::{
 };
 #[doc(inline)]
 pub use resources::{
-    MAX_RESOURCE_BYTES, MAX_RESOURCES, MAX_TOTAL_PROMPT_CHARS, ResourceFile, discover_resources,
-    read_resource, render_resource_prompt,
+    MAX_RESOURCE_BYTES, MAX_RESOURCES, MAX_TOTAL_PROMPT_CHARS, ResourceFile, SkillFile,
+    discover_resources, discover_skills, read_resource, render_resource_prompt,
 };
 #[doc(inline)]
 pub use root_composition::{

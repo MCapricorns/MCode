@@ -65,7 +65,7 @@ pub fn render_root(
     let layout = DeskLayout::of(window);
     let theme = cx.theme().clone();
     let mono = theme.mono_font_family.clone();
-    let bg = theme.background;
+    let bg = skin::ambient(&theme);
     let fg = theme.foreground;
     let focus_handle = workspace.focus_handle().clone();
     div()
@@ -165,13 +165,6 @@ fn render_title_bar(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> i
                                 .text_sm()
                                 .font_weight(gpui_kit::FontWeight::BOLD)
                                 .child("MYCODE"),
-                        )
-                        .child(div().text_sm().text_color(desk.amber).child("//"))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui_kit::FontWeight::BOLD)
-                                .child("UI"),
                         ),
                 )
                 // The project name is unbounded user data: truncate it in the

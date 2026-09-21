@@ -39,18 +39,28 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        // Thinking budget must stay below max_tokens; raise the cap so the
-        // budget always fits.
-        let budget = match level {
-            ReasoningLevel::Low => 1_024,
-            ReasoningLevel::Medium => 4_096,
-            ReasoningLevel::High => 16_384,
-        };
-        let max_tokens = body["max_tokens"].as_u64().unwrap_or(MAX_TOKENS_DEFAULT);
-        if max_tokens <= budget {
-            body["max_tokens"] = json!(budget + MAX_TOKENS_DEFAULT);
+        match level {
+            ReasoningLevel::Off => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
+            level => {
+                // Thinking budget must stay below max_tokens; raise the cap
+                // so the budget always fits. Rungs follow models.dev effort
+                // tokens rather than a hardcoded three-step list.
+                let budget = match level {
+                    ReasoningLevel::Minimal | ReasoningLevel::Low => 1_024,
+                    ReasoningLevel::On | ReasoningLevel::Medium => 4_096,
+                    ReasoningLevel::High => 16_384,
+                    ReasoningLevel::Xhigh | ReasoningLevel::Max => 32_768,
+                    ReasoningLevel::Off => 0,
+                };
+                let max_tokens = body["max_tokens"].as_u64().unwrap_or(MAX_TOKENS_DEFAULT);
+                if max_tokens <= budget {
+                    body["max_tokens"] = json!(budget + MAX_TOKENS_DEFAULT);
+                }
+                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+            }
         }
-        body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
     }
     body
 }

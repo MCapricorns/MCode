@@ -32,13 +32,26 @@ pub(crate) fn build_body(model: &str, request: &Request) -> Value {
         body["tools"] = json!(tools);
     }
     if let Some(level) = request.reasoning {
-        body["reasoning_effort"] = json!(match level {
-            ReasoningLevel::Low => "low",
-            ReasoningLevel::Medium => "medium",
-            ReasoningLevel::High => "high",
-        });
+        apply_reasoning_effort(&mut body, level);
     }
     body
+}
+
+fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
+    match level {
+        ReasoningLevel::Off => {
+            body["reasoning_effort"] = json!("none");
+            body["thinking"] = json!({ "type": "disabled" });
+        }
+        ReasoningLevel::On => {
+            body["thinking"] = json!({ "type": "enabled" });
+        }
+        other => {
+            if let Some(token) = other.effort_token() {
+                body["reasoning_effort"] = json!(token);
+            }
+        }
+    }
 }
 
 fn convert_tool(tool: &ToolSpec) -> Value {

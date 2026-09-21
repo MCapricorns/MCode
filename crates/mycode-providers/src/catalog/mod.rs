@@ -43,6 +43,12 @@ pub struct CatalogModel {
     pub name: String,
     /// Supports reasoning output.
     pub reasoning: bool,
+    /// models.dev `reasoning_options` includes a toggle (on/off).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reasoning_toggle: bool,
+    /// models.dev effort values, already lowercased.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<String>,
     /// Supports tool calling.
     pub tool_call: bool,
     /// Supports image attachments.
@@ -55,6 +61,38 @@ pub struct CatalogModel {
     pub cost_in: Option<f64>,
     /// Output cost per million tokens, when published.
     pub cost_out: Option<f64>,
+}
+
+impl CatalogModel {
+    /// Thinking choices advertised for this model.
+    ///
+    /// Built from models.dev `reasoning_options`. Effort lists win; a
+    /// toggle-only row is off/on; a bare `reasoning: true` with no options
+    /// is also treated as a toggle so the UI never invents low/medium/high.
+    #[must_use]
+    pub fn reasoning_levels(&self) -> Vec<String> {
+        if !self.reasoning {
+            return Vec::new();
+        }
+        let mut levels = vec!["default".to_owned()];
+        if self.reasoning_toggle || self.reasoning_efforts.is_empty() {
+            levels.push("off".to_owned());
+        }
+        if self.reasoning_efforts.is_empty() {
+            levels.push("on".to_owned());
+        }
+        for effort in &self.reasoning_efforts {
+            let key = match effort.as_str() {
+                "none" => "off",
+                "default" => continue,
+                other => other,
+            };
+            if !levels.iter().any(|level| level == key) {
+                levels.push(key.to_owned());
+            }
+        }
+        levels
+    }
 }
 
 /// One provider preset: endpoint data plus its model list.
@@ -106,6 +144,15 @@ impl CatalogDocument {
     #[must_use]
     pub fn provider(&self, id: &str) -> Option<&CatalogProvider> {
         self.providers.iter().find(|provider| provider.id == id)
+    }
+
+    /// Looks one model up by provider and model id.
+    #[must_use]
+    pub fn model(&self, provider_id: &str, model_id: &str) -> Option<&CatalogModel> {
+        self.provider(provider_id)?
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
     }
 
     /// Returns a display name for a provider id, even when absent.
@@ -206,6 +253,26 @@ mod tests {
                 "baseline keeps {wanted}"
             );
         }
+        let minimax = catalog.provider("minimax").expect("minimax");
+        let m3 = minimax
+            .models
+            .iter()
+            .find(|model| model.id == "MiniMax-M3")
+            .expect("MiniMax-M3");
+        assert!(m3.reasoning && m3.reasoning_toggle);
+        assert!(m3.reasoning_efforts.is_empty());
+        assert_eq!(m3.reasoning_levels(), vec!["default", "off", "on"]);
+        let openai = catalog.provider("openai").expect("openai");
+        assert!(
+            openai.models.iter().any(|model| {
+                model.reasoning
+                    && model
+                        .reasoning_efforts
+                        .iter()
+                        .any(|effort| effort == "xhigh" || effort == "high")
+            }),
+            "openai snapshot keeps advertised effort lists"
+        );
     }
 
     #[test]
@@ -262,5 +329,46 @@ mod tests {
         );
         let provider = &document.providers[0];
         assert_eq!(provider.models[0].name, "m2", "blank names fall back to id");
+    }
+
+    #[test]
+    fn reasoning_levels_follow_catalog_options_and_never_invent_effort() {
+        let toggle = CatalogModel {
+            reasoning: true,
+            reasoning_toggle: true,
+            ..CatalogModel::default()
+        };
+        assert_eq!(
+            toggle.reasoning_levels(),
+            vec!["default", "off", "on"],
+            "toggle-only models stay on/off"
+        );
+
+        let efforts = CatalogModel {
+            reasoning: true,
+            reasoning_efforts: vec!["none".to_owned(), "low".to_owned(), "high".to_owned()],
+            ..CatalogModel::default()
+        };
+        assert_eq!(
+            efforts.reasoning_levels(),
+            vec!["default", "off", "low", "high"]
+        );
+
+        let bare = CatalogModel {
+            reasoning: true,
+            ..CatalogModel::default()
+        };
+        assert_eq!(
+            bare.reasoning_levels(),
+            vec!["default", "off", "on"],
+            "bare reasoning:true is a toggle, not low/medium/high"
+        );
+
+        let silent = CatalogModel {
+            reasoning: false,
+            reasoning_efforts: vec!["high".to_owned()],
+            ..CatalogModel::default()
+        };
+        assert!(silent.reasoning_levels().is_empty());
     }
 }

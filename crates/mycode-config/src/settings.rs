@@ -367,8 +367,8 @@ pub struct AppSettings {
     pub mcp_servers: Vec<McpServerSettings>,
     /// Appearance.
     pub appearance: AppearanceSettings,
-    /// Requested reasoning effort: `low`, `medium`, or `high`; absent keeps
-    /// the provider default.
+    /// Requested reasoning effort from models.dev options; absent keeps the
+    /// provider default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     /// Subagent delegation settings.
@@ -436,9 +436,11 @@ impl AppSettings {
         bounded_text(&self.user_agent, MAX_FIELD_BYTES)
             .map_err(|_| invalid("userAgent: too long or contains control characters"))?;
         if let Some(level) = self.reasoning_effort.as_deref()
-            && !matches!(level, "low" | "medium" | "high")
+            && (level == "default" || crate::RoleThinking::parse(level).is_none())
         {
-            return Err(invalid("reasoningEffort: must be low, medium, or high"));
+            return Err(invalid(
+                "reasoningEffort: must be a models.dev option (off, on, minimal, low, medium, high, xhigh, max)",
+            ));
         }
         if self.providers.len() > MAX_PROVIDERS {
             return Err(invalid("providers: too many entries"));
@@ -660,7 +662,7 @@ impl AppSettings {
                 && crate::RoleThinking::parse(level).is_none()
             {
                 return Err(invalid(&format!(
-                    "{field}.thinking: must be default, low, medium, or high"
+                    "{field}.thinking: must be a models.dev option (default, off, on, minimal, low, medium, high, xhigh, max)"
                 )));
             }
         }

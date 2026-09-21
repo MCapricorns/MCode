@@ -25,16 +25,77 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_REQUEST_ENCODED_BYTES: usize = 8 * 1_024 * 1_024;
 
 /// Requested reasoning effort for models that support it.
+///
+/// The spellings match models.dev `reasoning_options` effort values plus
+/// `on` / `off` for catalog toggle rows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningLevel {
-    /// Brief reasoning; fastest.
+    /// Disable reasoning when the vendor accepts an off switch.
+    Off,
+    /// Shortest advertised effort.
+    Minimal,
+    /// Brief reasoning; fastest discrete rung.
     #[default]
     Low,
     /// Balanced reasoning.
     Medium,
-    /// Deep reasoning; slowest.
+    /// Deep reasoning.
     High,
+    /// Above high, when the catalog advertises `xhigh`.
+    Xhigh,
+    /// Vendor maximum effort.
+    Max,
+    /// Enable reasoning on toggle-only models.
+    On,
+}
+
+impl ReasoningLevel {
+    /// Parses a catalog or settings spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" | "none" => Some(Self::Off),
+            "minimal" => Some(Self::Minimal),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "xhigh" => Some(Self::Xhigh),
+            "max" => Some(Self::Max),
+            "on" => Some(Self::On),
+            _ => None,
+        }
+    }
+
+    /// Settings and OpenAI-style effort spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::On => "on",
+        }
+    }
+
+    /// `reasoning_effort` wire token; `None` for toggle-on (no effort field).
+    #[must_use]
+    pub const fn effort_token(self) -> Option<&'static str> {
+        match self {
+            Self::Off => Some("none"),
+            Self::On => None,
+            Self::Minimal => Some("minimal"),
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::Xhigh => Some("xhigh"),
+            Self::Max => Some("max"),
+        }
+    }
 }
 
 /// A provider-neutral completion request.
