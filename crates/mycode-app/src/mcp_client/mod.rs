@@ -51,12 +51,26 @@ pub trait JsonRpcChannel: Send + Sync + 'static {
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Maximum tools listed per server.
 pub const MAX_TOOLS: usize = 128;
-/// Default request timeout shared by every channel implementation.
+/// Per-request timeout every MCP channel is constructed with: it bounds each
+/// JSON-RPC hop for the channel's whole lifetime — the handshake, tools/list,
+/// and every tools/call a turn issues. Both the settings-page probe and the
+/// turn session channel pass this constant.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Protocol revision this client speaks.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Longest error detail kept from a server or a child's stderr.
 const MAX_DETAIL_CHARS: usize = 512;
+
+/// Users paste either the raw key or `Bearer <key>`; the header always
+/// carries exactly one `Bearer ` prefix. Shared by the MCP HTTP channel and
+/// the web client transport, which both send bearer credentials.
+pub(crate) fn strip_bearer_prefix(key: &str) -> &str {
+    let trimmed = key.trim();
+    trimmed
+        .split_once(char::is_whitespace)
+        .and_then(|(scheme, rest)| scheme.eq_ignore_ascii_case("bearer").then_some(rest.trim()))
+        .unwrap_or(trimmed)
+}
 
 /// Errors surfaced by the MCP client.
 ///

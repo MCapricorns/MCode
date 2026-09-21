@@ -285,34 +285,29 @@ fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String>
     if !path.exists() {
         return Ok(AuthorityRevision::ABSENT);
     }
-    let body = std::fs::read(&path).map_err(|error| format!("settings: {error}"))?;
-    #[derive(serde::Deserialize)]
-    struct Header {
-        #[serde(rename = "formatVersion")]
-        format_version: u32,
-        revision: u64,
+    let body = std::fs::read(&path).map_err(|_| "settings: unreadable".to_owned())?;
+    // Shared header decoder; distinct messages keep the import's wording.
+    match crate::settings_io::revision_header(&body, mycode_config::SETTINGS_FORMAT_VERSION) {
+        Ok(revision) => Ok(revision),
+        Err(crate::settings_io::RevisionHeaderError::Unreadable) => {
+            Err("settings: unreadable".to_owned())
+        }
+        Err(crate::settings_io::RevisionHeaderError::UnknownFormat) => {
+            Err("settings: unknown format".to_owned())
+        }
+        Err(crate::settings_io::RevisionHeaderError::BadRevision) => {
+            Err("settings: bad revision".to_owned())
+        }
     }
-    let header: Header =
-        serde_json::from_slice(&body).map_err(|_| "settings: unreadable".to_owned())?;
-    if header.format_version != mycode_config::SETTINGS_FORMAT_VERSION {
-        return Err("settings: unknown format".to_owned());
-    }
-    AuthorityRevision::new(header.revision).map_err(|_| "settings: bad revision".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn layout() -> (tempfile::TempDir, HomeLayout) {
-        let parent = tempfile::tempdir().expect("parent");
-        let home = HomeLayout::from_root(parent.path().join("home")).expect("home");
-        (parent, home)
-    }
-
     #[test]
     fn bundle_roundtrips_through_a_file() {
-        let (_parent, home) = layout();
+        let (_parent, home) = crate::test_support::home();
         replace_ui_state(&home, &UiState::default()).expect("ui");
         let export_path = home.root().with_extension("export.json");
         let summary = export_to_file(&home, &export_path).expect("export");
@@ -325,7 +320,7 @@ mod tests {
 
     #[test]
     fn foreign_bundle_is_rejected() {
-        let (_parent, home) = layout();
+        let (_parent, home) = crate::test_support::home();
         let path = home.root().with_extension("foreign.json");
         std::fs::write(&path, br#"{"formatVersion":1,"kind":"other"}"#).expect("write");
         assert!(import_from_file(&home, &path).is_err());

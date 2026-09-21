@@ -120,9 +120,8 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 /// Strips terminal escape sequences, control characters (keeping newline
-/// and tab), and bidi overrides from untrusted remote text, mirroring the
-/// querit client's sanitizer. Retrieved page text is data, never terminal
-/// input.
+/// and tab), and bidi overrides from untrusted remote text. Retrieved page
+/// text is data, never terminal input.
 pub fn sanitize_remote_text(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
     let mut out = String::with_capacity(value.len());

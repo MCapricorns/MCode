@@ -46,11 +46,9 @@ impl WebTransport for ReqwestWebTransport {
             .timeout(timeout)
             .body(body.to_vec());
         if let Some(key) = bearer {
-            let key = key
-                .trim()
-                .strip_prefix("Bearer ")
-                .or_else(|| key.trim().strip_prefix("bearer "))
-                .unwrap_or(key.trim());
+            // Shared sanitizer: strip a pasted `Bearer <scheme> <key>` down
+            // to the raw key before it rides bearer_auth.
+            let key = crate::mcp_client::strip_bearer_prefix(key);
             request = request.bearer_auth(key);
         }
         let response = tokio::select! {

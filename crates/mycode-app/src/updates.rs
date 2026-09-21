@@ -89,7 +89,7 @@ struct AssetJson {
 ///
 /// # Errors
 ///
-/// Returns the transport, parse, or version-parse failure message.
+/// Returns the transport, parse, version-parse, or HTTP failure message.
 pub async fn latest_release(client: &reqwest::Client) -> Result<Option<UpdateOffer>, String> {
     let response = client
         .get(LATEST_RELEASE_API)
@@ -97,11 +97,7 @@ pub async fn latest_release(client: &reqwest::Client) -> Result<Option<UpdateOff
         .send()
         .await
         .map_err(|error| format!("update check failed: {error}"))?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        // No release published yet.
-        return Ok(None);
-    }
-    if !response.status().is_success() {
+    if classify_release_status(response.status())?.is_none() {
         return Ok(None);
     }
     let release: ReleaseJson = response
@@ -115,6 +111,21 @@ pub async fn latest_release(client: &reqwest::Client) -> Result<Option<UpdateOff
         return Ok(None);
     }
     Ok(Some(offer))
+}
+
+/// Classifies one fetched release-check status: `Ok(None)` short-circuits as
+/// "no release published" (404), `Ok(Some(()))` proceeds to parse the body,
+/// and every other status is a surfaced failure. Reporting a server error,
+/// auth failure, or rate limit as "current" would silently hide a broken
+/// updater.
+fn classify_release_status(status: reqwest::StatusCode) -> Result<Option<()>, String> {
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(format!("update check failed: HTTP {status}"));
+    }
+    Ok(Some(()))
 }
 
 fn resolve_asset(tag: &str, notes_url: &str, assets: &[AssetJson]) -> Option<UpdateOffer> {
@@ -403,6 +414,30 @@ mod tests {
         assert!(!is_newer("v0.1.0", "0.1.0"));
         assert!(!is_newer("v0.0.9", "0.1.0"));
         assert!(!is_newer("garbage", "0.1.0"));
+    }
+
+    #[test]
+    fn only_a_missing_release_means_current_every_other_failure_errs() {
+        // 404 legitimately means "no release published".
+        assert_eq!(
+            classify_release_status(reqwest::StatusCode::NOT_FOUND),
+            Ok(None)
+        );
+        assert_eq!(
+            classify_release_status(reqwest::StatusCode::OK),
+            Ok(Some(()))
+        );
+        // Server errors, auth failures, and rate limits surface as failed
+        // checks instead of silently reporting the app as current.
+        for status in [
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::BAD_GATEWAY,
+        ] {
+            let error = classify_release_status(status).expect_err("must fail the check");
+            assert!(error.contains("HTTP"), "{error}");
+        }
     }
 
     #[test]

@@ -253,9 +253,6 @@ impl WebClient {
                 result
             })
             .collect();
-        if results.len() > guard::MAX_SEARCH_RESULTS {
-            return Err(WebError::Protocol);
-        }
         Ok(results)
     }
 

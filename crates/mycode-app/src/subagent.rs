@@ -313,33 +313,14 @@ impl BridgeTaskHost {
         let registry = Arc::new(child_registry(&self.home, &allowed));
         let run_dir_for_hooks = run_dir.clone();
         let run_home = self.home.clone();
-        let hooks = HookRunner::default().with_before_tool(move |tool, args| {
-            let raw_path = matches!(tool, "write" | "edit")
-                .then(|| {
-                    args.get("path")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                })
-                .flatten();
-            let run_home = run_home.clone();
-            let run_dir = run_dir_for_hooks.clone();
-            async move {
-                let Some(raw_path) = raw_path else { return };
-                // Subagent writes snapshot into a side checkpoint store so
-                // the parent session's rollback surface stays unchanged.
-                let session = format!("task-{}", std::process::id());
-                let path = PathBuf::from(raw_path);
-                let absolute = if path.is_absolute() {
-                    path
-                } else {
-                    run_dir.join(path)
-                };
-                let _ = tokio::task::spawn_blocking(move || {
-                    mycode_config::checkpoint_file(&run_home, &session, &absolute)
-                })
-                .await;
-            }
-        });
+        // Subagent writes snapshot into a side checkpoint store so the
+        // parent session's rollback surface stays unchanged.
+        let run_session = format!("task-{}", std::process::id());
+        let hooks = HookRunner::default().with_before_tool(crate::turn::checkpoint_hook(
+            run_home,
+            run_dir_for_hooks,
+            run_session,
+        ));
 
         let child_cancel = CancellationToken::new();
         let link = {
@@ -406,15 +387,7 @@ impl BridgeTaskHost {
             .rev()
             .find_map(|message| match message {
                 Message::Assistant(assistant) => {
-                    let text: String = assistant
-                        .blocks
-                        .iter()
-                        .filter_map(|block| match block {
-                            mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
+                    let text = assistant.text();
                     (!text.trim().is_empty()).then_some(text)
                 }
                 _ => None,
@@ -462,7 +435,7 @@ fn thinking_for(role: &SubagentRole, settings: &SubagentSettings) -> RoleThinkin
 fn child_registry(home: &HomeLayout, allowed: &[String]) -> ToolRegistry {
     let registry = ToolRegistry::new();
     let web_host: Arc<dyn mycode_tools::builtin::WebHost> =
-        Arc::new(crate::BridgeWebHost { home: home.clone() });
+        Arc::new(crate::tool_hosts::BridgeWebHost { home: home.clone() });
     for name in allowed {
         match name.as_str() {
             "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
@@ -488,6 +461,24 @@ fn child_registry(home: &HomeLayout, allowed: &[String]) -> ToolRegistry {
 mod tests {
     use super::*;
     use mycode_config::{SubagentRoleSettings, builtin_roles};
+
+    #[test]
+    fn worktree_lease_acquires_and_releases() {
+        let (_parent, layout) = crate::test_support::home();
+        let repo = std::env::current_dir().expect("cwd");
+        // Only meaningful inside a git checkout; skip elsewhere.
+        if !repo.join(".git").exists() {
+            return;
+        }
+        let lease = crate::subagent::WorktreeLease::acquire(&layout, &repo).expect("lease");
+        assert!(lease.path.is_dir());
+        let manifest = lease.manifest.clone();
+        let checkout = lease.path.clone();
+        assert!(manifest.exists());
+        lease.release();
+        assert!(!manifest.exists());
+        assert!(!checkout.exists());
+    }
 
     #[test]
     fn directive_lists_enabled_roles_and_skips_disabled() {

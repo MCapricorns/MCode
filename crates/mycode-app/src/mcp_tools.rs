@@ -6,15 +6,11 @@
 //! the turn proceeds with the remaining tools rather than failing.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use mycode_config::AppSettings;
 use mycode_core::ToolSpec;
 use mycode_tools::{ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream};
 use serde_json::Value;
-
-/// How long the per-server connect (spawn + initialize + tools/list) runs.
-const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One MCP tool exposed by a connected server, registered as a raw-JSON tool.
 ///
@@ -131,52 +127,14 @@ pub(crate) async fn connect_mcp_tools(
         let api_key = secrets
             .key(&format!("mcp-{}", server.id))
             .map(str::to_owned);
-        let channel: Arc<dyn crate::mcp_client::JsonRpcChannel> = match server.transport.as_str() {
-            "stdio" => {
-                let Some(command) = server.command.as_deref() else {
-                    continue;
-                };
-                let env: Vec<(String, String)> = server
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect();
-                let Ok(channel) = crate::mcp_client::StdioChannel::spawn(
-                    command,
-                    &server.args,
-                    &env,
-                    MCP_CONNECT_TIMEOUT,
-                )
-                .await
-                else {
-                    continue;
-                };
-                Arc::new(channel)
-            }
-            "http" => {
-                let Some(endpoint) = server.endpoint.as_deref() else {
-                    continue;
-                };
-                let Ok(channel) = crate::mcp_client::HttpChannel::new(
-                    endpoint,
-                    crate::mcp_client::HttpChannelOptions {
-                        key_header: crate::mcp_client::KeyHeader::parse(
-                            server.key_header.as_deref(),
-                        ),
-                        api_key,
-                        timeout: MCP_CONNECT_TIMEOUT,
-                    },
-                ) else {
-                    continue;
-                };
-                Arc::new(channel)
-            }
-            _ => continue,
-        };
-        let mut client = crate::mcp_client::McpClient::new(channel);
-        if client.initialize().await.is_err() {
+        // The channel timeout bounds every request over the channel's
+        // lifetime — including each tools/call during the turn — so it must
+        // be the full request budget, not a connect-phase bound. A 10s value
+        // here made every tool call that outlasted it fail with Timeout and
+        // drop the connection mid-turn.
+        let Ok(mut client) = open_mcp_client(server, api_key).await else {
             continue;
-        }
+        };
         let Ok(listed) = client.list_tools().await else {
             continue;
         };
@@ -192,12 +150,143 @@ pub(crate) async fn connect_mcp_tools(
     tools
 }
 
+/// Builds and initializes one MCP client for a server row over stdio or
+/// HTTP. The channel is constructed with
+/// [`crate::mcp_client::DEFAULT_REQUEST_TIMEOUT`], which bounds every
+/// request for the channel's lifetime — handshake, tools/list, and each
+/// tools/call during a turn.
+async fn open_mcp_client(
+    server: &mycode_config::McpServerSettings,
+    api_key: Option<String>,
+) -> Result<crate::mcp_client::McpClient, String> {
+    let timeout = crate::mcp_client::DEFAULT_REQUEST_TIMEOUT;
+    let channel: Arc<dyn crate::mcp_client::JsonRpcChannel> = match server.transport.as_str() {
+        "stdio" => {
+            let command = server
+                .command
+                .as_deref()
+                .ok_or("stdio server is missing its command")?;
+            let env: Vec<(String, String)> = server
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            Arc::new(
+                crate::mcp_client::StdioChannel::spawn(command, &server.args, &env, timeout)
+                    .await
+                    .map_err(|error| format!("MCP spawn failed: {error}"))?,
+            )
+        }
+        "http" => {
+            let endpoint = server
+                .endpoint
+                .as_deref()
+                .ok_or("http server is missing its endpoint")?;
+            Arc::new(
+                crate::mcp_client::HttpChannel::new(
+                    endpoint,
+                    crate::mcp_client::HttpChannelOptions {
+                        key_header: crate::mcp_client::KeyHeader::parse(
+                            server.key_header.as_deref(),
+                        ),
+                        api_key,
+                        timeout,
+                    },
+                )
+                .map_err(|error| format!("MCP channel failed: {error}"))?,
+            )
+        }
+        _ => return Err("unknown MCP transport".to_owned()),
+    };
+    let mut client = crate::mcp_client::McpClient::new(channel);
+    client
+        .initialize()
+        .await
+        .map_err(|error| format!("MCP handshake failed: {error}"))?;
+    Ok(client)
+}
+
+/// Lists the tools of one MCP server binding over stdio or HTTP.
+///
+/// The caller supplies the row, so a settings form can test a binding it has
+/// not saved yet. Only the API key is read from the vault, because a key is
+/// never carried in a command.
+///
+/// Runs on the caller's runtime; never builds a nested one (a nested
+/// `Runtime::block_on` panics and takes the core thread down with it).
+pub(crate) async fn mcp_list_tools(
+    home: &mycode_config::HomeLayout,
+    server: &mycode_config::McpServerSettings,
+) -> Result<Vec<String>, String> {
+    let secrets = mycode_config::read_provider_secrets(home)
+        .map_err(|error| crate::settings_io::render_config_error(&error))?;
+    let api_key = secrets
+        .key(&format!("mcp-{}", server.id))
+        .map(str::to_owned);
+    let mut client = open_mcp_client(server, api_key).await?;
+    let tools = client
+        .list_tools()
+        .await
+        .map_err(|error| format!("MCP tools listing failed: {error}"))?;
+    client.shutdown().await;
+    Ok(tools.iter().map(|tool| tool.name.clone()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mcp_client::McpError;
     use async_trait::async_trait;
     use serde_json::json;
+
+    /// Regression for the 10s connect-phase timeout: the session channel
+    /// used to be built with a connect bound, so any tools/call slower than
+    /// 10s failed with Timeout and dropped the channel mid-turn. The
+    /// scripted stdio server delays its tools/call reply past the old bound;
+    /// the call must still succeed under the full request budget.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_slow_tools_call_outlives_the_connect_phase_bound() {
+        let script = "\
+while ($null -ne ($line = [Console]::In.ReadLine())) {\n\
+    if ($line.Trim().Length -eq 0) { continue }\n\
+    $req = $line | ConvertFrom-Json\n\
+    $result = '{}'\n\
+    switch ($req.method) {\n\
+        'initialize' { $result = '{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{}}' }\n\
+        'tools/list' { $result = '{\"tools\":[{\"name\":\"slow\",\"description\":\"slow tool\",\"inputSchema\":{\"type\":\"object\"}}]}' }\n\
+        'tools/call' { Start-Sleep -Seconds 11; $result = '{\"content\":[{\"type\":\"text\",\"text\":\"finally\"}],\"isError\":false}' }\n\
+    }\n\
+    if ($null -ne $req.id) {\n\
+        [Console]::Out.WriteLine('{\"jsonrpc\":\"2.0\",\"id\":' + $req.id + ',\"result\":' + $result + '}')\n\
+        [Console]::Out.Flush()\n\
+    }\n\
+}\n";
+        let server = mycode_config::McpServerSettings {
+            id: "slow".to_owned(),
+            enabled: true,
+            transport: "stdio".to_owned(),
+            command: Some("powershell".to_owned()),
+            args: vec![
+                "-NoProfile".to_owned(),
+                "-NonInteractive".to_owned(),
+                "-Command".to_owned(),
+                script.to_owned(),
+            ],
+            env: std::collections::BTreeMap::new(),
+            endpoint: None,
+            key_header: None,
+        };
+        let mut client = open_mcp_client(&server, None).await.expect("client");
+        let output = tokio::time::timeout(
+            crate::mcp_client::DEFAULT_REQUEST_TIMEOUT,
+            client.call_tool("slow", json!({})),
+        )
+        .await
+        .expect("the call completes within the request budget")
+        .expect("the slow call succeeds instead of timing out");
+        assert_eq!(output.text, "finally");
+    }
 
     /// Channel that answers JSON-RPC requests from a canned map.
     struct ScriptedChannel {

@@ -51,7 +51,7 @@ pub(crate) async fn compact_history(
     history: Vec<Message>,
 ) -> Vec<Message> {
     let threshold = compaction_threshold(scope.context_window);
-    let Some((head_end, _)) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
+    let Some(head_end) = compaction_split(&history, threshold, TAIL_TOKEN_BUDGET) else {
         return history;
     };
     let prior = mycode_config::read_compaction(scope.home, scope.session_id)
@@ -144,12 +144,9 @@ fn is_summary_message(message: &Message) -> bool {
     matches!(message, Message::User(user) if blocks_text(&user.content).starts_with(SUMMARY_PREFIX))
 }
 
-/// Splits history into (head_end, tail_start) when compaction is due.
-fn compaction_split(
-    history: &[Message],
-    threshold: usize,
-    tail_budget: usize,
-) -> Option<(usize, usize)> {
+/// Returns the split index when compaction is due: everything before it is
+/// summarized, everything from it on stays verbatim.
+fn compaction_split(history: &[Message], threshold: usize, tail_budget: usize) -> Option<usize> {
     if history.len() < 2 {
         return None;
     }
@@ -173,7 +170,7 @@ fn compaction_split(
     if tail_start == 0 || (tail_start == 1 && is_summary_message(&history[0])) {
         return None;
     }
-    Some((tail_start, tail_start))
+    Some(tail_start)
 }
 
 fn compaction_transcript(prior_summary: Option<&str>, head: &[Message]) -> String {
@@ -314,14 +311,12 @@ mod tests {
                 }
             })
             .collect();
-        let (head_end, tail_start) =
-            compaction_split(&history, DEFAULT_THRESHOLD_TOKENS, TAIL_TOKEN_BUDGET)
-                .expect("compaction due");
-        assert_eq!(head_end, tail_start);
-        assert!(head_end > 0);
-        assert!(tail_start < history.len());
-        let tail_tokens: usize = history[tail_start..].iter().map(message_tokens).sum();
-        assert!(tail_tokens <= TAIL_TOKEN_BUDGET + message_tokens(&history[tail_start]));
+        let split = compaction_split(&history, DEFAULT_THRESHOLD_TOKENS, TAIL_TOKEN_BUDGET)
+            .expect("compaction due");
+        assert!(split > 0);
+        assert!(split < history.len());
+        let tail_tokens: usize = history[split..].iter().map(message_tokens).sum();
+        assert!(tail_tokens <= TAIL_TOKEN_BUDGET + message_tokens(&history[split]));
     }
 
     #[test]
@@ -341,11 +336,9 @@ mod tests {
             stop_reason: mycode_core::StopReason::ToolUse,
         }));
         history.push(tool_result("call-1", &"y".repeat(4_000)));
-        let (head_end, tail_start) =
-            compaction_split(&history, 1_000, 8_000).expect("compaction due");
-        assert_eq!(head_end, tail_start);
+        let split = compaction_split(&history, 1_000, 8_000).expect("compaction due");
         assert!(
-            !is_tool_result(&history[tail_start]),
+            !is_tool_result(&history[split]),
             "tail must start on the assistant tool call, not the result"
         );
     }

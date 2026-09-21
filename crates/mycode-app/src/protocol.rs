@@ -25,7 +25,10 @@ pub struct SessionSummary {
     pub title: String,
     /// Total committed events across branches.
     pub event_count: u64,
-    /// Whether this session is currently open.
+    /// Whether this session is currently open. The core reports `false` for
+    /// every row of a listing and `true` only for a freshly `Created`
+    /// session; a frontend that tracks open conversations recomputes the
+    /// flag itself.
     pub active: bool,
 }
 
