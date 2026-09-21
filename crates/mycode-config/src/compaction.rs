@@ -75,10 +75,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 fn compaction_path(session_id: &str) -> Result<String, ConfigError> {
-    if session_id.is_empty() || session_id.contains(['/', '\\', '\0']) {
-        return Err(ConfigError::authority_rejection());
-    }
-    Ok(format!("workspace/{session_id}/compaction.json"))
+    crate::session_relative(session_id, "compaction.json")
 }
 
 /// Reads one session's checkpoint; a missing file yields `None`.
@@ -175,7 +172,7 @@ mod tests {
     fn corrupt_document_fails_closed() {
         let (_parent, home) = layout();
         write_compaction(&home, "ses1-abc", &checkpoint()).unwrap();
-        let path = home.root().join("workspace/ses1-abc/compaction.json");
+        let path = home.root().join("sessions/ses1-abc/compaction.json");
         std::fs::write(&path, b"{\"formatVersion\":1}").unwrap();
         assert!(read_compaction(&home, "ses1-abc").is_err());
     }

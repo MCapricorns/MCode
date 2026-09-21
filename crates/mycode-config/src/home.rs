@@ -16,6 +16,39 @@ pub const MYCODE_HOME_ENV: &str = "MYCODE_HOME";
 
 /// Names the lowercase product directory under a user home.
 pub const MYCODE_DIR_NAME: &str = ".mycode";
+/// Durable session ledgers, todos, and compaction checkpoints.
+pub const SESSIONS_DIR: &str = "sessions";
+/// Tool working directory when no project folder is bound.
+pub const SCRATCH_DIR: &str = "scratch";
+
+/// Relative owned path of one file inside a session directory.
+///
+/// # Errors
+///
+/// Returns [`ConfigErrorKind::AuthorityRejection`] when `session_id` or
+/// `file` is empty or contains a path separator.
+pub fn session_relative(session_id: &str, file: &str) -> Result<String, ConfigError> {
+    if session_id.is_empty()
+        || session_id.contains(['/', '\\', '\0'])
+        || file.is_empty()
+        || file.contains(['/', '\\', '\0'])
+    {
+        return Err(ConfigError::authority_rejection());
+    }
+    Ok(format!("{SESSIONS_DIR}/{session_id}/{file}"))
+}
+
+/// Leaf folder name of a project path, for display and grouping.
+#[must_use]
+pub fn project_folder_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.to_owned())
+}
 
 /// Contains caller-supplied values used to resolve the owned home.
 #[derive(Debug, Clone, Default)]

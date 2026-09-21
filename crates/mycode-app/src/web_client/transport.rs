@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::{WebError, WebTransport};
+use super::{WebError, WebTransport};
 
 /// Production transport for the bounded web client.
 #[derive(Clone, Default)]
@@ -46,6 +46,11 @@ impl WebTransport for ReqwestWebTransport {
             .timeout(timeout)
             .body(body.to_vec());
         if let Some(key) = bearer {
+            let key = key
+                .trim()
+                .strip_prefix("Bearer ")
+                .or_else(|| key.trim().strip_prefix("bearer "))
+                .unwrap_or(key.trim());
             request = request.bearer_auth(key);
         }
         let response = tokio::select! {

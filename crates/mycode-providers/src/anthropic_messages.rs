@@ -215,7 +215,9 @@ impl MessagesReducer {
                     blocks.push(ContentBlock::Thinking(thinking));
                 }
                 BlockAccumulator::Text { text } => {
-                    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text.clone())));
+                    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(
+                        text.clone(),
+                    )));
                 }
                 BlockAccumulator::ToolUse {
                     id,

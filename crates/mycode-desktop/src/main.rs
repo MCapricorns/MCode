@@ -9,7 +9,7 @@ use mycode_desktop::workspace;
 
 fn main() {
     // Remove staging directories left behind by earlier self-updates.
-    mycode_updates::cleanup_stale_stages();
+    mycode_app::cleanup_stale_stages();
     let home = match HomeLayout::from_env(HomeEnv::from_process()) {
         Ok(home) => home,
         Err(error) => {

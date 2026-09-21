@@ -1,12 +1,13 @@
 # MYCode 设计文档
 
-> 本目录描述 MYCode 当前实现的设计契约。历史的 Manager/Pack/WASM 插件体系设计（03/05/06/07/08 系列）已随第三方插件目标一并移除。
+本目录描述当前 7-crate Desk 产品的实现契约。没有旧名兼容、没有 Pack/WASM 插件体系、没有 `mycode-web` / `mycode-mcp` 独立 crate。
 
 ## 阅读顺序
 
 | 文档 | 内容 |
 | --- | --- |
-| [00-architecture.md](00-architecture.md) | 产品形态、crate 拓扑、关键边界 |
-| [01-agent-core.md](01-agent-core.md) | Agent loop、turn 模型、steer/follow-up、事件契约 |
-| [02-tools-permissions.md](02-tools-permissions.md) | canonical tools 安全契约 |
-| [09-desktop-ui.md](09-desktop-ui.md) | 桌面布局、桥接模型、设置页结构 |
+| [00-architecture.md](00-architecture.md) | 产品形态、crate 拓扑、home 布局 |
+| [01-agent-core.md](01-agent-core.md) | Agent loop、ledger、自动压缩 |
+| [02-tools-permissions.md](02-tools-permissions.md) | 工具 registry、subagent / MCP / web |
+| [09-desktop-ui.md](09-desktop-ui.md) | Desk 布局、桥接、设置与欢迎页 |
+| [demo.html](demo.html) | 视觉权威（交易台 Desk） |

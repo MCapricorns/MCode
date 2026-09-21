@@ -34,11 +34,22 @@ impl KeyHeader {
     }
 
     fn apply(self, request: reqwest::RequestBuilder, key: &str) -> reqwest::RequestBuilder {
+        let key = strip_bearer_prefix(key);
         match self {
             Self::Bearer => request.header("Authorization", format!("Bearer {key}")),
             Self::XApiKey => request.header("x-api-key", key),
         }
     }
+}
+
+/// Users paste either the raw key or `Bearer <key>`; the header always
+/// carries exactly one `Bearer ` prefix.
+fn strip_bearer_prefix(key: &str) -> &str {
+    let trimmed = key.trim();
+    trimmed
+        .split_once(char::is_whitespace)
+        .and_then(|(scheme, rest)| scheme.eq_ignore_ascii_case("bearer").then_some(rest.trim()))
+        .unwrap_or(trimmed)
 }
 
 /// Options for one HTTP channel.
@@ -83,6 +94,7 @@ impl HttpChannel {
     }
 
     /// Installs the test responder seam; production channels never set this.
+    #[cfg(test)]
     #[must_use]
     pub fn with_test_responder(
         mut self,

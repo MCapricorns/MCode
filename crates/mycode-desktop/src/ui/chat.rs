@@ -117,79 +117,71 @@ pub(super) fn render_chat(
         .into_any_element()
 }
 
-/// The in-flight assistant turn: the demo's `.think` dashed box for the
-/// reasoning tail plus bare streaming text — no bubble.
+/// The in-flight assistant turn: THINKING tag + dashed box, then AGENT text.
 fn render_streaming_entry(
     streaming: &crate::view_model::StreamingReply,
     theme: &Theme,
 ) -> impl IntoElement {
     let desk = super::desk::Desk::of(theme);
-    div()
-        .id("streaming-entry")
-        .flex()
-        .flex_row()
-        .gap_3()
-        .w_full()
-        .child(
-            div()
-                .w(px(52.))
-                .flex_shrink_0()
-                .pt(px(3.))
-                .text_xs()
-                .text_color(desk.faint)
-                .child("stream"),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .when(!streaming.thinking.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .id("streaming-thinking")
-                            .border_1()
-                            .border_dashed()
-                            .border_color(theme.border)
-                            .rounded(px(3.))
-                            .px_2()
-                            .py(px(6.))
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .overflow_hidden()
-                            .child(ellipsis(&streaming.thinking, 400)),
-                    )
-                })
-                .when(!streaming.text.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .id("streaming-text")
-                            .text_sm()
-                            .w_full()
-                            .child(streaming.text.clone()),
-                    )
-                }),
-        )
+    desk_shell(
+        "stream".to_owned(),
+        theme,
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .when(!streaming.thinking.is_empty(), |this| {
+                this.child(ledger_tag(
+                    "THINKING · STREAMING",
+                    desk.faint,
+                    theme.border,
+                    theme,
+                ))
+                .child(thinking_box(
+                    "streaming-thinking".into(),
+                    &streaming.thinking,
+                    theme,
+                ))
+            })
+            .when(!streaming.text.is_empty(), |this| {
+                this.child(ledger_tag(
+                    "AGENT",
+                    desk.green,
+                    desk.green.opacity(0.35),
+                    theme,
+                ))
+                .child(agent_text(streaming.text.clone(), theme))
+            }),
+    )
 }
 
 /// The welcome hero shown when no conversation has started.
 fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpui_kit::AnyElement {
     let theme = cx.theme();
     let recents = workspace.vm().recents.clone();
+    let settings = workspace.vm().settings.clone();
     let desk = super::desk::Desk::of(theme);
+    let agents_ready = settings.as_ref().is_none_or(|settings| {
+        settings.subagents.roles.is_empty()
+            || settings.subagents.roles.iter().any(|role| role.enabled)
+    });
+    let mcp_ready = settings
+        .as_ref()
+        .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.enabled));
+    let web_ready = settings
+        .as_ref()
+        .is_some_and(|settings| settings.web_backends.iter().any(|backend| backend.enabled));
     div()
         .id("welcome")
         .flex()
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_2()
-        .py(px(64.))
+        .gap_3()
+        .py(px(56.))
         .child(
-            // The desk wordmark — plain type, no tile: MYCODE//UI in amber on
-            // ink, matching the title bar brand.
             div()
                 .id("welcome-title")
                 .flex()
@@ -211,6 +203,17 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         )
         .child(
             div()
+                .id("welcome-chips")
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(capability_chip("AGENTS", agents_ready, desk.violet, theme))
+                .child(capability_chip("MCP", mcp_ready, desk.amber, theme))
+                .child(capability_chip("WEB", web_ready, desk.cyan, theme))
+                .child(capability_chip("FILES", true, desk.green, theme)),
+        )
+        .child(
+            div()
                 .id("welcome-hint")
                 .text_xs()
                 .text_color(desk.faint)
@@ -228,7 +231,7 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                 .flex()
                 .flex_row()
                 .gap_2()
-                .mt_4()
+                .mt_2()
                 .child(
                     Button::new("welcome-open-project")
                         .icon(IconName::FolderOpen)
@@ -252,29 +255,37 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             this.child(
                 div()
                     .id("welcome-recents")
-                    .mt_6()
-                    .w(px(440.))
+                    .mt_4()
+                    .w(px(460.))
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .p_2()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.sidebar)
                     .child(
                         div()
                             .text_xs()
+                            .font_family(theme.mono_font_family.clone())
                             .text_color(desk.faint)
-                            .font_weight(gpui_kit::FontWeight::BOLD)
+                            .px_1()
+                            .pb(px(4.))
                             .child("RECENT PROJECTS"),
                     )
                     .children(recents.iter().take(5).map(|project| {
                         let project = project.clone();
                         div()
                             .id(format!("recent-{}", super::short_id(&project)))
+                            .group("recent-row")
                             .flex()
                             .flex_row()
                             .items_center()
                             .gap_2()
                             .px_2()
-                            .py(px(6.))
-                            .rounded_md()
+                            .py(px(7.))
+                            .rounded(px(3.))
                             .cursor_pointer()
                             .hover(|this| this.bg(theme.secondary))
                             .on_click({
@@ -283,6 +294,31 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     workspace.on_open_recent(&project, cx);
                                 })
                             })
+                            .child(super::lamp(desk.faint))
+                            .child(
+                                Icon::new(IconName::Folder)
+                                    .xsmall()
+                                    .flex_shrink_0()
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                    .child(project_label(&project)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .opacity(0.4)
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis_start()
+                                    .child(project.clone()),
+                            )
                             .child(
                                 div()
                                     .id(format!("recent-remove-{}", super::short_id(&project)))
@@ -290,7 +326,7 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     .items_center()
                                     .justify_center()
                                     .size(px(20.))
-                                    .rounded(px(5.))
+                                    .rounded(px(2.))
                                     .flex_shrink_0()
                                     .opacity(0.0)
                                     .group_hover("recent-row", |this| this.opacity(1.0))
@@ -305,33 +341,39 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     })
                                     .child(Icon::new(IconName::X).xsmall()),
                             )
-                            .child(
-                                Icon::new(IconName::Folder)
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .text_color(theme.muted_foreground),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_sm()
-                                    .child(project_label(&project)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .opacity(0.4)
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis_start()
-                                    .child(project.clone()),
-                            )
                     })),
             )
         })
         .into_any_element()
+}
+
+fn capability_chip(
+    label: &str,
+    ready: bool,
+    color: gpui_kit::Hsla,
+    theme: &Theme,
+) -> impl IntoElement {
+    let desk = super::desk::Desk::of(theme);
+    div().flex().flex_row().child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .px(px(7.))
+            .py(px(2.))
+            .border_1()
+            .border_color(if ready {
+                color.opacity(0.4)
+            } else {
+                theme.border
+            })
+            .rounded(px(2.))
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(if ready { color } else { desk.faint })
+            .child(label.to_owned()),
+    )
 }
 
 /// Desk transcript entries: the demo's timeline blocks — a mono stamp gutter
@@ -340,36 +382,52 @@ fn render_welcome(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
 /// renders as one bordered block (`.tool`) with its result inside.
 fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit::AnyElement {
     match entry.kind {
-        EntryKind::UserMessage => desk_block(
-            entry,
-            theme,
+        EntryKind::UserMessage => desk_block(entry, theme, {
+            let desk = super::desk::Desk::of(theme);
             div()
                 .flex()
-                .flex_row()
-                .gap_2()
-                .text_sm()
+                .flex_col()
+                .gap_1()
+                .child(ledger_tag("YOU", desk.cyan, desk.cyan.opacity(0.35), theme))
                 .child(
                     div()
-                        .text_color(super::desk::Desk::of(theme).cyan)
-                        .child("▸"),
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .text_sm()
+                        .child(div().text_color(desk.cyan).child("▸"))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .whitespace_normal()
+                                .child(SharedString::from(&entry.text)),
+                        ),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(SharedString::from(&entry.text)),
-                ),
-        )
+        })
         .into_any_element(),
-        EntryKind::AssistantMessage => desk_block(
-            entry,
-            theme,
+        EntryKind::AssistantMessage => desk_block(entry, theme, {
+            let desk = super::desk::Desk::of(theme);
             div()
-                .text_sm()
-                .w_full()
-                .overflow_hidden()
-                .child(SharedString::from(&entry.text)),
-        )
+                .flex()
+                .flex_col()
+                .gap_2()
+                .when(!entry.thinking.is_empty(), |this| {
+                    this.child(ledger_tag("THINKING", desk.faint, theme.border, theme))
+                        .child(thinking_box(
+                            format!("thinking-{}", entry.event_id).into(),
+                            &entry.thinking,
+                            theme,
+                        ))
+                })
+                .child(ledger_tag(
+                    "AGENT",
+                    desk.green,
+                    desk.green.opacity(0.35),
+                    theme,
+                ))
+                .child(agent_text(SharedString::from(&entry.text), theme))
+        })
         .into_any_element(),
         EntryKind::ToolCall => render_tool_block(entry, None, theme),
         EntryKind::ToolResult => {
@@ -403,8 +461,21 @@ fn desk_block(
     theme: &Theme,
     content: impl IntoElement,
 ) -> impl IntoElement {
+    desk_shell(
+        short_stamp(&entry.event_id),
+        theme,
+        div()
+            .id(format!("entry-{}", entry.event_id))
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(content),
+    )
+}
+
+fn desk_shell(stamp: String, theme: &Theme, content: impl IntoElement) -> impl IntoElement {
     div()
-        .id(format!("entry-{}", entry.event_id))
         .flex()
         .flex_row()
         .gap_3()
@@ -415,10 +486,83 @@ fn desk_block(
                 .flex_shrink_0()
                 .pt(px(3.))
                 .text_xs()
+                .font_family(theme.mono_font_family.clone())
                 .text_color(super::desk::Desk::of(theme).faint)
-                .child(short_stamp(&entry.event_id)),
+                .child(stamp),
         )
-        .child(div().flex_1().min_w_0().flex().flex_col().child(content))
+        .child(content)
+}
+
+fn ledger_tag(
+    label: &str,
+    color: gpui_kit::Hsla,
+    border: gpui_kit::Hsla,
+    theme: &Theme,
+) -> impl IntoElement {
+    // The chip sits in a row so a flex-col parent cannot stretch it full width.
+    div().flex().flex_row().child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .px(px(7.))
+            .py(px(2.))
+            .border_1()
+            .border_color(border)
+            .rounded(px(2.))
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(color)
+            .child(label.to_owned()),
+    )
+}
+
+fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement {
+    let desk = super::desk::Desk::of(theme);
+    div()
+        .id(id)
+        .w_full()
+        .border_1()
+        .border_dashed()
+        .border_color(theme.border)
+        .rounded(px(3.))
+        .px_3()
+        .py_2()
+        .bg(desk.think_bg)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(desk.faint)
+                .child(div().text_color(desk.amber).child("▸"))
+                .child("REASONING"),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .whitespace_normal()
+                .child(text.to_owned()),
+        )
+}
+
+fn agent_text(text: impl Into<SharedString>, theme: &Theme) -> impl IntoElement {
+    div()
+        .w_full()
+        .rounded(px(3.))
+        .px_3()
+        .py_2()
+        .bg(theme.secondary)
+        .text_sm()
+        .whitespace_normal()
+        .child(text.into())
 }
 
 /// Stable short stamp for the gutter: the entry id is a ledger identity, not
@@ -453,8 +597,7 @@ fn render_tool_block(
     } else {
         desk.green
     };
-    let mut block = div()
-        .id(format!("entry-{}", call.event_id))
+    let mut card = div()
         .flex()
         .flex_col()
         .w_full()
@@ -465,7 +608,7 @@ fn render_tool_block(
         } else {
             theme.border
         })
-        .bg(theme.background)
+        .bg(theme.sidebar)
         .child(
             div()
                 .flex()
@@ -487,9 +630,25 @@ fn render_tool_block(
         );
     if let Some(result) = result {
         let body = result_body(result, theme, &desk);
-        block = block.child(div().border_t_1().border_color(theme.border).child(body));
+        card = card.child(div().border_t_1().border_color(theme.border).child(body));
     }
-    desk_block(call, theme, block).into_any_element()
+    desk_block(
+        call,
+        theme,
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .w_full()
+            .child(ledger_tag(
+                "TOOL",
+                desk.amber,
+                desk.amber.opacity(0.3),
+                theme,
+            ))
+            .child(card),
+    )
+    .into_any_element()
 }
 
 /// The tool result body: diff-style green/red lines stay colored text on the
@@ -775,21 +934,29 @@ fn render_user_entry(
     // Desk `.msg-user`: plain left-aligned ledger row with a cyan ▸ arrow.
     // The hover edit/recall actions are unchanged — they now sit inline to
     // the right of the text instead of under a right-aligned bubble.
-    let mut column = div().flex_1().min_w_0().flex().flex_col().gap_1().child(
-        div()
-            .flex()
-            .flex_row()
-            .gap_2()
-            .w_full()
-            .text_sm()
-            .child(div().text_color(desk.cyan).child("▸"))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(SharedString::from(&entry.text)),
-            ),
-    );
+    let mut column = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(ledger_tag("YOU", desk.cyan, desk.cyan.opacity(0.35), theme))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .w_full()
+                .text_sm()
+                .child(div().text_color(desk.cyan).child("▸"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .child(SharedString::from(&entry.text)),
+                ),
+        );
     if can_rewind {
         column = column.child(
             div()

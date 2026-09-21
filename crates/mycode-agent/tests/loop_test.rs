@@ -2197,7 +2197,8 @@ async fn aborting_dispatch_drops_tool_and_joins_search_workers() {
     let _ = task.await;
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if mycode_tools::live_search_workers() == 0 && mycode_tools::live_search_thread_handles() == 0
+        if mycode_tools::live_search_workers() == 0
+            && mycode_tools::live_search_thread_handles() == 0
         {
             break;
         }

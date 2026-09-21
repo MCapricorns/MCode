@@ -1,6 +1,6 @@
 //! Durable session ledger storage: layout, manifest, and record codec.
 //!
-//! One session owns `plugins/session/data/sessions/<ses1-id>/`. The strict
+//! One session owns `sessions/<ses1-id>/`. The strict
 //! `manifest.json` (published through the hardened owned-file transaction) is
 //! the commit authority; `branches/<br1-id>.events` are append-only logs whose
 //! committed prefix length the manifest pins; `pending/<evt1-id>.payload`
@@ -19,7 +19,7 @@ use super::dto::{EventKind, HeadStamp, MAX_BRANCHES, MAX_EVENT_PAYLOAD_BYTES};
 use super::ids::{BranchId, CALL_ID_LEN, EVENT_ID_LEN, SessionCallId, SessionEventId, SessionId};
 
 /// Session family data root below the owned home.
-pub const SESSIONS_RELATIVE_DIR: &str = "plugins/session/data/sessions";
+pub const SESSIONS_RELATIVE_DIR: &str = mycode_config::SESSIONS_DIR;
 /// Manifest file name inside one session directory.
 pub const MANIFEST_FILE: &str = "manifest.json";
 /// Branch log directory name inside one session directory.

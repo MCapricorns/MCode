@@ -1,13 +1,15 @@
-//! First-party bounded web search over a Querit-compatible backend.
+//! First-party bounded web search over a configured backend family.
 //!
-//! The wire contract is `POST {endpoint}/v1/search` for ranked results and
-//! `POST {endpoint}/v1/contents` for page text. Everything is bounded: result
-//! count, URL count, response bytes, and aggregate payload bytes. The
-//! transport is injectable so tests run without any network; the production
-//! [`reqwest_transport::ReqwestWebTransport`] ships with the crate.
+//! Querit and custom backends share `POST {endpoint}/v1/search` plus
+//! `POST {endpoint}/v1/contents`. AnySearch uses `POST {endpoint}/v1/search`
+//! with `{query, max_results}` answering `{data.results}` and
+//! `POST {endpoint}/v1/extract` with `{url}` for page text. Everything is
+//! bounded: result count, URL count, response bytes, and aggregate payload
+//! bytes. The transport is injectable so tests run without any network; the
+//! production [`transport::ReqwestWebTransport`] ships with the crate.
 
 pub mod guard;
-pub mod reqwest_transport;
+pub mod transport;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,6 +77,31 @@ pub trait WebTransport: Send + Sync + 'static {
     ) -> Result<Vec<u8>, WebError>;
 }
 
+/// Backend family that selects the request and response wire mapping.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchKind {
+    /// Querit `POST /v1/search` + `POST /v1/contents`.
+    Querit,
+    /// AnySearch `POST /v1/search` + `POST /v1/extract`.
+    Anysearch,
+    /// Querit-compatible custom endpoint.
+    #[default]
+    Custom,
+}
+
+impl SearchKind {
+    /// Parses a settings `kind` spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "querit" => Some(Self::Querit),
+            "anysearch" => Some(Self::Anysearch),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
 /// Client bound to one backend endpoint.
 #[derive(Clone)]
 pub struct WebClient {
@@ -82,6 +109,7 @@ pub struct WebClient {
     bearer: Option<String>,
     transport: Arc<dyn WebTransport>,
     timeout: Duration,
+    kind: SearchKind,
 }
 
 impl WebClient {
@@ -105,7 +133,15 @@ impl WebClient {
             bearer: bearer.filter(|key| !key.trim().is_empty()),
             transport,
             timeout: Duration::from_secs(guard::DEFAULT_TIMEOUT_SECS),
+            kind: SearchKind::Custom,
         })
+    }
+
+    /// Selects the wire mapping for this backend family.
+    #[must_use]
+    pub fn with_kind(mut self, kind: SearchKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     /// Runs one bounded search.
@@ -127,6 +163,20 @@ impl WebClient {
             return Err(WebError::Blocked);
         }
         let max_results = max_results.clamp(1, guard::MAX_SEARCH_RESULTS);
+        match self.kind {
+            SearchKind::Anysearch => self.search_anysearch(query, max_results, cancel).await,
+            SearchKind::Querit | SearchKind::Custom => {
+                self.search_querit(query, max_results, cancel).await
+            }
+        }
+    }
+
+    async fn search_querit(
+        &self,
+        query: &str,
+        max_results: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<SearchResult>, WebError> {
         let body = serde_json::to_vec(&serde_json::json!({
             "query": query,
             "count": max_results,
@@ -140,14 +190,59 @@ impl WebClient {
             payload["results"].as_array()
         });
         let hits = hits.ok_or(WebError::Protocol)?;
+        self.collect_hits(hits, max_results, |hit| {
+            (
+                hit["url"].as_str(),
+                hit["title"].as_str(),
+                hit["snippet"].as_str(),
+            )
+        })
+    }
+
+    async fn search_anysearch(
+        &self,
+        query: &str,
+        max_results: usize,
+        cancel: CancellationToken,
+    ) -> Result<Vec<SearchResult>, WebError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "query": query,
+            "max_results": max_results,
+        }))
+        .map_err(|_| WebError::Protocol)?;
+        let raw = self.post("/v1/search", &body, cancel).await?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+        if payload["code"].as_i64().is_some_and(|code| code != 0) {
+            return Err(WebError::Unavailable);
+        }
+        let hits = payload["data"]["results"]
+            .as_array()
+            .ok_or(WebError::Protocol)?;
+        self.collect_hits(hits, max_results, |hit| {
+            (
+                hit["url"].as_str(),
+                hit["title"].as_str(),
+                hit["snippet"].as_str().or_else(|| hit["content"].as_str()),
+            )
+        })
+    }
+
+    fn collect_hits(
+        &self,
+        hits: &[serde_json::Value],
+        max_results: usize,
+        fields: impl Fn(&serde_json::Value) -> (Option<&str>, Option<&str>, Option<&str>),
+    ) -> Result<Vec<SearchResult>, WebError> {
         let results: Vec<SearchResult> = hits
             .iter()
             .filter_map(|hit| {
-                let url = hit["url"].as_str()?;
+                let (url, title, snippet) = fields(hit);
+                let url = url?;
                 Some(SearchResult {
                     url: url.to_owned(),
-                    title: hit["title"].as_str().unwrap_or(url).to_owned(),
-                    snippet: hit["snippet"].as_str().unwrap_or_default().to_owned(),
+                    title: title.unwrap_or(url).to_owned(),
+                    snippet: snippet.unwrap_or_default().to_owned(),
                 })
             })
             .take(max_results)
@@ -187,6 +282,17 @@ impl WebClient {
                 return Err(WebError::Blocked);
             }
         }
+        match self.kind {
+            SearchKind::Anysearch => self.contents_anysearch(urls, cancel).await,
+            SearchKind::Querit | SearchKind::Custom => self.contents_querit(urls, cancel).await,
+        }
+    }
+
+    async fn contents_querit(
+        &self,
+        urls: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<PageContent>, WebError> {
         let body = serde_json::to_vec(&serde_json::json!({
             "urls": urls,
             "format": "text",
@@ -201,6 +307,56 @@ impl WebClient {
             .as_array()
             .or_else(|| payload["pages"].as_array())
             .ok_or(WebError::Protocol)?;
+        self.collect_pages(urls, pages_wire)
+    }
+
+    async fn contents_anysearch(
+        &self,
+        urls: &[String],
+        cancel: CancellationToken,
+    ) -> Result<Vec<PageContent>, WebError> {
+        let mut pages = Vec::new();
+        let mut total = 0usize;
+        for url in urls {
+            let body = serde_json::to_vec(&serde_json::json!({ "url": url }))
+                .map_err(|_| WebError::Protocol)?;
+            let raw = self.post("/v1/extract", &body, cancel.clone()).await?;
+            let payload: serde_json::Value =
+                serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
+            if payload["code"].as_i64().is_some_and(|code| code != 0) {
+                return Err(WebError::Unavailable);
+            }
+            let data = &payload["data"];
+            let returned = data["url"].as_str().unwrap_or(url);
+            if returned != url {
+                return Err(WebError::Protocol);
+            }
+            let content = guard::sanitize_remote_text(data["content"].as_str().unwrap_or_default());
+            let mut page = PageContent {
+                url: url.clone(),
+                content,
+                truncated: false,
+            };
+            if page.content.chars().count() > guard::MAX_PAGE_BYTES {
+                page.content = page.content.chars().take(guard::MAX_PAGE_BYTES).collect();
+                page.truncated = true;
+            }
+            total += page.content.len();
+            if total > guard::MAX_RESPONSE_BYTES {
+                page.truncated = true;
+                pages.push(page);
+                return Ok(pages);
+            }
+            pages.push(page);
+        }
+        Ok(pages)
+    }
+
+    fn collect_pages(
+        &self,
+        urls: &[String],
+        pages_wire: &[serde_json::Value],
+    ) -> Result<Vec<PageContent>, WebError> {
         let allowed: std::collections::HashSet<&String> = urls.iter().collect();
         let mut total = 0usize;
         let mut pages = Vec::new();
@@ -332,6 +488,64 @@ mod tests {
                 .expect("request body");
         assert_eq!(request["query"], "rust async");
         assert_eq!(request["count"], 10);
+    }
+
+    #[tokio::test]
+    async fn search_hits_anysearch_data_results_with_max_results() {
+        let (client, transport) = client(serde_json::json!({
+            "code": 0,
+            "message": "success",
+            "data": {"results": [
+                {"url": "https://docs.example.com/a", "title": "A", "snippet": "first"},
+                {"url": "https://localhost/secret", "title": "bad", "snippet": "filtered"},
+            ]}
+        }));
+        let client = client.with_kind(SearchKind::Anysearch);
+        let results = client
+            .search("rust async", 8, CancellationToken::new())
+            .await
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://docs.example.com/a");
+        assert_eq!(
+            transport.endpoints.lock().expect("endpoints")[0],
+            "https://search.example.com/v1/search"
+        );
+        let request: serde_json::Value =
+            serde_json::from_slice(&transport.bodies.lock().expect("bodies")[0])
+                .expect("request body");
+        assert_eq!(request["query"], "rust async");
+        assert_eq!(request["max_results"], 8);
+        assert!(request.get("count").is_none());
+    }
+
+    #[tokio::test]
+    async fn contents_anysearch_extracts_one_url_at_a_time() {
+        let (client, transport) = client(serde_json::json!({
+            "code": 0,
+            "data": {
+                "url": "https://docs.example.com/a",
+                "content": "page text"
+            }
+        }));
+        let client = client.with_kind(SearchKind::Anysearch);
+        let pages = client
+            .contents(
+                &["https://docs.example.com/a".to_owned()],
+                CancellationToken::new(),
+            )
+            .await
+            .expect("pages");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].content, "page text");
+        assert_eq!(
+            transport.endpoints.lock().expect("endpoints")[0],
+            "https://search.example.com/v1/extract"
+        );
+        let request: serde_json::Value =
+            serde_json::from_slice(&transport.bodies.lock().expect("bodies")[0])
+                .expect("request body");
+        assert_eq!(request["url"], "https://docs.example.com/a");
     }
 
     #[tokio::test]

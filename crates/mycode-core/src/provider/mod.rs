@@ -11,9 +11,7 @@ mod stream;
 #[doc(inline)]
 pub use error::{ProviderError, ProviderErrorKind};
 #[doc(inline)]
-pub use stream::{
-    EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES,
-};
+pub use stream::{EVENT_STREAM_CAPACITY, EventStream, EventStreamSender, MAX_EVENT_ENCODED_BYTES};
 
 use crate::{AssistantMessage, Message, ToolSpec};
 use serde::{Deserialize, Serialize};

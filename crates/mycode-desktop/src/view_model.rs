@@ -5,51 +5,15 @@
 //! product behavior stays testable without a GPU or window.
 use std::sync::Arc;
 
-use mycode_updates::PreparedUpdate;
+use mycode_app::PreparedUpdate;
 
-/// One sidebar session row.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionSummary {
-    /// Session identity spelling (`ses1-…`).
-    pub session_id: String,
-    /// Root branch identity spelling.
-    pub root_branch_id: String,
-    /// Display title: the session's first user message, trimmed.
-    pub title: String,
-    /// Total committed events across branches.
-    pub event_count: u64,
-    /// Whether this session is currently open.
-    pub active: bool,
-}
-
-/// How one conversation entry renders.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EntryKind {
-    /// A user-authored message.
-    UserMessage,
-    /// An assistant message (wired with providers at T12).
-    AssistantMessage,
-    /// An issued tool call.
-    ToolCall,
-    /// A completed tool result.
-    ToolResult,
-    /// A usage record.
-    Usage,
-}
-
-/// One rendered conversation entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConversationEntry {
-    /// Event identity spelling.
-    pub event_id: String,
-    /// Rendering class.
-    pub kind: EntryKind,
-    /// Display text (already lossy-decoded). Shared so the render pass can
-    /// hand entries to elements without copying the transcript every frame.
-    pub text: Arc<str>,
-    /// Call identity for tool entries.
-    pub call_id: Option<String>,
-}
+// The transcript vocabulary is the core's protocol, not a rendering concern:
+// it is defined in `mycode-app` and re-exported here so render code keeps one
+// import path.
+pub use mycode_app::{
+    ActiveConversation, CHAT_CANCELLED, ConversationEntry, EntryKind, MAX_STREAMING_CHARS,
+    SessionSummary, StreamingReply,
+};
 
 /// Composer mention autocomplete: `@` files or `/` commands.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,36 +122,6 @@ pub struct TurnStats {
     pub elapsed_ms: u64,
 }
 
-/// The currently open conversation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActiveConversation {
-    /// Session identity spelling.
-    pub session_id: String,
-    /// Root branch identity spelling.
-    pub branch_id: String,
-    /// Current committed head: `empty` or an event identity.
-    pub head: String,
-    /// Entries in ledger order.
-    pub entries: Vec<ConversationEntry>,
-    /// Live assistant reply while a model turn streams.
-    pub streaming: Option<StreamingReply>,
-}
-
-/// Buffered streaming reply fragments.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct StreamingReply {
-    /// Visible assistant text so far.
-    pub text: String,
-    /// Reasoning text so far.
-    pub thinking: String,
-}
-
-/// Upper bound kept for one streamed reply before further deltas are dropped.
-pub const MAX_STREAMING_CHARS: usize = 256 * 1024;
-
-/// Failure-message sentinel marking a user-initiated turn cancel.
-pub const CHAT_CANCELLED: &str = "cancelled";
-
 /// The editable settings projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingsState {
@@ -235,7 +169,7 @@ impl SettingsState {
             user_agent: settings.user_agent.clone(),
             effective_user_agent: settings.effective_user_agent(),
             providers: settings.providers.clone(),
-            web_backends: settings.web.backends.clone(),
+            web_backends: merge_web_backends(&settings.web.backends),
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.appearance.theme.clone(),
             reasoning: settings.reasoning_effort.clone(),
@@ -270,6 +204,21 @@ impl SettingsState {
     }
 }
 
+/// Built-in Querit / AnySearch rows always appear; user backends append.
+fn merge_web_backends(
+    configured: &[mycode_config::WebBackendSettings],
+) -> Vec<mycode_config::WebBackendSettings> {
+    let mut backends = mycode_config::builtin_web_backends();
+    for backend in configured {
+        if let Some(slot) = backends.iter_mut().find(|item| item.id == backend.id) {
+            *slot = backend.clone();
+        } else {
+            backends.push(backend.clone());
+        }
+    }
+    backends
+}
+
 /// The main area view: chat or full-page settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MainView {
@@ -301,6 +250,8 @@ pub enum SettingsSection {
     General,
     /// Providers, catalog presets, and custom endpoints.
     Models,
+    /// Subagent roles and per-role model routes.
+    Agents,
     /// MCP servers.
     Mcp,
     /// Web search backends.
@@ -317,6 +268,7 @@ impl SettingsSection {
         match self {
             Self::General => "general",
             Self::Models => "models",
+            Self::Agents => "agents",
             Self::Mcp => "mcp",
             Self::Web => "web",
             Self::Data => "data",
@@ -329,6 +281,7 @@ impl SettingsSection {
         match self {
             Self::General => "General",
             Self::Models => "Models",
+            Self::Agents => "Agents",
             Self::Mcp => "MCP",
             Self::Web => "Web search",
             Self::Data => "Data",
@@ -342,6 +295,7 @@ impl SettingsSection {
         match self {
             Self::General => IconName::SlidersHorizontal,
             Self::Models => IconName::Bot,
+            Self::Agents => IconName::Sparkles,
             Self::Mcp => IconName::PlugZap,
             Self::Web => IconName::Globe,
             Self::Data => IconName::Database,
@@ -354,6 +308,7 @@ impl SettingsSection {
         match self {
             Self::General => "Theme, identity",
             Self::Models => "Providers, keys",
+            Self::Agents => "Roles, models",
             Self::Mcp => "Tool servers",
             Self::Web => "Search backends",
             Self::Data => "Usage, export",
@@ -363,7 +318,7 @@ impl SettingsSection {
 
     /// Nav groups in display order with their member sections.
     pub const GROUPS: &'static [(&'static str, &'static [SettingsSection])] = &[
-        ("WORKSPACE", &[Self::General, Self::Models]),
+        ("WORKSPACE", &[Self::General, Self::Models, Self::Agents]),
         ("CONNECT", &[Self::Mcp, Self::Web]),
         ("SYSTEM", &[Self::Data, Self::About]),
     ];
@@ -461,7 +416,7 @@ pub struct WorkspaceState {
     /// The staged update waiting for a restart, when any.
     pub prepared_update: Option<PreparedUpdate>,
     /// The newest release offer, when one is available.
-    pub last_offer: Option<mycode_updates::UpdateOffer>,
+    pub last_offer: Option<mycode_app::UpdateOffer>,
     /// Selected provider id in the model picker.
     pub selected_provider: Option<String>,
     /// Selected model id for the selected provider.
@@ -526,6 +481,8 @@ pub enum DesktopAction {
     SettingsBackendRemoved(usize),
     /// The settings editor toggled a web backend.
     SettingsBackendToggled(usize, bool),
+    /// The settings editor changed subagent role routes.
+    SettingsSubagentsChanged(mycode_config::SubagentSettings),
     /// The settings editor toggled durable usage records.
     SettingsUsageToggled(bool),
     /// The settings editor added an MCP server.
@@ -659,7 +616,7 @@ pub enum DesktopAction {
     /// Self-update progress changed.
     UpdateStateChanged(UpdateState),
     /// A release offer was resolved for the available update.
-    UpdateOfferFound(mycode_updates::UpdateOffer),
+    UpdateOfferFound(mycode_app::UpdateOffer),
     /// The auto-update preference changed.
     AutoUpdateToggled(bool),
     /// A verified update is staged and waiting for a restart.
@@ -757,6 +714,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                     kind: EntryKind::ToolCall,
                     text: name.into(),
                     call_id: Some(call_id),
+                    thinking: String::new(),
                 });
             }
         }
@@ -911,9 +869,21 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsBackendToggled(index, enabled) => {
             if let Some(settings) = state.settings.as_mut()
-                && let Some(backend) = settings.web_backends.get_mut(index)
+                && index < settings.web_backends.len()
             {
-                backend.enabled = enabled;
+                if enabled {
+                    for (slot, backend) in settings.web_backends.iter_mut().enumerate() {
+                        backend.enabled = slot == index;
+                    }
+                } else {
+                    settings.web_backends[index].enabled = false;
+                }
+                settings.dirty = true;
+            }
+        }
+        DesktopAction::SettingsSubagentsChanged(subagents) => {
+            if let Some(settings) = state.settings.as_mut() {
+                settings.subagents = subagents;
                 settings.dirty = true;
             }
         }
@@ -1113,7 +1083,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::UpdateStaged(prepared) => {
             state.prepared_update = Some(prepared);
             state.update = UpdateState::Ready {
-                version: mycode_updates::current_version().to_owned(),
+                version: mycode_app::current_version().to_owned(),
             };
         }
     }
@@ -1176,26 +1146,6 @@ fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta: String) {
                 buffer.push(unit);
             }
         }
-    }
-}
-
-/// Maps one committed session event to its conversation projection.
-#[must_use]
-pub fn project_entry(
-    event: &mycode_agent::session::SessionEvent,
-    text: String,
-) -> ConversationEntry {
-    use mycode_agent::session::EventKind;
-    ConversationEntry {
-        event_id: event.event_id.as_str().to_owned(),
-        text: text.into(),
-        kind: match event.kind {
-            EventKind::Message => EntryKind::UserMessage,
-            EventKind::ToolCall => EntryKind::ToolCall,
-            EventKind::ToolResult => EntryKind::ToolResult,
-            EventKind::Usage | EventKind::Task => EntryKind::Usage,
-        },
-        call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
     }
 }
 
@@ -1304,6 +1254,7 @@ mod tests {
                     kind: EntryKind::UserMessage,
                     text: "hello".into(),
                     call_id: None,
+                    thinking: String::new(),
                 },
             },
         );
@@ -1478,21 +1429,23 @@ mod tests {
     fn opening_a_preset_pre_checks_its_model_list() {
         let mut state = WorkspaceState::default();
         let mut document = mycode_providers::catalog::CatalogDocument::default();
-        document.providers.push(mycode_providers::catalog::CatalogProvider {
-            id: "acme".to_owned(),
-            name: "Acme".to_owned(),
-            kind: "openai-completions".to_owned(),
-            base_url: "https://api.acme.dev/v1".to_owned(),
-            doc: None,
-            auth: String::new(),
-            models: ["m1", "m2", "m3", "m4"]
-                .iter()
-                .map(|id| mycode_providers::catalog::CatalogModel {
-                    id: (*id).to_owned(),
-                    ..mycode_providers::catalog::CatalogModel::default()
-                })
-                .collect(),
-        });
+        document
+            .providers
+            .push(mycode_providers::catalog::CatalogProvider {
+                id: "acme".to_owned(),
+                name: "Acme".to_owned(),
+                kind: "openai-completions".to_owned(),
+                base_url: "https://api.acme.dev/v1".to_owned(),
+                doc: None,
+                auth: String::new(),
+                models: ["m1", "m2", "m3", "m4"]
+                    .iter()
+                    .map(|id| mycode_providers::catalog::CatalogModel {
+                        id: (*id).to_owned(),
+                        ..mycode_providers::catalog::CatalogModel::default()
+                    })
+                    .collect(),
+            });
         state.catalog = Some(std::sync::Arc::new(document));
 
         reduce(
@@ -1628,6 +1581,7 @@ mod tests {
                     kind: EntryKind::AssistantMessage,
                     text: "hello".into(),
                     call_id: None,
+                    thinking: "why".into(),
                 },
             },
         );
@@ -1635,6 +1589,7 @@ mod tests {
         assert_eq!(conversation.head, "evt1-x");
         assert!(conversation.streaming.is_none());
         assert_eq!(conversation.entries.len(), 1);
+        assert_eq!(conversation.entries[0].thinking, "why");
         assert!(!state.sending);
     }
 

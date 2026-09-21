@@ -313,16 +313,12 @@ fn render_tape(
     let vm = workspace.vm();
     let sessions = vm.sessions.len();
     let open = vm.sessions.iter().filter(|s| s.active).count();
-    let (input, output, cache) = vm.usage_totals.iter().fold(
-        (0u64, 0u64, 0u64),
-        |(input, output, cache), row| {
-            (
-                input + row.input,
-                output + row.output,
-                cache + row.cache,
-            )
-        },
-    );
+    let (input, output, cache) = vm
+        .usage_totals
+        .iter()
+        .fold((0u64, 0u64, 0u64), |(input, output, cache), row| {
+            (input + row.input, output + row.output, cache + row.cache)
+        });
     let cache_share = cache_percent(cache, input);
     let project: SharedString = vm
         .project_dir

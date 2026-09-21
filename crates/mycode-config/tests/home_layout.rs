@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use mycode_config::{
     ConfigErrorKind, HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, PluginFamily,
-    TransactionId,
+    SCRATCH_DIR, SESSIONS_DIR, TransactionId, project_folder_name, session_relative,
 };
 
 #[test]
@@ -496,4 +496,14 @@ impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.original).expect("restore current directory");
     }
+}
+
+#[test]
+fn session_files_live_under_sessions_not_workspace() {
+    let path = session_relative("ses1-abc", "todos.json").expect("path");
+    assert_eq!(path, format!("{SESSIONS_DIR}/ses1-abc/todos.json"));
+    assert_eq!(SCRATCH_DIR, "scratch");
+    assert!(session_relative("a/b", "todos.json").is_err());
+    assert_eq!(project_folder_name("/work/MCode"), "MCode");
+    assert_eq!(project_folder_name("/tmp/web-app"), "web-app");
 }

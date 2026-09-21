@@ -177,9 +177,53 @@ pub(super) fn pin_program_with_path(
     validate_request(program, args)?;
     require_directory(session_cwd)?;
     check_cancelled(cancel)?;
-    let candidate = resolve_program(program, session_cwd, path_var)?;
-    check_cancelled(cancel)?;
-    pin_candidate(&candidate, cancel)
+    if is_path_program(program) {
+        let candidate = resolve_path_program(program, session_cwd).map_err(ResolveError::Other)?;
+        check_cancelled(cancel)?;
+        return pin_candidate(&candidate, cancel);
+    }
+    pin_basename(program, path_var, cancel)
+}
+
+/// PATH search that skips unopenable hits (Windows Store execution aliases
+/// return ERROR_CANT_ACCESS_FILE / empty images) and continues to the next
+/// directory instead of failing closed on the first name match.
+fn pin_basename(
+    name: &str,
+    path_var: Option<&std::ffi::OsStr>,
+    cancel: &CancellationToken,
+) -> Result<PinnedImage, ResolveError> {
+    let path_var = path_var.unwrap_or_default();
+    let mut searched = 0usize;
+    for entry in std::env::split_paths(path_var) {
+        if !is_searchable_path_entry(&entry) {
+            continue;
+        }
+        searched += 1;
+        check_cancelled(cancel)?;
+        let Some(found) = candidate_in_dir(&entry, name)? else {
+            continue;
+        };
+        match pin_candidate(&found, cancel) {
+            Ok(pinned) => return Ok(pinned),
+            Err(error) if is_skippable_path_hit(&error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ResolveError::NotFound {
+        program: name.to_owned(),
+        searched: Some(searched),
+    })
+}
+
+fn is_skippable_path_hit(error: &ResolveError) -> bool {
+    if error.is_not_found() {
+        return true;
+    }
+    let text = error.to_string();
+    text.contains("program is empty")
+        || text.contains("os error 1920")
+        || text.contains("系统无法访问此文件")
 }
 
 /// Validates program and argument resource limits before request cloning.
@@ -307,6 +351,7 @@ fn is_path_program(program: &str) -> bool {
     }
 }
 
+#[cfg(all(test, unix))]
 fn resolve_program(
     program: &str,
     session_cwd: &Path,
@@ -347,6 +392,7 @@ fn resolve_path_program(program: &str, session_cwd: &Path) -> Result<PathBuf, To
     Ok(normalized)
 }
 
+#[cfg(test)]
 fn resolve_basename(
     name: &str,
     path_var: Option<&std::ffi::OsStr>,
@@ -668,13 +714,17 @@ fn windows_open_pin(path: &Path) -> Result<File, ResolveError> {
     };
     if raw == INVALID_HANDLE_VALUE {
         let err = std::io::Error::last_os_error();
-        return Err(if err.kind() == std::io::ErrorKind::NotFound {
-            ResolveError::path_not_found(path)
-        } else {
-            ResolveError::Other(ToolError::InvalidArgs(format!(
-                "program could not be opened: {err}"
-            )))
-        });
+        // ERROR_CANT_ACCESS_FILE (1920): Store execution aliases look like
+        // files on PATH but cannot be opened or hashed as a regular image.
+        return Err(
+            if err.kind() == std::io::ErrorKind::NotFound || err.raw_os_error() == Some(1920) {
+                ResolveError::path_not_found(path)
+            } else {
+                ResolveError::Other(ToolError::InvalidArgs(format!(
+                    "program could not be opened: {err}"
+                )))
+            },
+        );
     }
     // SAFETY: CreateFileW returned a fresh owned HANDLE.
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };

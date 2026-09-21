@@ -177,10 +177,7 @@ fn has_cycle(tasks: &[TodoTask]) -> bool {
 }
 
 fn todo_path(session_id: &str) -> Result<String, ConfigError> {
-    if session_id.is_empty() || session_id.contains(['/', '\\', '\0']) {
-        return Err(ConfigError::authority_rejection());
-    }
-    Ok(format!("workspace/{session_id}/todos.json"))
+    crate::session_relative(session_id, "todos.json")
 }
 
 /// Reads one session's todo document; a missing file yields an empty list.

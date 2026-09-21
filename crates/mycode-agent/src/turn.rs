@@ -72,10 +72,10 @@ pub(crate) async fn stream_assistant(
         tools: env.tools.specs(),
         reasoning: config.reasoning,
     };
-    let request = env
-        .hooks
-        .transform(HookEvent::BeforeProviderRequest, request)
-        .await;
+    let request = env.hooks.prepare_request(request).await;
+    // Compaction (and any other before-request rewrite) must stick on the
+    // in-memory history so the next cycle does not re-summarize the same head.
+    state.messages.clone_from(&request.messages);
 
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);

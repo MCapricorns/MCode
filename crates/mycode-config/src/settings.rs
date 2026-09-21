@@ -217,18 +217,42 @@ pub fn split_command_line(line: &str) -> Vec<String> {
     words
 }
 
+/// Wire families accepted by [`WebBackendSettings::kind`].
+pub const VALID_WEB_KINDS: [&str; 3] = ["querit", "anysearch", "custom"];
+
 /// One configured search backend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebBackendSettings {
     /// Unique backend identity (lowercase portable).
     pub id: String,
-    /// Backend family: `querit` or `custom`.
+    /// Backend family: `querit`, `anysearch`, or `custom`.
     pub kind: String,
     /// HTTPS API endpoint.
     pub endpoint: String,
     /// Enabled.
     pub enabled: bool,
+}
+
+/// Built-in search backends the settings page can add in one click.
+///
+/// Keys stay in the environment or the vault (`web-<id>`), never here.
+#[must_use]
+pub fn builtin_web_backends() -> Vec<WebBackendSettings> {
+    vec![
+        WebBackendSettings {
+            id: "querit".to_owned(),
+            kind: "querit".to_owned(),
+            endpoint: "https://api.querit.ai".to_owned(),
+            enabled: false,
+        },
+        WebBackendSettings {
+            id: "anysearch".to_owned(),
+            kind: "anysearch".to_owned(),
+            endpoint: "https://api.anysearch.com".to_owned(),
+            enabled: false,
+        },
+    ]
 }
 
 /// Web search settings: many vendor backends, at most one enabled.
@@ -361,11 +385,10 @@ impl Default for AppSettings {
         Self {
             user_agent: String::new(),
             providers: Vec::new(),
-            // Empty by default: the bridge falls back to the built-in Querit
-            // backend (https://api.querit.ai, key from QUERIT_API_KEY or the
-            // vault) whenever no backend is enabled here.
+            // Both first-class vendors ship ready; the user pastes an API
+            // key and enables one. At most one backend may be enabled.
             web: WebSettings {
-                backends: Vec::new(),
+                backends: builtin_web_backends(),
             },
             usage: UsageSettings { enabled: true },
             mcp_servers: Vec::new(),
@@ -465,8 +488,10 @@ impl AppSettings {
                     "{field}.id: must be letters, digits, dash, dot, or underscore"
                 )));
             }
-            if !matches!(backend.kind.as_str(), "querit" | "custom") {
-                return Err(invalid(&format!("{field}.kind: must be querit or custom")));
+            if !VALID_WEB_KINDS.contains(&backend.kind.as_str()) {
+                return Err(invalid(&format!(
+                    "{field}.kind: must be querit, anysearch, or custom"
+                )));
             }
             if !is_https_url(&backend.endpoint) {
                 return Err(invalid(&format!(
@@ -1025,9 +1050,32 @@ mod tests {
         settings.web.backends[2].kind = "unknown".to_owned();
         assert!(settings.validate().is_err(), "backend kind vocabulary");
 
+        settings.web.backends[2].kind = "anysearch".to_owned();
+        settings.web.backends[2].endpoint = "https://api.anysearch.com".to_owned();
+        assert!(
+            settings.validate().is_ok(),
+            "anysearch is a first-class kind"
+        );
+
         settings.web.backends[2].kind = "custom".to_owned();
         settings.web.backends[2].endpoint = "http://plain.example.com".to_owned();
         assert!(settings.validate().is_err(), "https only");
+    }
+
+    #[test]
+    fn builtin_web_backends_are_the_two_first_class_vendors() {
+        let backends = builtin_web_backends();
+        let kinds: Vec<&str> = backends
+            .iter()
+            .map(|backend| backend.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["querit", "anysearch"]);
+        assert!(backends.iter().all(|backend| !backend.enabled));
+        assert!(backends.iter().all(settings_https));
+    }
+
+    fn settings_https(backend: &WebBackendSettings) -> bool {
+        backend.endpoint.starts_with("https://")
     }
 
     #[test]

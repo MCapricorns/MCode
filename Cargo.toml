@@ -6,9 +6,7 @@ members = [
     "crates/mycode-providers",
     "crates/mycode-tools",
     "crates/mycode-agent",
-    "crates/mycode-web",
-    "crates/mycode-mcp",
-    "crates/mycode-updates",
+    "crates/mycode-app",
     "crates/mycode-desktop",
 ]
 [workspace.package]

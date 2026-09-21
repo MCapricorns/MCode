@@ -1,12 +1,11 @@
 //! GPUI desktop frontend for MYCode.
 //!
-//! The desktop is a thin frontend over the shared core: a background
-//! [`bridge::CoreBridge`] thread owns the tokio-backed core services, the
-//! pure [`view_model`] holds every UI state transition, and the GPUI layer
-//! only renders state and dispatches commands. No core type, file path, or
-//! credential ever reaches this crate's render code.
-pub mod bridge;
-pub mod export;
+//! This crate renders and nothing else. The application core lives in
+//! `mycode-app`: a background [`mycode_app::CoreBridge`] thread owns the
+//! sessions, model turns, tools, and credentials, the pure [`view_model`]
+//! holds every UI state transition, and the GPUI layer in [`ui`] turns that
+//! state into elements and sends commands back. No session, provider, tool,
+//! file path, or credential is handled here.
 pub mod ui;
 pub mod view_model;
 pub mod workspace;

@@ -11,6 +11,7 @@
 //! * [`gate`](HookRunner::gate) — may rewrite the payload in place and/or
 //!   block the action ([`GateResult::Block`]).
 
+use mycode_core::Request;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -65,10 +66,13 @@ type TestGate = Arc<dyn Fn(&mut Value) -> GateResult + Send + Sync>;
 /// `spawn_blocking` instead of stalling the calling executor.
 type BeforeToolFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type BeforeToolObserver = Arc<dyn Fn(&str, &Value) -> BeforeToolFuture + Send + Sync>;
+type BeforeRequestFuture = Pin<Box<dyn Future<Output = Request> + Send>>;
+type BeforeRequest = Arc<dyn Fn(Request) -> BeforeRequestFuture + Send + Sync>;
 
 pub struct HookRunner {
     test_gate: Option<TestGate>,
     before_tool: Option<BeforeToolObserver>,
+    before_request: Option<BeforeRequest>,
 }
 
 impl HookRunner {
@@ -77,6 +81,7 @@ impl HookRunner {
         Self {
             test_gate: None,
             before_tool: None,
+            before_request: None,
         }
     }
 
@@ -93,6 +98,29 @@ impl HookRunner {
     {
         self.before_tool = Some(Arc::new(move |tool, args| Box::pin(observer(tool, args))));
         self
+    }
+
+    /// Rewrites the provider request immediately before it is sent.
+    ///
+    /// Used for history compaction: the rewritten `messages` are written
+    /// back onto the in-memory agent history after this hook returns.
+    pub fn with_before_request<Fut>(
+        mut self,
+        hook: impl Fn(Request) -> Fut + Send + Sync + 'static,
+    ) -> Self
+    where
+        Fut: Future<Output = Request> + Send + 'static,
+    {
+        self.before_request = Some(Arc::new(move |request| Box::pin(hook(request))));
+        self
+    }
+
+    /// Runs the before-request rewrite, or returns the request unchanged.
+    pub async fn prepare_request(&self, request: Request) -> Request {
+        match &self.before_request {
+            Some(hook) => hook(request).await,
+            None => request,
+        }
     }
 
     /// Fires the before-tool observer, if installed.

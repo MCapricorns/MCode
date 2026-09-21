@@ -74,9 +74,6 @@ pub enum McpError {
     /// The transport failed before a response arrived.
     #[error("{0}")]
     Transport(String),
-    /// The caller cancelled the request.
-    #[error("cancelled")]
-    Cancelled,
     /// The server returned a JSON-RPC error object.
     #[error("server error: {0}")]
     Server(String),

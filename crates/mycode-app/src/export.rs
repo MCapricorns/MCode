@@ -72,7 +72,7 @@ pub struct ImportSummary {
 }
 
 fn sessions_root(home: &HomeLayout) -> Result<PathBuf, String> {
-    home.owned_join("plugins/session/data/sessions")
+    home.owned_join(mycode_config::SESSIONS_DIR)
         .map_err(|_| "sessions directory unavailable".to_owned())
 }
 
@@ -95,8 +95,8 @@ pub fn build_bundle(home: &HomeLayout) -> Result<ExportBundle, String> {
     let settings = read_app_settings(home).map_err(|error| format!("settings: {error}"))?;
     let ui_state = read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
     let mut todos = Vec::new();
-    let workspace = home.root().join("workspace");
-    if let Ok(entries) = std::fs::read_dir(&workspace) {
+    let sessions_dir = home.root().join(mycode_config::SESSIONS_DIR);
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
         for entry in entries.flatten() {
             if todos.len() >= MAX_EXPORT_TODOS {
                 break;
@@ -227,7 +227,7 @@ pub fn import_from_file(home: &HomeLayout, path: &Path) -> Result<ImportSummary,
         }
         let target = home
             .root()
-            .join("workspace")
+            .join(mycode_config::SESSIONS_DIR)
             .join(session_id)
             .join("todos.json");
         if target.exists() {

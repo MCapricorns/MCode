@@ -134,6 +134,7 @@ impl ResolvedProvider {
 }
 
 /// A streaming provider bound to one endpoint and transport.
+#[derive(Clone)]
 pub struct WireProvider {
     resolved: ResolvedProvider,
     transport: Arc<dyn SseTransport>,

@@ -228,9 +228,11 @@ pub struct Desk {
     pub green: Hsla,
     pub red: Hsla,
     pub cyan: Hsla,
+    pub violet: Hsla,
     pub faint: Hsla,
     pub screen: Hsla,
     pub screen_dim: Hsla,
+    pub think_bg: Hsla,
 }
 
 impl Desk {
@@ -241,9 +243,11 @@ impl Desk {
                 green: hex(0x3FB96B),
                 red: hex(0xF05A5A),
                 cyan: hex(0x5AC8FA),
+                violet: hex(0x9D8CFF),
                 faint: hex(0x5C6270),
                 screen: hex(0x08090C),
                 screen_dim: hex(0x8B909B),
+                think_bg: hex_a(0xFFFFFF, 0.014),
             }
         } else {
             Self {
@@ -251,9 +255,11 @@ impl Desk {
                 green: hex(0x1E7A46),
                 red: hex(0xBF3627),
                 cyan: hex(0x0F6E8F),
+                violet: hex(0x6A56C9),
                 faint: hex(0x97896F),
                 screen: hex(0x08090C),
                 screen_dim: hex(0x8B909B),
+                think_bg: hex_a(0x1C1810, 0.02),
             }
         }
     }

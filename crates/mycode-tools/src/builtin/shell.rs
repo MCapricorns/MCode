@@ -368,9 +368,17 @@ fn discover_windows_powershell() -> Option<PathBuf> {
             PathBuf::from(system_root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
         );
     }
-    // `exists()` (not `is_file()`): the Store execution alias is an
-    // appexec reparse point whose metadata is not a regular file.
-    candidates.into_iter().find(|path| path.exists())
+    // Skip 0-byte Store execution aliases: they exist() but cannot be
+    // pinned. Prefer a real PE (Program Files / package dir) or inbox
+    // Windows PowerShell.
+    candidates
+        .into_iter()
+        .find(|path| powershell_image_looks_pinnable(path))
+}
+
+#[cfg(windows)]
+fn powershell_image_looks_pinnable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() > 64)
 }
 
 /// Finds `pwsh.exe` inside versioned `Microsoft.PowerShell_*` package

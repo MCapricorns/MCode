@@ -1,18 +1,19 @@
 # MYCode
 
-MYCode 是一个基于 Zed GPUI 的 Windows/macOS 桌面编码 agent（Zed/Codex 式布局：活动栏 + 会话侧栏 + 对话流 + 上下文面板），围绕一个持久、可回放的会话 ledger 与第一方 provider runtime 构建。
+MYCode 是一个基于 Zed GPUI 的 Windows / macOS 桌面编码 agent（Desk 三栏：项目侧栏 + 对话时间线 + 右侧 inspector）。会话落 durable ledger，模型经三个通用 wire 协议接入，工具由第一方 runtime 提供给模型。
 
 ## 功能
 
-- **开箱即用的 Provider 目录**：内置 190+ 家模型厂商（来自 models.dev 快照），选择厂商、粘贴 API key 即可对话；目录在后台自动云控更新（ETag 条件请求、本地缓存、离线兜底），新厂商/新模型无需升级应用。
-- **模型选择器**：顶栏按厂商/模型切换，选择持久化；支持 `anthropic-messages`、`openai-completions`、`openai-responses` 三家通用 wire 协议与自定义 endpoint。
-- **项目工作区**：启动页选择项目文件夹（或从最近列表打开），agent 的文件/命令工具直接工作在项目目录；`write`/`edit` 前自动快照，Changes 面板一键回滚。
-- **内置工具**：`read`、`write`、`edit`、`shell`、`exec`、`grep`、`find`，外加 `ask_user`（结构化问答）与 `todo_write`（stable ID + 依赖图）。
-- **durable 会话**：所有用户消息、工具结果、assistant 回复落事件 ledger；崩溃后可恢复、回放。
-- **MCP 客户端**：stdio 与 Streamable-HTTP 双 transport，Context7 内置目录、自填 key。
-- **Web 搜索**：bounded 客户端（URL/SSRF 防护），结果展示在 Web 面板。
-- **Usage 统计**：按 provider/模型聚合 token 用量，durable 记录，Overview 面板展示。
-- **自动更新**：自动检查 GitHub Releases，下载并校验 SHA-256 后暂存，重启即完成换装（Windows 无控制台闪现）；Release 产物提供 Windows x64 与 macOS arm64/x64 可执行文件。
+- **模型目录**：内置 models.dev 快照（190+ 厂商），粘贴 API key 即可对话；后台 ETag 云同步，离线回退内置快照。
+- **三种 wire**：`anthropic-messages`、`openai-completions`、`openai-responses`；自定义 endpoint 同协议即可。
+- **项目工作区**：欢迎页或侧栏选择真实项目文件夹。工具 cwd 就是该路径；未绑定时落到 `~/.mycode/scratch`，不再创建 `workspace/ses1-…` 假项目。
+- **内置工具**：`read` / `write` / `edit` / `find` / `grep` / `shell` / `exec`，以及 `ask_user`、`todo_write`。
+- **Subagent**：`task` 委派 scout / artisan / steward / sentinel；设置页可开关角色并指定模型。
+- **MCP**：stdio 与 Streamable-HTTP；支持粘贴 JSON 配置导入；工具并入同一 registry，写入 system prompt。
+- **Web 搜索**：默认 Querit 与 AnySearch，只贴 API key；请求自动带 `Authorization: Bearer`。模型使用 `web_search` + `fetch_content`。
+- **自动压缩**：Codex 风格——触发为可用窗口（模型 context 的 95%）的 90%，保留约 20k token 尾部；每轮 provider 请求前重估（含工具结果后的 mid-turn）。
+- **Durable 会话**：用户消息、工具结果、assistant 回复落 `sessions/<id>/` ledger；`write`/`edit` 前自动 checkpoint。
+- **自动更新**：检查 GitHub Releases，SHA-256 校验后暂存，重启换装。
 
 ## 下载
 
@@ -22,20 +23,30 @@ MYCode 是一个基于 Zed GPUI 的 Windows/macOS 桌面编码 agent（Zed/Codex
 - `mycode-desktop-v<版本>-aarch64-apple-darwin.zip` — macOS Apple Silicon
 - `mycode-desktop-v<版本>-x86_64-apple-darwin.zip` — macOS Intel
 
-应用内置自动更新；也可以手动下载覆盖安装。
-
 ## 构建
 
 ```text
 cargo build --release -p mycode-desktop
-target/release/mycode-desktop.exe
 ```
 
-工具链：Rust stable（MSVC）。门禁：`cargo fmt --all`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`。
+工具链：Rust stable（Windows 用 MSVC）。门禁：`cargo fmt --all`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`。
 
 ## 数据位置
 
-`MYCODE_HOME`（默认 `~/.mycode`）下：`settings.json`（配置）、`secrets.json`（API keys，Debug 输出打码）、`ui.json`（最近项目/更新偏好）、`catalog-cache.json`（provider 目录缓存）、`sessions/`（durable ledger）、`checkpoints/`（文件快照）、`workspace/<session>/`（缺省工具工作目录 + todos.json）。
+`MYCODE_HOME`（默认 `~/.mycode`）：
+
+```text
+~/.mycode/
+├─ settings.json          # 配置（无密钥）
+├─ secrets.json           # API keys（web-<id> / mcp-<id> / provider id）
+├─ ui.json                # 最近项目、会话→项目绑定、模型选择
+├─ catalog-cache.json     # 云目录缓存
+├─ sessions/<ses1-id>/    # ledger + todos.json + compaction.json
+├─ checkpoints/<ses1-id>/ # write/edit 文件快照
+└─ scratch/               # 未绑定项目时的工具工作目录
+```
+
+密钥永不进 `settings.json`。会话目录用内部 id；界面标题用项目路径的文件夹名，不用 `ses1-…`。
 
 ## 文档
 

@@ -87,10 +87,7 @@ impl AgentConfig {
 
     /// Requests a reasoning effort level.
     #[must_use]
-    pub fn with_reasoning(
-        mut self,
-        level: impl Into<Option<mycode_core::ReasoningLevel>>,
-    ) -> Self {
+    pub fn with_reasoning(mut self, level: impl Into<Option<mycode_core::ReasoningLevel>>) -> Self {
         self.reasoning = level.into();
         self
     }

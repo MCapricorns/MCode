@@ -2,18 +2,20 @@
 //! full-page settings view.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Root;
+use std::collections::HashMap;
+
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Bounds, Context, Entity, Pixels, Window, WindowBounds};
 use gpui_kit::{px, size};
+use mycode_app::{BranchId, HeadStamp, SessionEventId, SessionId};
 use mycode_config::HomeLayout;
-use mycode_agent::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 
-use crate::bridge::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 use crate::ui::{BackendForm, McpForm, ProviderForm};
 use crate::view_model::{
     DesktopAction, MainView, SettingsState, UpdateState, WorkspaceState, reduce,
 };
+use mycode_app::{BridgeCommand, BridgeEvent, BridgeReply, CoreBridge};
 
 /// Window chrome bounds for the first window.
 const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
@@ -70,6 +72,8 @@ pub struct Workspace {
     backend_form: Option<Entity<BackendForm>>,
     mcp_form: Option<Entity<McpForm>>,
     mcp_key_input: Option<Entity<InputState>>,
+    mcp_json_input: Option<Entity<TextareaState>>,
+    web_key_inputs: HashMap<String, Entity<InputState>>,
     preset_key_input: Option<Entity<InputState>>,
     preset_search_input: Option<Entity<InputState>>,
     ask_input: Option<Entity<InputState>>,
@@ -111,6 +115,8 @@ impl Workspace {
             backend_form: None,
             mcp_form: None,
             mcp_key_input: None,
+            mcp_json_input: None,
+            web_key_inputs: HashMap::new(),
             preset_key_input: None,
             preset_search_input: None,
             ask_input: None,
@@ -1186,7 +1192,7 @@ impl Workspace {
         let Some(prepared) = self.vm.prepared_update.clone() else {
             return;
         };
-        if let Err(message) = mycode_updates::apply_and_restart(&prepared) {
+        if let Err(message) = mycode_app::apply_and_restart(&prepared) {
             self.apply_action(DesktopAction::Failed(message), cx);
             return;
         }
@@ -1213,7 +1219,12 @@ impl Workspace {
             return;
         };
         self.apply_action(DesktopAction::McpProbeStarted(server_id.to_owned()), cx);
-        self.dispatch(BridgeCommand::McpListTools { server }, cx);
+        self.dispatch(
+            BridgeCommand::McpListTools {
+                server: Box::new(server),
+            },
+            cx,
+        );
     }
 
     pub(super) fn on_add_builtin_mcp(
@@ -1684,6 +1695,165 @@ impl Workspace {
         }
     }
 
+    pub(super) fn web_key_input(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<InputState> {
+        self.web_key_inputs
+            .entry(id.to_owned())
+            .or_insert_with(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx).placeholder("paste API key (Bearer is added)")
+                })
+            })
+            .clone()
+    }
+
+    pub(super) fn on_save_web_key(&mut self, id: &str, cx: &mut Context<Workspace>) {
+        let Some(input) = self.web_key_inputs.get(id).cloned() else {
+            return;
+        };
+        let api_key = mycode_config::normalize_api_key(&input.read(cx).value());
+        self.dispatch(
+            BridgeCommand::SaveProviderKey {
+                provider_id: format!("web-{id}"),
+                api_key,
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn mcp_json_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<TextareaState> {
+        self.mcp_json_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .placeholder("Paste mcp.json or a Claude Desktop / Cursor config…")
+                        .auto_grow(4, 16)
+                })
+            })
+            .clone()
+    }
+
+    pub(super) fn on_import_mcp_json(&mut self, cx: &mut Context<Workspace>) {
+        let Some(input) = self.mcp_json_input.clone() else {
+            return;
+        };
+        let raw = input.read(cx).value().to_string();
+        let imported = match mycode_config::parse_mcp_import(&raw) {
+            Ok(imported) => imported,
+            Err(message) => {
+                self.apply_action(DesktopAction::Failed(message), cx);
+                return;
+            }
+        };
+        let mut existing: Vec<String> = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| {
+                settings
+                    .mcp_servers
+                    .iter()
+                    .map(|server| server.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for row in imported {
+            if existing.contains(&row.server.id) {
+                self.apply_action(
+                    DesktopAction::Failed(format!(
+                        "an MCP server named '{}' already exists",
+                        row.server.id
+                    )),
+                    cx,
+                );
+                continue;
+            }
+            let server_id = row.server.id.clone();
+            existing.push(server_id.clone());
+            let api_key = row.api_key.clone();
+            self.apply_action(DesktopAction::SettingsMcpAdded(row.server), cx);
+            if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
+                self.dispatch(
+                    BridgeCommand::SaveProviderKey {
+                        provider_id: format!("mcp-{server_id}"),
+                        api_key,
+                    },
+                    cx,
+                );
+            }
+        }
+    }
+
+    pub(super) fn on_subagent_role_enabled(
+        &mut self,
+        role: &str,
+        enabled: bool,
+        cx: &mut Context<Workspace>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        next.role_mut(role).enabled = enabled;
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+    }
+
+    pub(super) fn on_cycle_subagent_thinking(&mut self, role: &str, cx: &mut Context<Workspace>) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        let entry = next.role_mut(role);
+        entry.thinking = match entry.thinking.as_deref() {
+            None => Some("low".to_owned()),
+            Some("low") => Some("medium".to_owned()),
+            Some("medium") => Some("high".to_owned()),
+            _ => None,
+        };
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+    }
+
+    pub(super) fn on_cycle_subagent_provider(
+        &mut self,
+        role: &str,
+        ids: &[String],
+        cx: &mut Context<Workspace>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        let entry = next.role_mut(role);
+        entry.provider = cycle_optional(entry.provider.as_deref(), ids);
+        if entry.provider.is_none() {
+            entry.model = None;
+        }
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+    }
+
+    pub(super) fn on_cycle_subagent_model(
+        &mut self,
+        role: &str,
+        models: &[String],
+        cx: &mut Context<Workspace>,
+    ) {
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        let mut next = settings.subagents.clone();
+        let entry = next.role_mut(role);
+        entry.model = cycle_optional(entry.model.as_deref(), models);
+        self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+    }
+
     pub(super) fn on_save_settings(&mut self, cx: &mut Context<Self>) {
         let Some(settings) = self.vm.settings.clone() else {
             return;
@@ -1710,6 +1880,19 @@ impl Workspace {
             },
             cx,
         );
+    }
+}
+
+fn cycle_optional(current: Option<&str>, options: &[String]) -> Option<String> {
+    if options.is_empty() {
+        return None;
+    }
+    match current {
+        None => Some(options[0].clone()),
+        Some(value) => options
+            .iter()
+            .position(|item| item == value)
+            .and_then(|index| options.get(index + 1).cloned()),
     }
 }
 

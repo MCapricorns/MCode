@@ -183,16 +183,23 @@ pub(super) fn render_sidebar(
                             .child("No chats in this project yet"),
                     )
                 })
-                .children(current.iter().map(|summary| session_row(summary, cx)))
+                .children(
+                    current
+                        .iter()
+                        .map(|summary| session_row(summary, active_project.as_deref(), cx)),
+                )
                 .when(!unbound.is_empty(), |this| {
                     this.child(group_label("group-unbound", "NO PROJECT", cx.theme()))
-                        .children(unbound.iter().map(|summary| session_row(summary, cx)))
+                        .children(unbound.iter().map(|summary| session_row(summary, None, cx)))
                 })
                 .children(others.iter().map(|(project, rows)| {
                     div()
                         .id(format!("other-group-{}", short_id(project)))
                         .child(switch_group_header(project, cx))
-                        .children(rows.iter().map(|summary| session_row(summary, cx)))
+                        .children(
+                            rows.iter()
+                                .map(|summary| session_row(summary, Some(project.as_str()), cx)),
+                        )
                 })),
         )
         .child(render_sidebar_footer(workspace, view, cx))
@@ -200,14 +207,20 @@ pub(super) fn render_sidebar(
 
 /// One clickable session row: the demo's `.sess` — status lamp, title, meta
 /// count; the open session paints an amber left rail (`.sess.active`).
-fn session_row(summary: &SessionSummary, cx: &Context<Workspace>) -> impl IntoElement {
+fn session_row(
+    summary: &SessionSummary,
+    project: Option<&str>,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let is_open = summary.active;
-    let title: SharedString = if summary.title.is_empty() {
-        short_id(&summary.session_id).into()
-    } else {
+    let title: SharedString = if !summary.title.is_empty() {
         summary.title.clone().into()
+    } else if let Some(project) = project {
+        project_label(project).into()
+    } else {
+        "New chat".into()
     };
     let session_id = summary.session_id.clone();
     div()
@@ -403,7 +416,7 @@ fn render_sidebar_footer(
                 div()
                     .text_xs()
                     .opacity(0.4)
-                    .child(format!("v{}", mycode_updates::current_version())),
+                    .child(format!("v{}", mycode_app::current_version())),
             ),
         )
 }
@@ -414,6 +427,7 @@ pub(super) fn render_project_menu_layer(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     let recents = workspace.vm().recents.clone();
     let active = workspace.vm().project_dir.clone();
     let has_active = active.is_some();
@@ -453,8 +467,8 @@ pub(super) fn render_project_menu_layer(
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .opacity(0.55)
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(desk.faint)
                         .px_2()
                         .pt_1()
                         .pb(px(2.))
@@ -506,6 +520,7 @@ fn project_menu_row(
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     let path = path.to_owned();
     div()
         .id(format!("project-recent-{}", short_id(path.as_str())))
@@ -514,8 +529,9 @@ fn project_menu_row(
         .items_center()
         .gap_2()
         .px_2()
-        .py(px(6.))
-        .rounded_md()
+        .py(px(7.))
+        .rounded(px(3.))
+        .group("project-row")
         .cursor_pointer()
         .when(selected, |this| this.bg(theme.secondary))
         .hover(|this| this.bg(theme.secondary))
@@ -525,11 +541,16 @@ fn project_menu_row(
                 workspace.on_switch_project(Some(path.clone()), cx);
             })
         })
+        .child(super::lamp(if selected { desk.amber } else { desk.faint }))
         .child(
             Icon::new(IconName::Folder)
                 .small()
                 .flex_shrink_0()
-                .text_color(theme.muted_foreground),
+                .text_color(if selected {
+                    desk.amber
+                } else {
+                    theme.muted_foreground
+                }),
         )
         .child(
             div()
@@ -537,7 +558,15 @@ fn project_menu_row(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().text_sm().truncate().child(label))
+                .child(
+                    div()
+                        .text_sm()
+                        .when(selected, |this| {
+                            this.font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        })
+                        .truncate()
+                        .child(label),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -545,17 +574,31 @@ fn project_menu_row(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis_start()
-                        .child(path),
+                        .child(path.clone()),
                 ),
         )
-        .when(selected, |this| {
-            this.child(
-                Icon::new(IconName::Check)
-                    .xsmall()
-                    .flex_shrink_0()
-                    .text_color(theme.primary),
-            )
-        })
+        .child(
+            div()
+                .id(format!("project-remove-{}", short_id(path.as_str())))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(20.))
+                .rounded(px(2.))
+                .flex_shrink_0()
+                .opacity(0.0)
+                .group_hover("project-row", |this| this.opacity(1.0))
+                .cursor_pointer()
+                .text_color(theme.muted_foreground)
+                .hover(|this| this.bg(theme.sidebar_accent))
+                .on_click({
+                    let path = path.clone();
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_remove_recent(&path, cx);
+                    })
+                })
+                .child(Icon::new(IconName::X).xsmall()),
+        )
 }
 
 fn menu_action_row(

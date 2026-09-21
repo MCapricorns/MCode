@@ -23,6 +23,7 @@ mod compaction;
 mod error;
 mod home;
 mod host_vault;
+mod mcp_import;
 mod pack_component;
 mod pack_installation;
 mod parse;
@@ -52,13 +53,15 @@ pub use compaction::{
 };
 pub use error::{ConfigError, ConfigErrorKind};
 pub use home::{
-    HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, PluginFamily, is_portable_role_name,
+    HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, PluginFamily, SCRATCH_DIR, SESSIONS_DIR,
+    is_portable_role_name, project_folder_name, session_relative,
 };
 #[doc(inline)]
 pub use host_vault::{
     HOST_VAULT_FORMAT_VERSION, HOST_VAULT_KIND, HostVaultState, MAX_HOST_VAULT_BYTES,
     VaultRevision, initialize_empty_host_vault, read_host_vault_state,
 };
+pub use mcp_import::{ImportedMcpServer, normalize_api_key, parse_mcp_import};
 #[doc(inline)]
 pub use pack_component::{
     MAX_PACK_COMPONENT_BYTES, PACK_COMPONENT_BUNDLE_PATH, read_pack_component,
@@ -100,19 +103,19 @@ pub use settings::{
     MAX_PROVIDERS, MAX_SETTINGS_BYTES, MAX_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_ROLES,
     MAX_WEB_BACKENDS, McpServerSettings, ProviderSettings, SETTINGS_FORMAT_VERSION, SETTINGS_KIND,
     SETTINGS_PATH, SubagentRoleSettings, SubagentSettings, UsageSettings, VALID_PROVIDER_KINDS,
-    WebBackendSettings, WebSettings, builtin_mcp_servers, default_user_agent, read_app_settings,
-    replace_app_settings, split_command_line,
-};
-#[doc(inline)]
-pub use subagents::{
-    MAX_ROLE_BYTES, MAX_ROLES, ROLE_DIR_NAME, RoleCatalog, RoleIsolation, RoleOrigin, RoleProblem,
-    RoleThinking, SubagentRole, builtin_roles, discover_roles,
+    VALID_WEB_KINDS, WebBackendSettings, WebSettings, builtin_mcp_servers, builtin_web_backends,
+    default_user_agent, read_app_settings, replace_app_settings, split_command_line,
 };
 #[doc(inline)]
 pub use staging::{
     MAX_STAGING_DIRECTORIES, MAX_STAGING_ENTRIES, MAX_STAGING_FILE_BYTES, MAX_STAGING_FILES,
     MAX_STAGING_JOURNAL_BYTES, MAX_STAGING_ROOT_ENTRIES, MAX_STAGING_TOTAL_BYTES,
     StagedTransaction, StagingTransaction, begin_staging, recover_abandoned_staging,
+};
+#[doc(inline)]
+pub use subagents::{
+    MAX_ROLE_BYTES, MAX_ROLES, ROLE_DIR_NAME, RoleCatalog, RoleIsolation, RoleOrigin, RoleProblem,
+    RoleThinking, SubagentRole, builtin_roles, discover_roles,
 };
 pub use todos::{
     MAX_TODO_CONTENT_CHARS, MAX_TODO_DEPS, MAX_TODO_TASKS, TODO_FORMAT_VERSION, TODO_KIND,

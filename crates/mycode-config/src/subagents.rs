@@ -37,8 +37,9 @@ pub enum RoleIsolation {
 }
 
 impl RoleIsolation {
-    /// Parses the frontmatter spelling.
-    fn parse(value: &str) -> Option<Self> {
+    /// Parses the frontmatter or tool-argument spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "shared" => Some(Self::Shared),
             "worktree" => Some(Self::Worktree),
@@ -129,6 +130,14 @@ impl RoleOrigin {
     }
 }
 
+/// Tools a child may keep even when the parent has more.
+///
+/// Scout is a hard read-only boundary: mutating tools never reach it, even
+/// when a project override lists them.
+const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "web_search", "fetch_content"];
+/// Tools that would let a child re-enter the parent or talk to the user.
+const PARENT_ONLY_TOOLS: &[&str] = &["task", "ask_user", "todo_write"];
+
 /// One resolved delegation role.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentRole {
@@ -146,6 +155,60 @@ pub struct SubagentRole {
     pub prompt: String,
     /// Which layer supplied this definition.
     pub origin: RoleOrigin,
+}
+
+impl SubagentRole {
+    /// Tools this role may use, intersected with the parent's live set.
+    ///
+    /// An omitted allowlist inherits the parent set. Scout is hard
+    /// read-only. Parent-only tools (`task`, `ask_user`, `todo_write`) never
+    /// reach a child, so depth stays at one.
+    #[must_use]
+    pub fn resolve_tools(&self, parent_tools: &[String]) -> Vec<String> {
+        let parent: Vec<String> = parent_tools
+            .iter()
+            .filter(|name| !PARENT_ONLY_TOOLS.contains(&name.as_str()))
+            .cloned()
+            .collect();
+        let declared = match &self.tools {
+            Some(tools) => tools
+                .iter()
+                .filter(|name| parent.iter().any(|live| live == *name))
+                .cloned()
+                .collect(),
+            None => parent,
+        };
+        if self.name == "scout" {
+            declared
+                .into_iter()
+                .filter(|name| READ_ONLY_TOOLS.contains(&name.as_str()))
+                .collect()
+        } else {
+            declared
+        }
+    }
+
+    /// Whether this role may write the tree (and therefore take a worktree).
+    ///
+    /// Scout is never write-capable. An omitted allowlist inherits writers.
+    #[must_use]
+    pub fn is_write_capable(&self) -> bool {
+        if self.name == "scout" {
+            return false;
+        }
+        match &self.tools {
+            None => true,
+            Some(tools) => tools
+                .iter()
+                .any(|name| !READ_ONLY_TOOLS.contains(&name.as_str())),
+        }
+    }
+
+    /// One-line catalog entry for the parent prompt.
+    #[must_use]
+    pub fn catalog_line(&self) -> String {
+        format!("- {}: {}", self.name, self.description)
+    }
 }
 
 /// Why a role file was rejected. Surfaced so a typo is visible in the UI
@@ -230,16 +293,14 @@ pub fn discover_roles(home: &crate::HomeLayout, workspace_root: Option<&Path>) -
                     source: path.to_string_lossy().into_owned(),
                     detail: format!("name \"{}\" does not match the file name", role.name),
                 }),
-                Ok(role) => {
-                    match catalog.roles.iter().position(|held| held.name == role.name) {
-                        Some(index) => catalog.roles[index] = role,
-                        None if catalog.roles.len() < MAX_ROLES => catalog.roles.push(role),
-                        None => catalog.problems.push(RoleProblem {
-                            source: path.to_string_lossy().into_owned(),
-                            detail: format!("catalog is full at {MAX_ROLES} roles"),
-                        }),
-                    }
-                }
+                Ok(role) => match catalog.roles.iter().position(|held| held.name == role.name) {
+                    Some(index) => catalog.roles[index] = role,
+                    None if catalog.roles.len() < MAX_ROLES => catalog.roles.push(role),
+                    None => catalog.problems.push(RoleProblem {
+                        source: path.to_string_lossy().into_owned(),
+                        detail: format!("catalog is full at {MAX_ROLES} roles"),
+                    }),
+                },
                 Err(detail) => catalog.problems.push(RoleProblem {
                     source: path.to_string_lossy().into_owned(),
                     detail,
@@ -310,7 +371,10 @@ fn read_role_dir(dir: &Path, problems: &mut Vec<RoleProblem>) -> Vec<(PathBuf, S
 fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
     let body = text
         .strip_prefix("---")
-        .and_then(|rest| rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n")))
+        .and_then(|rest| {
+            rest.strip_prefix('\n')
+                .or_else(|| rest.strip_prefix("\r\n"))
+        })
         .ok_or_else(|| "missing the opening \"---\" frontmatter line".to_owned())?;
     let (header, prompt) = split_frontmatter(body)
         .ok_or_else(|| "missing the closing \"---\" frontmatter line".to_owned())?;
@@ -429,6 +493,28 @@ mod tests {
             )
         );
         assert!(scout.prompt.contains("read-only"));
+        assert!(
+            !scout.is_write_capable(),
+            "scout is a hard read-only boundary"
+        );
+        let parent = [
+            "read",
+            "write",
+            "edit",
+            "grep",
+            "find",
+            "web_search",
+            "fetch_content",
+            "task",
+            "ask_user",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            scout.resolve_tools(&parent),
+            ["read", "grep", "find", "web_search", "fetch_content"]
+                .map(str::to_owned)
+                .as_slice()
+        );
 
         let artisan = catalog.role("artisan").expect("artisan");
         assert_eq!(artisan.isolation, RoleIsolation::Worktree);
@@ -477,7 +563,10 @@ mod tests {
             RoleIsolation::Shared,
             "the override's own isolation wins"
         );
-        assert_eq!(catalog.role("herald").expect("herald").origin, RoleOrigin::User);
+        assert_eq!(
+            catalog.role("herald").expect("herald").origin,
+            RoleOrigin::User
+        );
         assert_eq!(
             catalog.role("scout").expect("scout").origin,
             RoleOrigin::Builtin

@@ -8,7 +8,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputState, Textarea};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
@@ -158,6 +158,9 @@ pub(super) fn render_settings_view(
                                         SettingsSection::Models => {
                                             render_models_section(workspace, window, cx)
                                         }
+                                        SettingsSection::Agents => {
+                                            render_agents_section(workspace, cx)
+                                        }
                                         SettingsSection::Mcp => {
                                             render_mcp_section(workspace, window, cx)
                                         }
@@ -211,6 +214,19 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
             NavBadge {
                 count: providers,
                 lamp: missing_key.then_some(desk.red),
+            },
+        ),
+        (
+            SettingsSection::Agents,
+            NavBadge {
+                count: settings.map(|s| {
+                    mycode_config::builtin_roles()
+                        .roles
+                        .iter()
+                        .filter(|role| s.subagents.is_enabled(&role.name))
+                        .count()
+                }),
+                lamp: None,
             },
         ),
         (
@@ -468,12 +484,19 @@ fn settings_card(
                 .gap_0p5()
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(gpui_kit::FontWeight::BOLD)
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(super::desk::Desk::of(theme).faint)
                         .child(title.to_owned()),
                 )
                 .when_some(hint, |this, hint| {
-                    this.child(div().text_xs().opacity(0.5).child(hint.to_owned()))
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .whitespace_normal()
+                            .child(hint.to_owned()),
+                    )
                 }),
         )
         .child(
@@ -497,7 +520,7 @@ fn settings_row(
         .id(format!("row-{id}"))
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .justify_between()
         .gap_4()
         .child(
@@ -505,10 +528,17 @@ fn settings_row(
                 .flex()
                 .flex_col()
                 .gap_0p5()
+                .flex_1()
                 .min_w_0()
-                .child(div().text_sm().child(label.to_owned()))
+                .child(div().text_sm().whitespace_normal().child(label.to_owned()))
                 .when_some(description, |this, description| {
-                    this.child(div().text_xs().opacity(0.5).child(description.to_owned()))
+                    this.child(
+                        div()
+                            .text_xs()
+                            .opacity(0.5)
+                            .whitespace_normal()
+                            .child(description.to_owned()),
+                    )
                 }),
         )
         .child(control)
@@ -1332,6 +1362,7 @@ fn render_mcp_section(
         .collect();
     let mcp_form_element = render_mcp_form(workspace, window, cx);
     let key_input = workspace.mcp_key_input(window, cx);
+    let json_input = workspace.mcp_json_input(window, cx);
     let mcp_row_elements: Vec<AnyElement> =
         mcp_rows.into_iter().map(|row| mcp_row(row, cx)).collect();
 
@@ -1392,6 +1423,30 @@ fn render_mcp_section(
                 ],
             ))
         })
+        .child(settings_card(
+            "mcp-import",
+            "Import JSON",
+            Some(
+                "Paste a Claude Desktop / Cursor mcp.json, a servers map, or one server object. \
+                 Authorization headers are stored as the API key; Bearer is added on the wire.",
+            ),
+            theme,
+            vec![
+                div()
+                    .min_h(px(96.))
+                    .w_full()
+                    .child(Textarea::new(&json_input))
+                    .into_any_element(),
+                Button::new("mcp-import-json")
+                    .label("Import pasted JSON")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_import_mcp_json(cx);
+                    }))
+                    .into_any_element(),
+            ],
+        ))
         .child(settings_card(
             "mcp-add",
             "Add custom server",
@@ -1498,7 +1553,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                             div()
                                 .text_xs()
                                 .opacity(0.6)
-                                .overflow_hidden()
+                                .whitespace_normal()
                                 .child(format!("{transport} \u{b7} {target}{key_note}")),
                         )
                         .when_some(tools_summary, |this, summary| {
@@ -1595,6 +1650,228 @@ fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -
         .into_any_element()
 }
 
+// ---- Agents ----
+
+fn render_agents_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
+    };
+    let catalog = mycode_config::builtin_roles();
+    let providers: Vec<(String, Vec<String>)> = settings
+        .providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .map(|provider| (provider.id.clone(), provider.models.clone()))
+        .collect();
+    let max_concurrent = settings.subagents.max_concurrent;
+    let role_cards: Vec<AnyElement> = catalog
+        .roles
+        .iter()
+        .map(|role| {
+            let entry = settings.subagents.role(&role.name);
+            let enabled = entry.is_none_or(|item| item.enabled);
+            let thinking = entry
+                .and_then(|item| item.thinking.clone())
+                .unwrap_or_else(|| "inherit".to_owned());
+            let provider = entry
+                .and_then(|item| item.provider.clone())
+                .unwrap_or_else(|| "inherit".to_owned());
+            let model = entry
+                .and_then(|item| item.model.clone())
+                .unwrap_or_else(|| "inherit".to_owned());
+            agent_role_card(
+                role.name.clone(),
+                role.description.clone(),
+                role.isolation.as_str(),
+                role.origin.as_str(),
+                enabled,
+                thinking,
+                provider,
+                model,
+                providers.clone(),
+                cx,
+            )
+        })
+        .collect();
+    let theme = cx.theme();
+    div()
+        .id("agents-section")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(settings_card(
+            "agents-capacity",
+            "Delegation",
+            Some(
+                "The parent model may hand work to these roles. Inherit uses the \
+                 session provider and the role's own thinking level. 0 concurrent \
+                 slots means automatic capacity.",
+            ),
+            theme,
+            vec![settings_row(
+                "agents-concurrent",
+                "Max concurrent",
+                Some("0 = automatic"),
+                Button::new("agents-concurrent-cycle")
+                    .label(if max_concurrent == 0 {
+                        "auto".to_owned()
+                    } else {
+                        max_concurrent.to_string()
+                    })
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        let Some(settings) = workspace.vm().settings.clone() else {
+                            return;
+                        };
+                        let mut next = settings.subagents;
+                        next.max_concurrent = if next.max_concurrent >= mycode_config::MAX_SUBAGENT_CONCURRENCY
+                        {
+                            0
+                        } else {
+                            next.max_concurrent + 1
+                        };
+                        workspace.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
+                    }))
+                    .into_any_element(),
+            )],
+        ))
+        .child(settings_card(
+            "agents-roles",
+            "Roles",
+            Some("Scout is read-only. Artisan writes in a worktree. Steward cleans up. Sentinel reviews."),
+            theme,
+            role_cards,
+        ))
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn agent_role_card(
+    name: String,
+    description: String,
+    isolation: &'static str,
+    origin: &'static str,
+    enabled: bool,
+    thinking: String,
+    provider: String,
+    model: String,
+    providers: Vec<(String, Vec<String>)>,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let role = name.clone();
+    let thinking_label = thinking.clone();
+    let provider_label = provider.clone();
+    let model_label = model.clone();
+    let provider_ids: Vec<String> = providers.iter().map(|(id, _)| id.clone()).collect();
+    let models_for_provider: Vec<String> = providers
+        .iter()
+        .find(|(id, _)| *id == provider)
+        .map(|(_, models)| models.clone())
+        .unwrap_or_default();
+    div()
+        .id(format!("agent-role-{name}"))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .child(name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .opacity(0.6)
+                                .whitespace_normal()
+                                .child(description),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .opacity(0.45)
+                                .child(format!("{origin} \u{b7} {isolation}")),
+                        ),
+                )
+                .child(
+                    Switch::new(format!("agent-enabled-{name}"))
+                        .checked(enabled)
+                        .on_click({
+                            let role = role.clone();
+                            cx.listener(move |workspace, checked: &bool, _, cx| {
+                                workspace.on_subagent_role_enabled(&role, *checked, cx);
+                            })
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    Button::new(format!("agent-thinking-{name}"))
+                        .label(format!("think: {thinking_label}"))
+                        .small()
+                        .outline()
+                        .on_click({
+                            let role = role.clone();
+                            cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_cycle_subagent_thinking(&role, cx);
+                            })
+                        }),
+                )
+                .child(
+                    Button::new(format!("agent-provider-{name}"))
+                        .label(format!("provider: {provider_label}"))
+                        .small()
+                        .outline()
+                        .on_click({
+                            let role = role.clone();
+                            let ids = provider_ids.clone();
+                            cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_cycle_subagent_provider(&role, &ids, cx);
+                            })
+                        }),
+                )
+                .child(
+                    Button::new(format!("agent-model-{name}"))
+                        .label(format!("model: {model_label}"))
+                        .small()
+                        .outline()
+                        .on_click({
+                            let role = role.clone();
+                            let models = models_for_provider.clone();
+                            cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_cycle_subagent_model(&role, &models, cx);
+                            })
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
 // ---- Web ----
 
 fn render_web_section(
@@ -1605,29 +1882,51 @@ fn render_web_section(
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
     };
-    let backend_form_element = render_backend_form(workspace, window, cx);
-    let backend_rows: Vec<(String, String, String, bool, usize)> = settings
+    let keyed = settings.providers_with_keys.clone();
+    let builtin_ids: Vec<String> = mycode_config::builtin_web_backends()
+        .into_iter()
+        .map(|backend| backend.id)
+        .collect();
+    let vendor_rows: Vec<AnyElement> = settings
         .web_backends
         .iter()
         .enumerate()
+        .filter(|(_, backend)| builtin_ids.contains(&backend.id))
         .map(|(index, backend)| {
-            (
+            let key_input = workspace.web_key_input(&backend.id, window, cx);
+            vendor_backend_row(
+                VendorBackend {
+                    id: backend.id.clone(),
+                    kind: backend.kind.clone(),
+                    endpoint: backend.endpoint.clone(),
+                    enabled: backend.enabled,
+                    keyed: keyed.iter().any(|id| id == &format!("web-{}", backend.id)),
+                    index,
+                },
+                key_input,
+                cx,
+            )
+        })
+        .collect();
+    let custom_rows: Vec<AnyElement> = settings
+        .web_backends
+        .iter()
+        .enumerate()
+        .filter(|(_, backend)| !builtin_ids.contains(&backend.id))
+        .map(|(index, backend)| {
+            backend_row(
                 backend.id.clone(),
                 backend.kind.clone(),
                 backend.endpoint.clone(),
                 backend.enabled,
                 index,
+                cx,
             )
         })
         .collect();
-    let backend_row_elements: Vec<AnyElement> = backend_rows
-        .into_iter()
-        .map(|(id, kind, endpoint, enabled, index)| {
-            backend_row(id, kind, endpoint, enabled, index, cx)
-        })
-        .collect();
+    let backend_form_element = render_backend_form(workspace, window, cx);
     let theme = cx.theme();
-    let backends_empty = backend_row_elements.is_empty();
+    let custom_empty = custom_rows.is_empty();
     div()
         .id("web-section")
         .flex()
@@ -1637,36 +1936,157 @@ fn render_web_section(
             "web",
             "Web search",
             Some(
-                "Querit works out of the box: the key comes from the QUERIT_API_KEY \
-                 environment variable (or the vault entry web-<id>) and \
-                 https://api.querit.ai is the built-in backend whenever no custom \
-                 backend below is enabled.",
+                "Querit and AnySearch are ready: paste the API key and turn one on. \
+                 Authorization is sent as Bearer automatically — do not type Bearer yourself. \
+                 Environment variables QUERIT_API_KEY / ANYSEARCH_API_KEY also work.",
+            ),
+            theme,
+            vendor_rows,
+        ))
+        .child(settings_card(
+            "web-custom",
+            "Custom backends",
+            Some(
+                "A Querit-compatible endpoint (POST /v1/search, POST /v1/contents) \
+                 or another AnySearch-compatible host.",
             ),
             theme,
             vec![
                 div()
-                    .when(backends_empty, |this| {
+                    .when(custom_empty, |this| {
                         this.child(
                             div()
                                 .text_xs()
                                 .opacity(0.5)
-                                .child("Using the built-in Querit backend"),
+                                .whitespace_normal()
+                                .child("No custom backends"),
                         )
                     })
-                    .children(backend_row_elements)
+                    .children(custom_rows)
                     .into_any_element(),
+                backend_form_element,
             ],
         ))
-        .child(settings_card(
-            "web-add",
-            "Add custom backend",
-            Some(
-                "A Querit-compatible endpoint (POST /v1/search, POST /v1/contents) \
-                 overrides the built-in default while enabled.",
-            ),
-            theme,
-            vec![backend_form_element],
-        ))
+        .into_any_element()
+}
+
+struct VendorBackend {
+    id: String,
+    kind: String,
+    endpoint: String,
+    enabled: bool,
+    keyed: bool,
+    index: usize,
+}
+
+fn vendor_backend_row(
+    backend: VendorBackend,
+    key_input: Entity<InputState>,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let VendorBackend {
+        id,
+        kind,
+        endpoint,
+        enabled,
+        keyed,
+        index,
+    } = backend;
+    let theme = cx.theme();
+    let title = match kind.as_str() {
+        "querit" => "Querit",
+        "anysearch" => "AnySearch",
+        other => other,
+    };
+    div()
+        .id(format!("vendor-backend-{id}"))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                        .child(title.to_owned()),
+                                )
+                                .child(Icon::new(IconName::KeyRound).small().text_color(
+                                    if keyed {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .opacity(0.6)
+                                .whitespace_normal()
+                                .child(endpoint),
+                        ),
+                )
+                .child(
+                    Switch::new(format!("backend-toggle-{id}"))
+                        .checked(enabled)
+                        .on_click(cx.listener(move |workspace, checked: &bool, _, cx| {
+                            workspace.apply_action(
+                                DesktopAction::SettingsBackendToggled(index, *checked),
+                                cx,
+                            );
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(28.))
+                        .child(Input::new(&key_input)),
+                )
+                .child(
+                    Button::new(format!("web-key-save-{id}"))
+                        .label("Save key")
+                        .small()
+                        .outline()
+                        .on_click({
+                            let id = id.clone();
+                            cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_save_web_key(&id, cx);
+                            })
+                        }),
+                ),
+        )
         .into_any_element()
 }
 
@@ -1684,10 +2104,10 @@ fn backend_row(
         .w_full()
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap_3()
         .p_2()
-        .rounded_md()
+        .rounded(px(3.))
         .border_1()
         .border_color(theme.border)
         .child(
@@ -1700,13 +2120,14 @@ fn backend_row(
                     div()
                         .text_sm()
                         .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .whitespace_normal()
                         .child(id.clone()),
                 )
                 .child(
                     div()
                         .text_xs()
                         .opacity(0.6)
-                        .overflow_hidden()
+                        .whitespace_normal()
                         .child(format!("{kind} \u{b7} {endpoint}")),
                 ),
         )
@@ -1798,7 +2219,7 @@ fn render_data_section(workspace: &mut Workspace, cx: &mut Context<Workspace>) -
 
 fn render_about_section(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
     let vm = workspace.vm();
-    let current = mycode_updates::current_version().to_owned();
+    let current = mycode_app::current_version().to_owned();
     let catalog_line = match vm.catalog_fetched_at {
         0 => "bundled snapshot".to_owned(),
         seconds => {
@@ -1985,7 +2406,7 @@ impl BackendForm {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
         let id = make("id, e.g. querit-main");
-        let kind = make("querit | custom");
+        let kind = make("querit | anysearch | custom");
         let endpoint = make("https://search.example.com");
         cx.new(|_| Self { id, kind, endpoint })
     }
