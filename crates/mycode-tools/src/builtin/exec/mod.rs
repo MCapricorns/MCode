@@ -39,7 +39,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
 
-use crate::builtin::fs_search::run_blocking_supervised;
+use crate::builtin::blocking::run_blocking_supervised;
 use crate::builtin::process::{
     CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, decode_captured_text,
 };

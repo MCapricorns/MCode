@@ -18,7 +18,7 @@ use super::{
     ChildOpen, FileIdentity, FileKind, FileMeta, MAX_DIR_WIDTH, OpenedChild, WRITE_CHUNK,
     check_cancel, map_not_found,
 };
-use crate::builtin::fs_search::validate_component_name;
+use crate::builtin::fs_search::{unix_device_identity, validate_component_name};
 use tokio_util::sync::CancellationToken;
 
 /// Creation mode for the never-written mode probe file. The kernel applies
@@ -82,18 +82,6 @@ fn open_named(
 fn stat_meta(file: &File) -> io::Result<FileMeta> {
     let stat = rfs::fstat(file.as_fd()).map_err(map_errno)?;
     meta_from_stat(&stat)
-}
-
-#[cfg(target_os = "macos")]
-fn device_identity(value: libc::dev_t) -> io::Result<u64> {
-    // Darwin dev_t is signed. Match MetadataExt::dev's bit-preserving cast
-    // rather than rejecting valid high-bit device identifiers.
-    Ok(value as u64)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn device_identity(value: libc::dev_t) -> io::Result<u64> {
-    checked_u64(value, "device id")
 }
 
 fn checked_u64<T>(value: T, field: &str) -> io::Result<u64>
@@ -172,7 +160,7 @@ fn meta_from_stat(stat: &rfs::Stat) -> io::Result<FileMeta> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative file size is invalid"))?;
     Ok(FileMeta {
         identity: FileIdentity {
-            device: device_identity(stat.st_dev)?,
+            device: unix_device_identity(stat.st_dev)?,
             inode: checked_u64(stat.st_ino, "inode number")?,
         },
         kind,
@@ -299,7 +287,8 @@ pub(super) fn open_child(parent: &File, name: &OsStr, how: ChildOpen) -> io::Res
         Err(err) => return Err(map_not_found(map_errno(err))),
     };
     let parent_stat = rfs::fstat(parent.as_fd()).map_err(map_errno)?;
-    if parent_stat.st_dev as u64 != named.identity.device {
+    let parent_device = unix_device_identity(parent_stat.st_dev)?;
+    if parent_device != named.identity.device {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "mount traversal is not permitted",
@@ -372,6 +361,10 @@ pub(super) fn ensure_directory(parent: &File, name: &OsStr) -> io::Result<Opened
 ///
 /// Zero or several matches fail closed so a case alias or same-directory
 /// hardlink pair cannot keep an unproven name.
+// NOTE: parallel implementation in fs_search (unix.rs
+// `unix_on_disk_component_name`); kept separate because the two kernels use
+// different platform APIs (rustix statat vs raw fdopendir/readdir) and
+// independent budgets.
 pub(super) fn unique_component_name(
     parent: &File,
     want: FileIdentity,
@@ -902,6 +895,9 @@ mod macos_compile {
     #[test]
     fn signed_device_identity_preserves_kernel_bits() {
         let device: libc::dev_t = -1;
-        assert_eq!(super::device_identity(device).unwrap(), device as u64);
+        assert_eq!(
+            crate::builtin::fs_search::unix_device_identity(device).unwrap(),
+            device as u64
+        );
     }
 }

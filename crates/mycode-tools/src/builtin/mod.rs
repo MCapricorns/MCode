@@ -3,16 +3,17 @@
 //! external `fd` or `rg` executables.
 
 pub mod ask;
+pub(crate) mod blocking;
 pub mod edit;
 pub mod exec;
 pub mod find;
 pub(crate) mod fs_io;
 pub(crate) mod fs_search;
+pub(crate) mod fs_walk;
 pub mod grep;
-#[cfg(windows)]
-mod powershell;
 pub(crate) mod process;
 pub mod read;
+pub(crate) mod search_report;
 pub mod shell;
 pub mod task;
 pub mod todo;
@@ -37,7 +38,7 @@ use crate::registry::ToolRegistry;
 use crate::tool::ToolDyn;
 
 /// All builtin tools as type-erased, registry-ready handles.
-pub fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
+pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
     vec![
         Arc::new(ReadTool),
         Arc::new(WriteTool),

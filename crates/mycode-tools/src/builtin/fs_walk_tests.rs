@@ -2,8 +2,8 @@
 use std::ffi::OsString;
 use tokio_util::sync::CancellationToken;
 
-use super::super::{Limits, PathOrderKey, WalkLimiter, open_directory_nofollow};
 use super::{ListedName, collect_listing, lossy_component, sort_listing};
+use crate::builtin::fs_search::{Limits, PathOrderKey, WalkLimiter, open_directory_nofollow};
 
 fn listed(name: OsString) -> ListedName {
     ListedName {

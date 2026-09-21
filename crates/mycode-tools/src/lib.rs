@@ -26,21 +26,16 @@ pub mod stream;
 pub mod tool;
 
 pub use builtin::fs_io::{
-    FileAccess, FileRead, FileRevision, FileSnapshot, FileWrite, PreparedFile, prepare_file,
-    prepare_file_async, read_file, read_file_async, read_file_snapshot, read_file_snapshot_async,
-    write_file,
+    FileAccess, FileRead, FileRevision, FileSnapshot, PreparedFile, prepare_file,
+    prepare_file_async, read_file, read_file_async, read_file_snapshot_async,
 };
 pub use builtin::fs_search::{
     PreparedSearch, SearchAccess, live_search_thread_handles, live_search_workers, prepare_search,
-    prepare_search_async, prepare_search_async_with_access, prepare_search_with_access,
-    run_search_worker_until_cancel,
+    prepare_search_async, prepare_search_async_with_access, run_search_worker_until_cancel,
 };
-pub use builtin::shell::{
-    DetectedShell, ShellKind, detect_default_shell, runtime_shell, set_runtime_shell,
-};
+pub use builtin::shell::{DetectedShell, ShellKind, detect_default_shell, set_runtime_shell};
 pub use builtin::{
-    EditTool, ExecTool, FindTool, GrepTool, ReadTool, ShellTool, WriteTool, builtin_tools,
-    register_builtins,
+    EditTool, ExecTool, FindTool, GrepTool, ReadTool, ShellTool, WriteTool, register_builtins,
 };
 pub use ctx::ToolCtx;
 pub use registry::ToolRegistry;

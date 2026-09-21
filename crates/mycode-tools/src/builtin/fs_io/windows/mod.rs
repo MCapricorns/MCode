@@ -10,12 +10,11 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::path::{Component, Path, PathBuf, Prefix};
+use std::os::windows::io::AsRawHandle;
+use std::path::Path;
 use std::ptr::{null, null_mut};
 
 use tokio_util::sync::CancellationToken;
-use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::FILE_DISPOSITION_DELETE;
 use windows_sys::Wdk::Storage::FileSystem::FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE;
 use windows_sys::Wdk::Storage::FileSystem::FILE_DISPOSITION_POSIX_SEMANTICS;
@@ -24,427 +23,49 @@ use windows_sys::Wdk::Storage::FileSystem::{
     FILE_DISPOSITION_INFORMATION_EX, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT,
     FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FileDispositionInformation,
     FileDispositionInformationEx, FileFullDirectoryInformation, FileRenameInformation,
-    NtCreateFile, NtOpenFile, NtQueryDirectoryFile, NtSetInformationFile,
+    NtQueryDirectoryFile, NtSetInformationFile,
 };
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_SUCCESS, HANDLE,
-    INVALID_HANDLE_VALUE, LocalFree, NTSTATUS, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError,
-    STATUS_NO_MORE_FILES, STATUS_SUCCESS, UNICODE_STRING,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_SUCCESS, INVALID_HANDLE_VALUE, LocalFree,
+    STATUS_NO_MORE_FILES, STATUS_SUCCESS,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
-    SE_FILE_OBJECT, SetSecurityInfo,
+    GetSecurityInfo, SE_FILE_OBJECT, SetSecurityInfo,
 };
 use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl,
-    GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_DESCRIPTOR, SECURITY_DESCRIPTOR_CONTROL,
-    TOKEN_QUERY, TOKEN_USER, TokenUser, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SE_DACL_PROTECTED, SECURITY_DESCRIPTOR_CONTROL, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_BASIC_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_INFO,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileBasicInfo, FileIdInfo,
-    FlushFileBuffers, GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING,
-    SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
+    DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ,
+    FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileBasicInfo,
+    FlushFileBuffers, OPEN_EXISTING, SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+mod nt;
+mod security;
+
+#[cfg(test)]
+#[path = "../windows_tests.rs"]
+mod tests;
+
+use nt::{
+    encode_component, enforce_same_volume, into_file, meta_from_file, nt_create, nt_open,
+    ntstatus_error, query_handle, win32_error, windows_extended_length_path,
+};
+use security::private_temp_descriptor;
 
 use super::{
     ChildOpen, FileIdentity, FileKind, FileMeta, MAX_DIR_WIDTH, OpenedChild, WRITE_CHUNK,
-    check_cancel, map_not_found,
+    check_cancel,
 };
-use crate::builtin::fs_search::{strip_verbatim_prefix, validate_component_name};
+use crate::builtin::fs_search::strip_verbatim_prefix;
 
 const DIR_LIST_WORDS: usize = 8192;
-
-fn ntstatus_error(status: NTSTATUS) -> io::Error {
-    // `Nt*` calls return NTSTATUS and do not define `GetLastError`.
-    // SAFETY: converting that returned status is the documented use of
-    // `RtlNtStatusToDosError` and has no pointer preconditions.
-    let code = unsafe { RtlNtStatusToDosError(status) };
-    let code = i32::try_from(code).unwrap_or(i32::MAX);
-    io::Error::from_raw_os_error(code)
-}
-
-fn win32_error(code: u32) -> io::Error {
-    let code = i32::try_from(code).unwrap_or(i32::MAX);
-    io::Error::from_raw_os_error(code)
-}
-
-fn encode_component(name: &OsStr) -> io::Result<Vec<u16>> {
-    validate_component_name(name)?;
-    let wide: Vec<u16> = name.encode_wide().collect();
-    if wide.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "path component contains NUL",
-        ));
-    }
-    Ok(wide)
-}
-
-fn into_file(handle: HANDLE) -> File {
-    // SAFETY: `handle` is a fresh successful NT handle and no other owner
-    // will close it after this transfer.
-    unsafe { File::from_raw_handle(handle) }
-}
-
-fn windows_extended_length_path(path: &Path) -> PathBuf {
-    if !path.is_absolute() {
-        return path.to_path_buf();
-    }
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path.to_path_buf();
-    };
-    match prefix.kind() {
-        Prefix::Disk(_) => {
-            let mut extended = OsString::from(r"\\?\");
-            extended.push(path.as_os_str());
-            PathBuf::from(extended)
-        }
-        Prefix::UNC(server, share) => {
-            let mut authority = OsString::from(r"\\?\UNC\");
-            authority.push(server);
-            authority.push(r"\");
-            authority.push(share);
-            let mut extended = PathBuf::from(authority);
-            for component in components {
-                if !matches!(component, Component::RootDir) {
-                    extended.push(component.as_os_str());
-                }
-            }
-            extended
-        }
-        _ => path.to_path_buf(),
-    }
-}
-
-struct HandleInfo {
-    identity: FileIdentity,
-    kind: FileKind,
-    reparse: bool,
-    nlink: u32,
-    attributes: u32,
-    size: u64,
-    mtime: i64,
-}
-
-fn query_handle(file: &File) -> io::Result<HandleInfo> {
-    let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `file` is live; `information` is writable documented storage.
-    let success = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
-    if success == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let kind = if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        FileKind::Directory
-    } else {
-        FileKind::File
-    };
-    let mut id_info = FILE_ID_INFO::default();
-    let id_size = u32::try_from(size_of::<FILE_ID_INFO>()).expect("FILE_ID_INFO fits in u32");
-    // SAFETY: `id_info` is writable `FILE_ID_INFO` storage. ReFS uniqueness
-    // requires the 128-bit `FileId`.
-    let id_ok = unsafe {
-        GetFileInformationByHandleEx(
-            file.as_raw_handle(),
-            FileIdInfo,
-            (&raw mut id_info).cast(),
-            id_size,
-        )
-    };
-    if id_ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let write = information.ftLastWriteTime;
-    let mtime = (i64::from(write.dwHighDateTime) << 32) | i64::from(write.dwLowDateTime);
-    Ok(HandleInfo {
-        identity: FileIdentity {
-            volume: id_info.VolumeSerialNumber,
-            file_id: id_info.FileId.Identifier,
-        },
-        kind,
-        reparse: information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
-        nlink: information.nNumberOfLinks,
-        attributes: information.dwFileAttributes,
-        size: (u64::from(information.nFileSizeHigh) << 32) | u64::from(information.nFileSizeLow),
-        mtime,
-    })
-}
-
-fn meta_from_file(file: &File, reject_reparse: bool) -> io::Result<FileMeta> {
-    let info = query_handle(file)?;
-    if reject_reparse && info.reparse {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "reparse-point traversal is not permitted",
-        ));
-    }
-    Ok(FileMeta {
-        identity: info.identity,
-        kind: info.kind,
-        size: info.size,
-        mtime_secs: info.mtime,
-        mtime_nsecs: 0,
-        nlink: u64::from(info.nlink),
-        unix_mode: 0,
-        unix_uid: 0,
-        unix_gid: 0,
-        windows_attributes: info.attributes,
-    })
-}
-
-fn enforce_same_volume(parent: &File, child: &File) -> io::Result<()> {
-    let parent_info = query_handle(parent)?;
-    if parent_info.kind != FileKind::Directory {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "walk parent is no longer a directory",
-        ));
-    }
-    let child_info = query_handle(child)?;
-    if parent_info.identity.volume != child_info.identity.volume {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "mount traversal is not permitted",
-        ));
-    }
-    Ok(())
-}
-
-fn nt_open(
-    parent: &File,
-    name: &OsStr,
-    desired_access: u32,
-    options: u32,
-    case_insensitive: bool,
-) -> io::Result<File> {
-    let mut wide = encode_component(name)?;
-    let byte_len = wide
-        .len()
-        .checked_mul(size_of::<u16>())
-        .and_then(|length| u16::try_from(length).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path component is too long"))?;
-    let object_name = UNICODE_STRING {
-        Length: byte_len,
-        MaximumLength: byte_len,
-        Buffer: wide.as_mut_ptr(),
-    };
-    let object_attributes = OBJECT_ATTRIBUTES {
-        Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>())
-            .expect("OBJECT_ATTRIBUTES size must fit in u32"),
-        RootDirectory: parent.as_raw_handle(),
-        ObjectName: &object_name,
-        Attributes: if case_insensitive {
-            OBJ_CASE_INSENSITIVE
-        } else {
-            0
-        },
-        SecurityDescriptor: null(),
-        SecurityQualityOfService: null(),
-    };
-    let mut handle = INVALID_HANDLE_VALUE;
-    let mut io_status = IO_STATUS_BLOCK::default();
-    // SAFETY: `parent` stays live; `object_name` references `wide` for this
-    // call; output pointers reference initialized writable storage.
-    let status = unsafe {
-        NtOpenFile(
-            &mut handle,
-            desired_access,
-            &object_attributes,
-            &mut io_status,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            options,
-        )
-    };
-    if status < 0 {
-        return Err(map_not_found(ntstatus_error(status)));
-    }
-    Ok(into_file(handle))
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "NT create needs parent, name, access, attributes, disposition, options, share, and optional SD together"
-)]
-fn nt_create(
-    parent: &File,
-    name: &OsStr,
-    desired_access: u32,
-    attributes: u32,
-    disposition: u32,
-    options: u32,
-    share_access: u32,
-    security_descriptor: *const SECURITY_DESCRIPTOR,
-) -> io::Result<File> {
-    let mut wide = encode_component(name)?;
-    let byte_len = wide
-        .len()
-        .checked_mul(size_of::<u16>())
-        .and_then(|length| u16::try_from(length).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path component is too long"))?;
-    let object_name = UNICODE_STRING {
-        Length: byte_len,
-        MaximumLength: byte_len,
-        Buffer: wide.as_mut_ptr(),
-    };
-    let object_attributes = OBJECT_ATTRIBUTES {
-        Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>())
-            .expect("OBJECT_ATTRIBUTES size must fit in u32"),
-        RootDirectory: parent.as_raw_handle(),
-        ObjectName: &object_name,
-        Attributes: 0,
-        SecurityDescriptor: security_descriptor,
-        SecurityQualityOfService: null(),
-    };
-    let mut handle = INVALID_HANDLE_VALUE;
-    let mut io_status = IO_STATUS_BLOCK::default();
-    // SAFETY: parent handle, name buffer, optional security descriptor, and
-    // output pointers are live for the call. NTSTATUS is the return value.
-    let status = unsafe {
-        NtCreateFile(
-            &mut handle,
-            desired_access,
-            &object_attributes,
-            &mut io_status,
-            null(),
-            attributes,
-            share_access,
-            disposition,
-            options,
-            null(),
-            0,
-        )
-    };
-    if status < 0 {
-        return Err(map_not_found(ntstatus_error(status)));
-    }
-    Ok(into_file(handle))
-}
-
-/// Owner-only protected DACL used for payload temps.
-///
-/// The descriptor is allocated by
-/// `ConvertStringSecurityDescriptorToSecurityDescriptorW` and freed with
-/// `LocalFree`. It must stay alive for the `NtCreateFile` that consumes it.
-struct PrivateSd(PSECURITY_DESCRIPTOR);
-
-impl PrivateSd {
-    fn as_ptr(&self) -> *const SECURITY_DESCRIPTOR {
-        self.0.cast()
-    }
-}
-
-impl Drop for PrivateSd {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: `ConvertStringSecurityDescriptorToSecurityDescriptorW`
-            // allocated this descriptor.
-            let _ = unsafe { LocalFree(self.0.cast()) };
-        }
-    }
-}
-
-/// Builds a protected DACL granting full access only to the current user
-/// and SYSTEM, so a permissive parent cannot make the payload temp
-/// world-readable.
-fn private_temp_descriptor() -> io::Result<PrivateSd> {
-    let mut token = INVALID_HANDLE_VALUE;
-    // SAFETY: `GetCurrentProcess` is a pseudo-handle that is not closed;
-    // `token` is written only on success and is then an owned handle.
-    let ok = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    struct TokenGuard(HANDLE);
-    impl Drop for TokenGuard {
-        fn drop(&mut self) {
-            if self.0 != INVALID_HANDLE_VALUE && !self.0.is_null() {
-                // SAFETY: `OpenProcessToken` returned this owned handle.
-                let _ = unsafe { CloseHandle(self.0) };
-            }
-        }
-    }
-    let token = TokenGuard(token);
-    let mut needed = 0u32;
-    // SAFETY: size probe; `needed` is written even when the call fails with
-    // `ERROR_INSUFFICIENT_BUFFER`.
-    let _ = unsafe { GetTokenInformation(token.0, TokenUser, null_mut(), 0, &mut needed) };
-    if needed == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut buffer = vec![0u8; needed as usize];
-    // SAFETY: `buffer` is writable storage of `needed` bytes.
-    let ok = unsafe {
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            buffer.as_mut_ptr().cast(),
-            needed,
-            &mut needed,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if (needed as usize) < size_of::<TOKEN_USER>() || (needed as usize) > buffer.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "token user information is truncated",
-        ));
-    }
-    // SAFETY: `GetTokenInformation` filled a `TOKEN_USER` at `buffer`.
-    let user = unsafe { buffer.as_ptr().cast::<TOKEN_USER>().read_unaligned() };
-    let mut sid_text: windows_sys::core::PWSTR = null_mut();
-    // SAFETY: `user.User.Sid` aliases `buffer`; `sid_text` is written on
-    // success and owned by `LocalFree`.
-    let ok = unsafe { ConvertSidToStringSidW(user.User.Sid, &mut sid_text) };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    struct SidText(*mut u16);
-    impl Drop for SidText {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: `ConvertSidToStringSidW` allocated this string.
-                let _ = unsafe { LocalFree(self.0.cast()) };
-            }
-        }
-    }
-    let sid_text = SidText(sid_text);
-    let mut sid_len = 0usize;
-    // SAFETY: `sid_text` is a live NUL-terminated UTF-16 allocation.
-    unsafe {
-        while *sid_text.0.add(sid_len) != 0 {
-            sid_len += 1;
-        }
-    }
-    let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(sid_text.0, sid_len) });
-    // Protected DACL: current user and SYSTEM only. `P` blocks parent
-    // inheritance so a shared directory cannot reopen the payload.
-    let sddl = format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)");
-    let mut wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-    // SAFETY: `wide` is a live NUL-terminated SDDL string; on success `sd`
-    // is an allocation that `PrivateSd` frees.
-    let ok = unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            wide.as_mut_ptr(),
-            1, // SDDL_REVISION_1
-            &mut sd,
-            null_mut(),
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(PrivateSd(sd))
-}
-
 /// Opens the host-selected session cwd. The cwd path itself may follow.
 ///
 /// # Errors
@@ -598,6 +219,10 @@ pub(super) fn ensure_directory(parent: &File, name: &OsStr) -> io::Result<Opened
 ///
 /// Zero or several matches fail closed so a case alias or same-directory
 /// hardlink pair cannot keep an unproven name.
+// NOTE: parallel implementation in fs_search (windows.rs
+// `on_disk_component_name` via `final_path_by_handle`); kept separate because
+// fs_io proves the spelling through its own NT listing while fs_search reads it
+// from the opened handle's final path.
 pub(super) fn unique_component_name(
     parent: &File,
     want: FileIdentity,
@@ -1321,130 +946,4 @@ pub(super) fn sync_file(file: &File) -> io::Result<()> {
 
 pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
     sync_file(dir)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn injected_failure(stage: &str) -> io::Error {
-        io::Error::other(format!("injected {stage} failure"))
-    }
-
-    fn assert_name_absent(dir: &tempfile::TempDir, name: &str) {
-        assert!(
-            !dir.path().join(name).exists(),
-            "rejected temp name must be deleted"
-        );
-    }
-
-    #[test]
-    fn temp_volume_failure_deletes_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-volume.tmp");
-        let error = create_temp_with(
-            &parent,
-            name,
-            |_| Err(injected_failure("volume")),
-            duplicate_delete_handle,
-        )
-        .err()
-        .expect("injected volume failure must be returned");
-        assert!(error.to_string().contains("injected volume failure"));
-        assert_name_absent(&dir, "mycode-write-volume.tmp");
-    }
-
-    #[test]
-    fn temp_stat_failure_deletes_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-stat.tmp");
-        let error = create_temp_with(
-            &parent,
-            name,
-            |_| Err(injected_failure("stat")),
-            duplicate_delete_handle,
-        )
-        .err()
-        .expect("injected stat failure must be returned");
-        assert!(error.to_string().contains("injected stat failure"));
-        assert_name_absent(&dir, "mycode-write-stat.tmp");
-    }
-
-    #[test]
-    fn temp_type_failure_deletes_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-type.tmp");
-        let error = create_temp_with(
-            &parent,
-            name,
-            |file| {
-                let mut meta = meta_from_file(file, true)?;
-                meta.kind = FileKind::Directory;
-                Ok(meta)
-            },
-            duplicate_delete_handle,
-        )
-        .err()
-        .expect("a non-file temp must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("temporary file is not a regular file"),
-            "{error}"
-        );
-        assert_name_absent(&dir, "mycode-write-type.tmp");
-    }
-
-    #[test]
-    fn temp_duplicate_failure_deletes_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-dup.tmp");
-        let error = create_temp_with(
-            &parent,
-            name,
-            |file| meta_from_file(file, true),
-            |_| Err(injected_failure("duplicate")),
-        )
-        .err()
-        .expect("injected duplicate failure must be returned");
-        assert!(error.to_string().contains("injected duplicate failure"));
-        // Cleanup must run on the creation handle (never a by-name reopen)
-        // and must actually remove the temp.
-        assert_name_absent(&dir, "mycode-write-dup.tmp");
-    }
-
-    #[test]
-    fn temp_stat_failure_reports_cleanup_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-stat-cleanup.tmp");
-        let fault = crate::builtin::fs_io::install_delete_fault_under(dir.path())
-            .expect("delete fault fixture must install");
-        let error = create_temp_with(
-            &parent,
-            name,
-            |_| Err(injected_failure("stat")),
-            duplicate_delete_handle,
-        )
-        .err()
-        .expect("injected stat failure must be returned");
-        assert!(
-            error.to_string().contains("injected stat failure"),
-            "{error}"
-        );
-        assert!(
-            error.to_string().contains("injected mycode delete failure"),
-            "cleanup failure must be folded into the returned error: {error}"
-        );
-        assert!(
-            dir.path().join("mycode-write-stat-cleanup.tmp").exists(),
-            "faulted cleanup must leave documented residue"
-        );
-        drop(fault);
-        std::fs::remove_file(dir.path().join("mycode-write-stat-cleanup.tmp")).ok();
-    }
 }

@@ -15,9 +15,8 @@ use std::time::{Duration, Instant};
 
 #[path = "shell_detect.rs"]
 mod detect;
-pub use detect::{
-    DetectedShell, ShellKind, detect_default_shell, runtime_shell, set_runtime_shell,
-};
+pub(crate) use detect::runtime_shell;
+pub use detect::{DetectedShell, ShellKind, detect_default_shell, set_runtime_shell};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -29,12 +28,12 @@ use base64::Engine as _;
 #[cfg(any(windows, test))]
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
+use crate::builtin::blocking::run_blocking_supervised;
 use crate::builtin::exec::{
     ExecutionMetadata, PreparedIdentity, PreparedInvocation, ResolveError, RunOutcome,
     apply_execution_details, prepare_from_snapshot, prepared_identity, run_prepared,
     snapshot_child_environment,
 };
-use crate::builtin::fs_search::run_blocking_supervised;
 use crate::builtin::process::{
     CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, decode_captured_text,
 };

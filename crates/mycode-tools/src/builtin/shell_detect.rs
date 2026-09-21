@@ -101,7 +101,7 @@ pub fn set_runtime_shell(shell: Option<DetectedShell>) {
 
 /// Current process-wide shell preference, if desktop or a test set one.
 #[must_use]
-pub fn runtime_shell() -> Option<DetectedShell> {
+pub(crate) fn runtime_shell() -> Option<DetectedShell> {
     RUNTIME_SHELL
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -47,10 +47,6 @@ libc.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
-fs2.workspace = true
-reqwest.workspace = true
-tempfile.workspace = true
-zip.workspace = true
 windows-sys = { workspace = true, features = [
     "Wdk_Foundation",
     "Win32_Globalization",
