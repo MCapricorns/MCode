@@ -20,11 +20,21 @@ pub use store::{
 pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
 /// Wire protocol: OpenAI Chat Completions.
 pub const KIND_OPENAI_COMPLETIONS: &str = "openai-completions";
+/// Wire protocol: OpenAI Responses.
+pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
 
 /// Auth: a pasted API key stored in the secret vault (default).
 pub const AUTH_API_KEY: &str = "";
-/// Auth: an OAuth device-code sign-in (GitHub Copilot).
+/// Auth: an OAuth device-code sign-in (GitHub Copilot / Codex).
 pub const AUTH_DEVICE_CODE: &str = "device-code";
+/// Auth: subscription OAuth plus an optional pasted API key (xAI).
+pub const AUTH_OAUTH: &str = "oauth";
+
+/// Whether the settings preset should offer a device-flow sign-in button.
+#[must_use]
+pub fn uses_oauth_login(auth: &str) -> bool {
+    auth == AUTH_DEVICE_CODE || auth == AUTH_OAUTH
+}
 
 /// Upper bound for provider entries in one catalog.
 pub const MAX_PROVIDERS: usize = 1024;
@@ -194,7 +204,7 @@ pub(crate) fn normalize(mut providers: Vec<CatalogProvider>) -> CatalogDocument 
             && clean_text(&provider.base_url).is_some()
             && matches!(
                 provider.kind.as_str(),
-                KIND_ANTHROPIC_MESSAGES | KIND_OPENAI_COMPLETIONS
+                KIND_ANTHROPIC_MESSAGES | KIND_OPENAI_COMPLETIONS | KIND_OPENAI_RESPONSES
             )
             && !provider.models.is_empty()
     });
@@ -222,8 +232,51 @@ pub(crate) fn normalize(mut providers: Vec<CatalogProvider>) -> CatalogDocument 
 /// rather than a panic, and the unit tests keep that failure impossible.
 pub fn parse_snapshot(bytes: &[u8]) -> CatalogDocument {
     serde_json::from_slice::<CatalogDocument>(bytes)
-        .map(|document| normalize(document.providers))
+        .map(|document| attach_subscription_presets(normalize(document.providers)))
         .unwrap_or_default()
+}
+
+pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
+    if let Some(xai) = document
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == "xai")
+    {
+        xai.auth = AUTH_OAUTH.to_owned();
+    }
+    if document.provider("openai-codex").is_none() {
+        document.providers.push(openai_codex_preset());
+        document.providers.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    document
+}
+
+fn openai_codex_preset() -> CatalogProvider {
+    CatalogProvider {
+        id: "openai-codex".to_owned(),
+        name: "OpenAI Codex".to_owned(),
+        kind: KIND_OPENAI_RESPONSES.to_owned(),
+        base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
+        doc: Some("https://developers.openai.com/codex".to_owned()),
+        auth: AUTH_DEVICE_CODE.to_owned(),
+        models: [
+            ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
+            ("gpt-5.5", "GPT-5.5"),
+            ("gpt-5.6-luna", "GPT-5.6 Luna"),
+            ("gpt-5.6-sol", "GPT-5.6 Sol"),
+            ("gpt-5.6-terra", "GPT-5.6 Terra"),
+            ("gpt-6-astra", "GPT-6 Astra"),
+        ]
+        .into_iter()
+        .map(|(id, name)| CatalogModel {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            reasoning: true,
+            tool_call: true,
+            ..CatalogModel::default()
+        })
+        .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -243,16 +296,29 @@ mod tests {
             assert!(provider.base_url.starts_with("https://"));
             assert!(matches!(
                 provider.kind.as_str(),
-                KIND_ANTHROPIC_MESSAGES | KIND_OPENAI_COMPLETIONS
+                KIND_ANTHROPIC_MESSAGES | KIND_OPENAI_COMPLETIONS | KIND_OPENAI_RESPONSES
             ));
             assert!(!provider.models.is_empty());
         }
-        for wanted in ["anthropic", "openai", "openrouter", "deepseek", "minimax"] {
+        for wanted in [
+            "anthropic",
+            "openai",
+            "openrouter",
+            "deepseek",
+            "minimax",
+            "xai",
+        ] {
             assert!(
                 catalog.provider(wanted).is_some(),
                 "baseline keeps {wanted}"
             );
         }
+        let xai = catalog.provider("xai").expect("xai");
+        assert_eq!(xai.auth, AUTH_OAUTH);
+        let codex = catalog.provider("openai-codex").expect("openai-codex");
+        assert_eq!(codex.auth, AUTH_DEVICE_CODE);
+        assert_eq!(codex.kind, KIND_OPENAI_RESPONSES);
+        assert!(codex.models.iter().any(|model| model.id == "gpt-5.5"));
         let minimax = catalog.provider("minimax").expect("minimax");
         let m3 = minimax
             .models

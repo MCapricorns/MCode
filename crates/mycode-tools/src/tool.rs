@@ -289,11 +289,74 @@ impl<T: Tool> ToolDyn for T {
         ctx: &ToolCtx,
         out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
+        let args = normalize_tool_args(args);
         validate_args::<T::Args>(&args)?;
         let typed =
             serde_json::from_value(args).map_err(|err| ToolError::InvalidArgs(err.to_string()))?;
         self.execute(typed, ctx, out).await
     }
+}
+
+/// Accepts camelCase and a few common aliases so model-emitted tool
+/// arguments match the snake_case schemas without failing validation.
+fn normalize_tool_args(args: Value) -> Value {
+    let mut args = fold_camel_keys(args);
+    let Value::Object(map) = &mut args else {
+        return args;
+    };
+    alias_key(map, "timeout", "timeout_secs");
+    alias_key(map, "cmd", "command");
+    if !map.contains_key("program")
+        && map.contains_key("args")
+        && let Some(command) = map.get("command").cloned()
+    {
+        map.insert("program".to_owned(), command);
+    }
+    args
+}
+
+fn alias_key(map: &mut serde_json::Map<String, Value>, from: &str, to: &str) {
+    if map.contains_key(to) {
+        return;
+    }
+    if let Some(value) = map.remove(from) {
+        map.insert(to.to_owned(), value);
+    }
+}
+
+fn fold_camel_keys(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, child) in map {
+                let snake = camel_to_snake(&key);
+                let folded = fold_camel_keys(child);
+                if !out.contains_key(&snake) {
+                    out.insert(snake, folded);
+                } else if snake != key {
+                    out.entry(key).or_insert(folded);
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(fold_camel_keys).collect()),
+        other => other,
+    }
+}
+
+fn camel_to_snake(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (index, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -382,6 +445,18 @@ mod tests {
             .expect_err("non-string `text` must be rejected");
         assert!(matches!(err, ToolError::InvalidArgs(_)));
         assert!(err.to_string().contains("type"), "{err}");
+    }
+
+    #[test]
+    fn camel_keys_and_timeout_alias_fold() {
+        let folded = normalize_tool_args(json!({
+            "timeoutSecs": 3,
+            "blockedBy": ["a"],
+            "cmd": "echo"
+        }));
+        assert_eq!(folded["timeout_secs"], 3);
+        assert_eq!(folded["blocked_by"], json!(["a"]));
+        assert_eq!(folded["command"], "echo");
     }
 
     #[test]

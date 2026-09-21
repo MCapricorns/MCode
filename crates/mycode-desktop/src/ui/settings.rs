@@ -645,9 +645,11 @@ fn render_general_section(
     } else {
         format!("{shell_kind} · {shell_program} ({shell_source})")
     };
-    let shell_kind_open = workspace.vm().subagent_menu.as_ref().is_some_and(|(role, field)| {
-        role == "shell" && field == "kind"
-    });
+    let shell_kind_open = workspace
+        .vm()
+        .subagent_menu
+        .as_ref()
+        .is_some_and(|(role, field)| role == "shell" && field == "kind");
     let theme = cx.theme();
     div()
         .id("general-section")
@@ -704,7 +706,12 @@ fn render_general_section(
                     "Kind",
                     Some("Used to build the launch line"),
                     &shell_kind,
-                    &["pwsh".to_owned(), "powershell".to_owned(), "cmd".to_owned(), "bash".to_owned()],
+                    &[
+                        "pwsh".to_owned(),
+                        "powershell".to_owned(),
+                        "cmd".to_owned(),
+                        "bash".to_owned(),
+                    ],
                     shell_kind_open,
                     cx,
                 ),
@@ -1218,10 +1225,9 @@ fn render_preset_form(
                 .flex_col()
                 .gap_1()
                 .child(
-                    div()
-                        .text_xs()
-                        .opacity(0.6)
-                        .child("Models — all are selected by default; uncheck what you do not need"),
+                    div().text_xs().opacity(0.6).child(
+                        "Models — all are selected by default; uncheck what you do not need",
+                    ),
                 )
                 .child(
                     Button::new("preset-model-chip")
@@ -1240,9 +1246,7 @@ fn render_preset_form(
                     let weak = cx.weak_entity();
                     let list_models = models.clone();
                     let list_checked = checked.clone();
-                    let list_height = px(
-                        (list_models.len().clamp(1, 8) as f32) * 28. + 2.,
-                    );
+                    let list_height = px((list_models.len().clamp(1, 8) as f32) * 28. + 2.);
                     this.child(
                         div()
                             .id("preset-model-list")
@@ -1253,146 +1257,150 @@ fn render_preset_form(
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.background)
-                            .child(gpui_kit::uniform_list(
-                                "preset-model-rows",
-                                list_models.len(),
-                                move |range, _window, cx| {
-                                    let theme = cx.theme().clone();
-                                    range
-                                        .map(|index| {
-                                            let model = &list_models[index];
-                                            preset_model_row(
-                                                model,
-                                                list_checked.contains(model),
-                                                &weak,
-                                                &theme,
-                                            )
-                                        })
-                                        .collect()
-                                },
-                            )
-                            .h_full()),
+                            .child(
+                                gpui_kit::uniform_list(
+                                    "preset-model-rows",
+                                    list_models.len(),
+                                    move |range, _window, cx| {
+                                        let theme = cx.theme().clone();
+                                        range
+                                            .map(|index| {
+                                                let model = &list_models[index];
+                                                preset_model_row(
+                                                    model,
+                                                    list_checked.contains(model),
+                                                    &weak,
+                                                    &theme,
+                                                )
+                                            })
+                                            .collect()
+                                    },
+                                )
+                                .h_full(),
+                            ),
                     )
                 }),
         )
-        .when(preset.auth == mycode_providers::catalog::AUTH_DEVICE_CODE, |this| {
-            // OAuth sign-in replaces the pasted key for this provider.
-            let theme = cx.theme();
-            let sign_in = workspace.vm().copilot_sign_in.clone();
-            let error = workspace.vm().copilot_error.clone();
-            this.child(
-                div()
-                    .id("preset-sign-in")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .when_some(error, |this, message| {
-                        this.child(
+        .when(
+            mycode_providers::catalog::uses_oauth_login(&preset.auth),
+            |this| {
+                let theme = cx.theme();
+                let sign_in = workspace.vm().copilot_sign_in.clone();
+                let error = workspace.vm().copilot_error.clone();
+                let sign_label = match preset.id.as_str() {
+                    "xai" => "Sign in with SuperGrok / X",
+                    "openai-codex" => "Sign in with ChatGPT",
+                    _ => "Sign in with GitHub",
+                };
+                this.child(
+                    div()
+                        .id("preset-sign-in")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when_some(error, |this, message| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .p_2()
+                                    .rounded_md()
+                                    .bg(theme.danger.opacity(0.12))
+                                    .text_color(theme.danger)
+                                    .child(message),
+                            )
+                        })
+                        .when_some(sign_in, |this, sign_in| {
+                            this.child(
+                                div()
+                                    .id("preset-sign-in-code")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .p_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(skin::glass_border(theme))
+                                    .bg(skin::glass(theme))
+                                    .child(div().text_xs().opacity(0.7).child(format!(
+                                        "Open {} and enter this code:",
+                                        sign_in.verification_uri
+                                    )))
+                                    .child(
+                                        div()
+                                            .text_xl()
+                                            .font_family(theme.mono_font_family.clone())
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                            .child(sign_in.user_code),
+                                    ),
+                            )
+                        })
+                        .when(workspace.vm().copilot_sign_in.is_none(), |this| {
+                            this.child(
+                                Button::new("preset-sign-in-start")
+                                    .label(sign_label)
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(|workspace, _, _, cx| {
+                                        workspace.on_start_oauth_sign_in(cx);
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new("preset-cancel-oauth")
+                                .label("Close")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_close_preset(cx);
+                                })),
+                        ),
+                )
+            },
+        )
+        .when(
+            preset.auth != mycode_providers::catalog::AUTH_DEVICE_CODE,
+            |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
                             div()
                                 .text_xs()
-                                .p_2()
-                                .rounded_md()
-                                .bg(theme.danger.opacity(0.12))
-                                .text_color(theme.danger)
-                                .child(message),
+                                .opacity(0.6)
+                                .child("API key (stored in the secret vault)"),
                         )
-                    })
-                    .when_some(sign_in, |this, sign_in| {
-                        this.child(
-                            div()
-                                .id("preset-sign-in-code")
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .p_2()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(skin::glass_border(theme))
-                                .bg(skin::glass(theme))
-                                .child(
-                                    div().text_xs().opacity(0.7).child(
-                                        "Your browser opened github.com/login/device — enter this code:",
-                                    ),
-                                )
-                                .child(
-                                    div()
-                                        .text_xl()
-                                        .font_family(theme.mono_font_family.clone())
-                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                        .child(sign_in.user_code),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .opacity(0.5)
-                                        .child(format!("waiting at {}", sign_in.verification_uri)),
-                                ),
-                        )
-                    })
-                    .when(workspace.vm().copilot_sign_in.is_none(), |this| {
-                        this.child(
-                            Button::new("preset-sign-in-start")
-                                .icon(IconName::Github)
-                                .label("Sign in with GitHub")
+                        .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(
+                            Button::new("preset-confirm")
+                                .icon(IconName::Check)
+                                .label("Add provider")
                                 .small()
                                 .primary()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_start_copilot_sign_in(cx);
+                                .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    let provider_id = provider_id_owned.clone();
+                                    workspace.on_add_preset(&provider_id, cx);
                                 })),
                         )
-                    })
-                    .child(
-                        Button::new("preset-cancel-oauth")
-                            .label("Close")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|workspace, _, _, cx| {
-                                workspace.on_close_preset(cx);
-                            })),
-                    ),
-            )
-        })
-        .when(preset.auth != mycode_providers::catalog::AUTH_DEVICE_CODE, |this| {
-            this.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .opacity(0.6)
-                            .child("API key (stored in the secret vault)"),
-                    )
-                    .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .child(
-                        Button::new("preset-confirm")
-                            .icon(IconName::Check)
-                            .label("Add provider")
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(move |workspace, _, _, cx| {
-                                let provider_id = provider_id_owned.clone();
-                                workspace.on_add_preset(&provider_id, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("preset-cancel")
-                            .label("Cancel")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|workspace, _, _, cx| {
-                                workspace.on_close_preset(cx);
-                            })),
-                    ),
-            )
-        })
+                        .child(
+                            Button::new("preset-cancel")
+                                .label("Cancel")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_close_preset(cx);
+                                })),
+                        ),
+                )
+            },
+        )
         .into_any_element()
 }
 
@@ -2088,6 +2096,7 @@ fn agent_role_card(
         .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn agent_choice_dropdown(
     role: &str,
     field: &str,
@@ -2170,8 +2179,8 @@ fn agent_choice_dropdown(
                             .text_sm()
                             .cursor_pointer()
                             .hover(|this| this.bg(theme.secondary))
-                            .on_click(cx.listener(move |workspace, _, _, cx| {
-                                match field.as_str() {
+                            .on_click(cx.listener(
+                                move |workspace, _, _, cx| match field.as_str() {
                                     "kind" if role == "shell" => {
                                         workspace.on_set_shell_kind(&pick, cx);
                                         workspace.on_toggle_subagent_menu(&role, &field, false, cx);
@@ -2199,8 +2208,8 @@ fn agent_choice_dropdown(
                                             cx,
                                         );
                                     }
-                                }
-                            }))
+                                },
+                            ))
                             .child(option)
                             .when(selected, |this| {
                                 this.child(

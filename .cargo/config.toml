@@ -1,0 +1,7 @@
+# Workspace test shortcuts: `cargo t-agent`, `cargo t-core`, `cargo t-tools`.
+[alias]
+t-agent = "test -p mycode-agent"
+t-core = "test -p mycode-core"
+t-tools = "test -p mycode-tools"
+t-app = "test -p mycode-app"
+t-desktop = "test -p mycode-desktop"

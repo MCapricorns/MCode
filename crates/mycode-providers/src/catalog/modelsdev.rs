@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use super::{
     AUTH_DEVICE_CODE, CatalogDocument, CatalogModel, CatalogProvider, KIND_ANTHROPIC_MESSAGES,
-    KIND_OPENAI_COMPLETIONS, clean_text, normalize, valid_provider_id,
+    KIND_OPENAI_COMPLETIONS, KIND_OPENAI_RESPONSES, clean_text, normalize, valid_provider_id,
 };
 
 /// Cloud source of the provider catalog.
@@ -28,6 +28,10 @@ fn endpoint_fix(provider_id: &str) -> Option<(&'static str, &'static str)> {
         "cerebras" => Some((KIND_OPENAI_COMPLETIONS, "https://api.cerebras.ai/v1")),
         "perplexity" => Some((KIND_OPENAI_COMPLETIONS, "https://api.perplexity.ai")),
         "github-copilot" => Some((KIND_OPENAI_COMPLETIONS, "https://api.githubcopilot.com")),
+        "openai-codex" => Some((
+            KIND_OPENAI_RESPONSES,
+            "https://chatgpt.com/backend-api/codex",
+        )),
         _ => None,
     }
 }
@@ -35,10 +39,10 @@ fn endpoint_fix(provider_id: &str) -> Option<(&'static str, &'static str)> {
 /// Providers that authenticate with an OAuth device flow instead of a pasted
 /// API key; the settings UI renders a sign-in button for these.
 fn device_code_auth(provider_id: &str) -> &'static str {
-    if provider_id == "github-copilot" {
-        AUTH_DEVICE_CODE
-    } else {
-        ""
+    match provider_id {
+        "github-copilot" | "openai-codex" => AUTH_DEVICE_CODE,
+        "xai" => super::AUTH_OAUTH,
+        _ => "",
     }
 }
 
@@ -172,7 +176,7 @@ pub fn parse_models_dev(bytes: &[u8]) -> CatalogDocument {
             models,
         });
     }
-    normalize(providers)
+    super::attach_subscription_presets(normalize(providers))
 }
 
 fn reasoning_options(model: &ModelsDevModel) -> (bool, Vec<String>) {
@@ -238,7 +242,7 @@ mod tests {
             .iter()
             .map(|provider| provider.id.as_str())
             .collect();
-        assert_eq!(ids, vec!["acme", "anthropic", "openai"]);
+        assert_eq!(ids, vec!["acme", "anthropic", "openai", "openai-codex"]);
 
         let anthropic = document.provider("anthropic").expect("anthropic preset");
         assert_eq!(anthropic.kind, KIND_ANTHROPIC_MESSAGES);

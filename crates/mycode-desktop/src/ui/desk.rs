@@ -1,10 +1,8 @@
-//! The Desk theme set: NIGHT DESK + DAY DESK, taken from docs/design/demo.html.
+//! Day and night palettes: frosted glass over tinted surfaces, not a gray CRT.
 //!
-//! The demo is the visual authority: flat panels, 1px hairlines, near-zero
-//! radius, dense mono ledger type — the opposite of the generic glassmorphism
-//! skin. Colors apply by overriding the resolved [`Theme`] colors after every
-//! `Theme::change`, so all existing render code keeps working; the reskin
-//! then reads these tokens via the `desk` module instead of `skin`.
+//! Colors apply by overriding the resolved [`Theme`] after every
+//! `Theme::change`. Semantic lamps (mint, violet, sky, peach) live on
+//! [`Desk`]; chrome reads glass fills from `skin`.
 
 use gpui_kit::Hsla;
 use gpui_kit::component::theme::{Theme, ThemeMode};
@@ -23,10 +21,9 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
 /// every [`Theme::change`] so the day/night choice in settings keeps working
 /// — the desk look is a skin over both modes, not a new mode.
 pub fn apply(theme: &mut Theme) {
-    // The desk is flat: hairline-square radii, no drop shadows.
-    theme.radius = gpui_kit::px(3.);
-    theme.radius_lg = gpui_kit::px(3.);
-    theme.shadow = false;
+    theme.radius = gpui_kit::px(12.);
+    theme.radius_lg = gpui_kit::px(16.);
+    theme.shadow = true;
     if theme.mode == ThemeMode::Dark {
         apply_night(theme);
     } else {
@@ -35,18 +32,18 @@ pub fn apply(theme: &mut Theme) {
 }
 
 fn apply_night(theme: &mut Theme) {
-    let bg = hex(0x0B0D10);
-    let panel = hex(0x101318);
-    let panel_2 = hex(0x14181F);
-    let line = hex(0x22262E);
-    let ink = hex(0xE8E5DC);
-    let ink_dim = hex(0x9BA0AB);
-    let ink_faint = hex(0x5C6270);
-    let amber = hex(0xFFB224);
-    let green = hex(0x3FB96B);
-    let red = hex(0xF05A5A);
-    let cyan = hex(0x5AC8FA);
-    let violet = hex(0x9D8CFF);
+    let bg = hex(0x0C1220);
+    let panel = hex(0x141A2C);
+    let panel_2 = hex(0x1A2236);
+    let line = hex(0x2A3550);
+    let ink = hex(0xE8EEF8);
+    let ink_dim = hex(0x9AA8C7);
+    let ink_faint = hex(0x6B7896);
+    let amber = hex(0xF5C16A);
+    let green = hex(0x7DCEA0);
+    let red = hex(0xF07178);
+    let cyan = hex(0x7DD3FC);
+    let violet = hex(0xC4B5FD);
 
     theme.background = bg;
     theme.foreground = ink;
@@ -57,14 +54,14 @@ fn apply_night(theme: &mut Theme) {
     theme.secondary_foreground = ink;
     theme.secondary_hover = hex(0x1A1F27);
     theme.secondary_active = hex(0x1E242E);
-    theme.accent = hex_a(0xFFB224, 0.16);
-    theme.accent_foreground = amber;
-    theme.caret = amber;
-    theme.selection = hex_a(0xFFB224, 0.28);
-    theme.primary = amber;
-    theme.primary_foreground = hex(0x14100A);
-    theme.primary_hover = hex(0xFFC04D);
-    theme.primary_active = hex(0xE69E12);
+    theme.accent = hex_a(0x7DD3FC, 0.18);
+    theme.accent_foreground = cyan;
+    theme.caret = cyan;
+    theme.selection = hex_a(0xC4B5FD, 0.28);
+    theme.primary = cyan;
+    theme.primary_foreground = hex(0x0C1220);
+    theme.primary_hover = hex(0xA5E6FF);
+    theme.primary_active = hex(0x38BDF8);
     theme.link = cyan;
     theme.link_hover = cyan;
     theme.link_active = cyan;
@@ -77,15 +74,15 @@ fn apply_night(theme: &mut Theme) {
     theme.danger = red;
     theme.danger_foreground = hex(0x14100A);
     theme.input = line;
-    theme.ring = amber;
+    theme.ring = cyan;
 
     theme.sidebar = panel;
     theme.sidebar_foreground = ink_dim;
     theme.sidebar_border = line;
     theme.sidebar_accent = panel_2;
     theme.sidebar_accent_foreground = ink;
-    theme.sidebar_primary = amber;
-    theme.sidebar_primary_foreground = hex(0x14100A);
+    theme.sidebar_primary = cyan;
+    theme.sidebar_primary_foreground = hex(0x0C1220);
 
     theme.popover = panel_2;
     theme.popover_foreground = ink;
@@ -127,20 +124,19 @@ fn apply_night(theme: &mut Theme) {
 }
 
 fn apply_day(theme: &mut Theme) {
-    let bg = hex(0xF4F1E8);
-    let panel = hex(0xFBF9F2);
-    let panel_2 = hex(0xF0ECE0);
-    let line = hex(0xD9D2BE);
-    let line_soft = hex(0xE6E1D1);
-    let ink = hex(0x1C1810);
-    let ink_dim = hex(0x57503F);
-    let ink_faint = hex(0x97896F);
-    let amber = hex(0xA66A00);
-    let amber_deep = hex(0x8A5700);
-    let green = hex(0x1E7A46);
-    let red = hex(0xBF3627);
-    let cyan = hex(0x0F6E8F);
-    let violet = hex(0x6A56C9);
+    let bg = hex(0xF3F7FB);
+    let panel = hex(0xFBFDFF);
+    let panel_2 = hex(0xEEF4F8);
+    let line = hex(0xD5E0EC);
+    let line_soft = hex(0xE4EDF4);
+    let ink = hex(0x1A2332);
+    let ink_dim = hex(0x5A6B80);
+    let ink_faint = hex(0x8A9BB0);
+    let amber = hex(0xC47A12);
+    let green = hex(0x2F9A64);
+    let red = hex(0xD4524A);
+    let cyan = hex(0x0284C7);
+    let violet = hex(0x7C5CBF);
 
     theme.background = bg;
     theme.foreground = ink;
@@ -150,15 +146,15 @@ fn apply_day(theme: &mut Theme) {
     theme.secondary = panel_2;
     theme.secondary_foreground = ink;
     theme.secondary_hover = line_soft;
-    theme.secondary_active = hex(0xDED7C2);
-    theme.accent = hex_a(0xA66A00, 0.14);
-    theme.accent_foreground = amber_deep;
-    theme.caret = amber;
-    theme.selection = hex_a(0xA66A00, 0.22);
-    theme.primary = amber_deep;
-    theme.primary_foreground = hex(0xFFF6E4);
-    theme.primary_hover = amber;
-    theme.primary_active = hex(0x744A00);
+    theme.secondary_active = hex(0xD5E4F0);
+    theme.accent = hex_a(0x0284C7, 0.12);
+    theme.accent_foreground = cyan;
+    theme.caret = cyan;
+    theme.selection = hex_a(0x7C5CBF, 0.18);
+    theme.primary = cyan;
+    theme.primary_foreground = hex(0xFBFDFF);
+    theme.primary_hover = hex(0x0EA5E9);
+    theme.primary_active = hex(0x0369A1);
     theme.link = cyan;
     theme.link_hover = cyan;
     theme.link_active = cyan;
@@ -171,15 +167,15 @@ fn apply_day(theme: &mut Theme) {
     theme.danger = red;
     theme.danger_foreground = hex(0xFBF9F2);
     theme.input = line;
-    theme.ring = amber;
+    theme.ring = cyan;
 
     theme.sidebar = panel;
     theme.sidebar_foreground = ink_dim;
     theme.sidebar_border = line;
     theme.sidebar_accent = panel_2;
     theme.sidebar_accent_foreground = ink;
-    theme.sidebar_primary = amber_deep;
-    theme.sidebar_primary_foreground = hex(0xFFF6E4);
+    theme.sidebar_primary = cyan;
+    theme.sidebar_primary_foreground = hex(0xFBFDFF);
 
     theme.popover = panel;
     theme.popover_foreground = ink;
@@ -239,27 +235,27 @@ impl Desk {
     pub fn of(theme: &Theme) -> Self {
         if theme.mode == ThemeMode::Dark {
             Self {
-                amber: hex(0xFFB224),
-                green: hex(0x3FB96B),
-                red: hex(0xF05A5A),
-                cyan: hex(0x5AC8FA),
-                violet: hex(0x9D8CFF),
-                faint: hex(0x5C6270),
-                screen: hex(0x08090C),
-                screen_dim: hex(0x8B909B),
-                think_bg: hex_a(0xFFFFFF, 0.014),
+                amber: hex(0xF5C16A),
+                green: hex(0x7DCEA0),
+                red: hex(0xF07178),
+                cyan: hex(0x7DD3FC),
+                violet: hex(0xC4B5FD),
+                faint: hex(0x6B7896),
+                screen: hex(0x0A101C),
+                screen_dim: hex(0x9AA8C7),
+                think_bg: hex_a(0xC4B5FD, 0.08),
             }
         } else {
             Self {
-                amber: hex(0xA66A00),
-                green: hex(0x1E7A46),
-                red: hex(0xBF3627),
-                cyan: hex(0x0F6E8F),
-                violet: hex(0x6A56C9),
-                faint: hex(0x97896F),
-                screen: hex(0xF4F1E8),
-                screen_dim: hex(0x57503F),
-                think_bg: hex_a(0xA66A00, 0.06),
+                amber: hex(0xC47A12),
+                green: hex(0x2F9A64),
+                red: hex(0xD4524A),
+                cyan: hex(0x0284C7),
+                violet: hex(0x7C5CBF),
+                faint: hex(0x8A9BB0),
+                screen: hex(0xF3F7FB),
+                screen_dim: hex(0x5A6B80),
+                think_bg: hex_a(0x7C5CBF, 0.08),
             }
         }
     }

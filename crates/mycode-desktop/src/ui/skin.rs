@@ -1,6 +1,6 @@
 //! Frosted translucent panels and gradient accents over the active theme.
 //! Day and night each stay on their own surface: light stays light, dark
-//! stays dark, with a brand-tinted ambient wash behind the glass.
+//! stays dark, with a mint-to-violet ambient wash behind the glass.
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{Background, Hsla, black, linear_color_stop, linear_gradient};
 
@@ -26,41 +26,38 @@ pub(super) fn hue_shift(color: Hsla, degrees: f32) -> Hsla {
     }
 }
 
-/// Ambient gradient behind the window: theme background easing toward brand.
+/// Ambient gradient behind the window: sky easing toward mint and violet.
 pub(super) fn ambient(theme: &Theme) -> Background {
     let dark = is_dark(theme);
-    let tint = mix(
+    let start = mix(theme.background, theme.cyan, if dark { 0.16 } else { 0.10 });
+    let end = mix(
         theme.background,
-        theme.primary,
+        theme.magenta,
         if dark { 0.18 } else { 0.08 },
     );
     linear_gradient(
-        160.,
-        linear_color_stop(theme.background, 0.),
-        linear_color_stop(tint, 1.),
+        152.,
+        linear_color_stop(start, 0.),
+        linear_color_stop(end, 1.),
     )
 }
 
 /// Frosted panel fill used by the composer card.
 pub(super) fn glass(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(
-        theme.background,
-        theme.foreground,
-        if dark { 0.06 } else { 0.02 },
-    );
+    let base = mix(theme.background, theme.cyan, if dark { 0.10 } else { 0.06 });
     Hsla {
-        a: if dark { 0.72 } else { 0.86 },
+        a: if dark { 0.62 } else { 0.78 },
         ..base
     }
 }
 
-/// Frosted sidebar / inspector fill, slightly brand-tinted.
+/// Frosted sidebar / inspector fill, slightly violet-tinted.
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(theme.sidebar, theme.primary, if dark { 0.10 } else { 0.04 });
+    let base = mix(theme.sidebar, theme.magenta, if dark { 0.12 } else { 0.06 });
     Hsla {
-        a: if dark { 0.58 } else { 0.78 },
+        a: if dark { 0.52 } else { 0.72 },
         ..base
     }
 }
@@ -68,20 +65,16 @@ pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
 /// Border tone matching the frosted panels.
 pub(super) fn glass_border(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(
-        theme.border,
-        theme.foreground,
-        if dark { 0.12 } else { 0.04 },
-    );
+    let base = mix(theme.border, theme.cyan, if dark { 0.22 } else { 0.12 });
     Hsla {
-        a: if dark { 0.5 } else { 0.55 },
+        a: if dark { 0.55 } else { 0.60 },
         ..base
     }
 }
 
 /// Near-opaque frosted popover fill.
 pub(super) fn popover(theme: &Theme) -> Hsla {
-    let base = mix(theme.popover, theme.background, 0.2);
+    let base = mix(theme.popover, theme.magenta, 0.06);
     Hsla { a: 0.94, ..base }
 }
 
@@ -93,11 +86,11 @@ pub(super) fn scrim(theme: &Theme) -> Hsla {
     }
 }
 
-/// Brand gradient for welcome and hero accents.
+/// Brand gradient for welcome and hero accents: mint → sky → violet.
 pub(super) fn accent(theme: &Theme, angle: f32) -> Background {
     linear_gradient(
         angle,
-        linear_color_stop(theme.primary, 0.),
-        linear_color_stop(hue_shift(theme.primary, 45.), 1.),
+        linear_color_stop(theme.green, 0.),
+        linear_color_stop(hue_shift(theme.magenta, 12.), 1.),
     )
 }

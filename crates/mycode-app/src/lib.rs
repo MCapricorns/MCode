@@ -55,8 +55,12 @@ use mycode_providers::catalog::{
     CachedCatalog, CatalogDocument, DEFAULT_MAX_AGE_SECS, RefreshOutcome, http_client,
 };
 use mycode_providers::{
-    COPILOT_PROVIDER_ID, DeviceTokenPoll, ReqwestTransport, ResolvedProvider, SseTransport,
-    WireProvider, copilot_bearer, poll_device_token, start_device_flow,
+    CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
+    DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID, ReqwestTransport, ResolvedProvider,
+    SseTransport, WireProvider, XAI_PROVIDER_ID, copilot_bearer, exchange_codex_code,
+    parse_oauth_secret, poll_codex_device_token, poll_device_token, poll_xai_device_token,
+    refresh_codex_token, refresh_xai_token, start_codex_device_flow, start_device_flow,
+    start_xai_device_flow,
 };
 use mycode_tools::ToolDyn as _;
 use mycode_tools::ToolRegistry;
@@ -105,8 +109,10 @@ pub enum BridgeCommand {
         /// The key; empty clears the stored entry.
         api_key: String,
     },
-    /// Start the GitHub Copilot OAuth device-flow sign-in.
-    StartCopilotSignIn {
+    /// Start an OAuth device-flow sign-in for Copilot, xAI, or Codex.
+    StartOAuthSignIn {
+        /// Catalog / settings provider id.
+        provider_id: String,
         /// Model ids to bind to the provider once the sign-in succeeds.
         models: Vec<String>,
     },
@@ -698,12 +704,16 @@ fn run_core(
                         let _ = reply.send(BridgeReply::UpdateDownloaded(outcome));
                     });
                 }
-                BridgeCommand::StartCopilotSignIn { models } => {
+                BridgeCommand::StartOAuthSignIn {
+                    provider_id,
+                    models,
+                } => {
                     let reply = with_reply.reply;
                     let task_state = state.clone();
                     let task_events = events.clone();
                     tokio::spawn(async move {
-                        let outcome = copilot_sign_in(task_state, task_events, models).await;
+                        let outcome =
+                            oauth_sign_in(task_state, task_events, provider_id, models).await;
                         let _ = reply.send(outcome);
                     });
                 }
@@ -882,7 +892,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::SetProjectDir { .. } => BridgeReply::ProjectSet(Err(message)),
         BridgeCommand::CheckUpdate => BridgeReply::UpdateChecked(Err(message)),
         BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
-        BridgeCommand::StartCopilotSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
+        BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
         BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
     }
 }
@@ -957,7 +967,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 blocking(move || save_provider_key(&home, &provider_id, &api_key)).await,
             )
         }
-        BridgeCommand::StartCopilotSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(
+        BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(
             "device sign-in runs as a concurrent task".to_owned(),
         )),
         BridgeCommand::ChatTurn { .. } => {
@@ -1340,11 +1350,15 @@ fn load_settings(
     .transpose()
     .map_err(|()| "stored settings failed validation".to_owned())?
     .unwrap_or(AuthorityRevision::ABSENT);
-    let filled = fill_detected_shell(&mut settings);
-    if filled && revision == AuthorityRevision::ABSENT {
-        if let Ok(next) = replace_app_settings(home, revision, &settings) {
-            revision = next;
-        }
+    let filled_shell = fill_detected_shell(&mut settings);
+    if settings.user_agent.trim().is_empty() {
+        settings.user_agent = mycode_config::default_user_agent();
+    }
+    if revision == AuthorityRevision::ABSENT
+        && (filled_shell || !settings.user_agent.is_empty())
+        && let Ok(next) = replace_app_settings(home, revision, &settings)
+    {
+        revision = next;
     }
     apply_runtime_shell(&settings);
     let secrets = read_provider_secrets(home).map_err(|error| render_config_error(&error))?;
@@ -1842,26 +1856,74 @@ fn secrets_revision(bytes: &[u8]) -> Result<AuthorityRevision, ()> {
 
 // ---- GitHub Copilot OAuth device flow ----
 
-/// Starts the device flow, opens the browser, and spawns the poll loop that
+/// Starts a device flow, opens the browser, and spawns the poll loop that
 /// finishes the sign-in (or reports failure) over the event channel.
-async fn copilot_sign_in(
+async fn oauth_sign_in(
     state: Arc<CoreState>,
     events: mpsc::Sender<BridgeEvent>,
+    provider_id: String,
     models: Vec<String>,
 ) -> BridgeReply {
     let client = match http_client(UPDATE_USER_AGENT) {
         Ok(client) => client,
         Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
     };
-    let start = match start_device_flow(&client).await {
-        Ok(start) => start,
-        Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
-    };
-    open_browser(&start.verification_uri);
-    let device_code = start.device_code;
+    match provider_id.as_str() {
+        XAI_PROVIDER_ID => {
+            let start = match start_xai_device_flow(&client).await {
+                Ok(start) => start,
+                Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
+            };
+            let uri = if start.verification_uri.is_empty() {
+                mycode_providers::XAI_VERIFICATION_URI.to_owned()
+            } else {
+                start.verification_uri.clone()
+            };
+            open_browser(&uri);
+            spawn_xai_poll(state, events, client, start.clone(), models);
+            BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
+                user_code: start.user_code,
+                verification_uri: uri,
+            }))
+        }
+        OPENAI_CODEX_PROVIDER_ID => {
+            let start = match start_codex_device_flow(&client).await {
+                Ok(start) => start,
+                Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
+            };
+            open_browser(CODEX_VERIFICATION_URI);
+            spawn_codex_poll(state, events, client, start.clone(), models);
+            BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
+                user_code: start.user_code,
+                verification_uri: CODEX_VERIFICATION_URI.to_owned(),
+            }))
+        }
+        _ => {
+            let start = match start_device_flow(&client).await {
+                Ok(start) => start,
+                Err(message) => return BridgeReply::CopilotSignInStarted(Err(message)),
+            };
+            open_browser(&start.verification_uri);
+            spawn_copilot_poll(state, events, client, start.clone(), models);
+            BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
+                user_code: start.user_code,
+                verification_uri: start.verification_uri,
+            }))
+        }
+    }
+}
+
+fn spawn_copilot_poll(
+    state: Arc<CoreState>,
+    events: mpsc::Sender<BridgeEvent>,
+    client: reqwest::Client,
+    start: mycode_providers::DeviceCodeStart,
+    models: Vec<String>,
+) {
     let mut interval_secs = start.interval_secs.max(1);
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(start.expires_in_secs.max(1));
+    let device_code = start.device_code;
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
@@ -1880,6 +1942,7 @@ async fn copilot_sign_in(
                     });
                     return;
                 }
+                Ok(DeviceTokenPoll::GrantedOAuth(_)) => {}
                 Ok(DeviceTokenPoll::Pending) => {}
                 Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
                 Ok(DeviceTokenPoll::Denied(reason)) => {
@@ -1895,10 +1958,123 @@ async fn copilot_sign_in(
             }
         }
     });
-    BridgeReply::CopilotSignInStarted(Ok(CopilotSignInInfo {
-        user_code: start.user_code,
-        verification_uri: start.verification_uri,
-    }))
+}
+
+fn spawn_xai_poll(
+    state: Arc<CoreState>,
+    events: mpsc::Sender<BridgeEvent>,
+    client: reqwest::Client,
+    start: mycode_providers::DeviceCodeStart,
+    models: Vec<String>,
+) {
+    let mut interval_secs = start.interval_secs.max(1);
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(start.expires_in_secs.max(1));
+    let device_code = start.device_code;
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            if std::time::Instant::now() >= deadline {
+                let _ = events.send(BridgeEvent::CopilotSignInFailed {
+                    message: "the sign-in code expired before authorization".to_owned(),
+                });
+                return;
+            }
+            match poll_xai_device_token(&client, &device_code).await {
+                Ok(DeviceTokenPoll::GrantedOAuth(secret)) => {
+                    let outcome =
+                        finish_oauth_sign_in(&state, XAI_PROVIDER_ID, &secret, &models).await;
+                    let _ = events.send(match outcome {
+                        Ok(()) => BridgeEvent::CopilotSignedIn,
+                        Err(message) => BridgeEvent::CopilotSignInFailed { message },
+                    });
+                    return;
+                }
+                Ok(DeviceTokenPoll::Granted(_)) | Ok(DeviceTokenPoll::Pending) => {}
+                Ok(DeviceTokenPoll::SlowDown) => interval_secs += 5,
+                Ok(DeviceTokenPoll::Denied(reason)) => {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed {
+                        message: reason.to_owned(),
+                    });
+                    return;
+                }
+                Err(message) => {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed { message });
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn spawn_codex_poll(
+    state: Arc<CoreState>,
+    events: mpsc::Sender<BridgeEvent>,
+    client: reqwest::Client,
+    start: mycode_providers::CodexDeviceStart,
+    models: Vec<String>,
+) {
+    let interval_secs = start.interval_secs.max(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15 * 60);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            if std::time::Instant::now() >= deadline {
+                let _ = events.send(BridgeEvent::CopilotSignInFailed {
+                    message: "the sign-in code expired before authorization".to_owned(),
+                });
+                return;
+            }
+            match poll_codex_device_token(&client, &start).await {
+                Ok(CodexDevicePoll::Ready {
+                    authorization_code,
+                    code_verifier,
+                }) => {
+                    let outcome =
+                        match exchange_codex_code(&client, &authorization_code, &code_verifier)
+                            .await
+                        {
+                            Ok(secret) => {
+                                finish_oauth_sign_in(
+                                    &state,
+                                    OPENAI_CODEX_PROVIDER_ID,
+                                    &secret,
+                                    &models,
+                                )
+                                .await
+                            }
+                            Err(message) => Err(message),
+                        };
+                    let _ = events.send(match outcome {
+                        Ok(()) => BridgeEvent::CopilotSignedIn,
+                        Err(message) => BridgeEvent::CopilotSignInFailed { message },
+                    });
+                    return;
+                }
+                Ok(CodexDevicePoll::Pending) => {}
+                Ok(CodexDevicePoll::Denied(reason)) => {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed {
+                        message: reason.to_owned(),
+                    });
+                    return;
+                }
+                Err(message) => {
+                    let _ = events.send(BridgeEvent::CopilotSignInFailed { message });
+                    return;
+                }
+            }
+        }
+    });
+}
+
+async fn finish_oauth_sign_in(
+    state: &CoreState,
+    provider_id: &str,
+    secret: &OAuthSecret,
+    models: &[String],
+) -> Result<(), String> {
+    save_provider_key(&state.home, provider_id, &secret.encode())?;
+    upsert_catalog_provider(state, provider_id, models)
 }
 
 /// Verifies the grant works, stores the OAuth token, and configures the
@@ -1915,22 +2091,35 @@ async fn finish_copilot_sign_in(
     upsert_copilot_provider(state, models)
 }
 
-/// Adds or refreshes the `github-copilot` provider entry with the chosen
-/// models, defaulting to the catalog's tool-calling presets.
 fn upsert_copilot_provider(state: &CoreState, models: &[String]) -> Result<(), String> {
-    let catalog = state
-        .catalog
-        .read()
-        .map(|guard| guard.clone())
-        .ok()
-        .and_then(|catalog| {
-            catalog
-                .document
-                .provider(COPILOT_PROVIDER_ID)
-                .map(|preset| (preset.base_url.clone(), preset.models.clone()))
-        });
-    let (base_url, catalog_models) =
-        catalog.unwrap_or_else(|| ("https://api.githubcopilot.com".to_owned(), Vec::new()));
+    upsert_catalog_provider(state, COPILOT_PROVIDER_ID, models)
+}
+
+/// Adds or refreshes a catalog provider entry with the chosen models.
+fn upsert_catalog_provider(
+    state: &CoreState,
+    provider_id: &str,
+    models: &[String],
+) -> Result<(), String> {
+    let catalog = state.catalog.read().ok().and_then(|guard| {
+        guard.document.provider(provider_id).map(|preset| {
+            (
+                preset.kind.clone(),
+                preset.base_url.clone(),
+                preset.models.clone(),
+            )
+        })
+    });
+    let (kind, base_url, catalog_models) = catalog.unwrap_or_else(|| {
+        (
+            mycode_providers::catalog::KIND_OPENAI_COMPLETIONS.to_owned(),
+            String::new(),
+            Vec::new(),
+        )
+    });
+    if base_url.is_empty() {
+        return Err(format!("{provider_id} is not in the model catalog"));
+    }
     let bound: Vec<String> = if models.is_empty() {
         catalog_models
             .iter()
@@ -1942,21 +2131,23 @@ fn upsert_copilot_provider(state: &CoreState, models: &[String]) -> Result<(), S
         models.to_vec()
     };
     if bound.is_empty() {
-        return Err("no Copilot models were selected".to_owned());
+        return Err(format!("no {provider_id} models were selected"));
     }
     let (mut settings, revision, _, _) = load_settings(&state.home)?;
     match settings
         .providers
         .iter_mut()
-        .find(|provider| provider.id == COPILOT_PROVIDER_ID)
+        .find(|provider| provider.id == provider_id)
     {
         Some(existing) => {
             existing.models = bound;
             existing.enabled = true;
+            existing.kind = kind;
+            existing.base_url = base_url;
         }
         None => settings.providers.push(ProviderSettings {
-            id: COPILOT_PROVIDER_ID.to_owned(),
-            kind: mycode_providers::catalog::KIND_OPENAI_COMPLETIONS.to_owned(),
+            id: provider_id.to_owned(),
+            kind,
             base_url,
             models: bound,
             enabled: true,
@@ -1967,6 +2158,55 @@ fn upsert_copilot_provider(state: &CoreState, models: &[String]) -> Result<(), S
     replace_app_settings(&state.home, revision, &settings)
         .map_err(|error| render_config_error(&error))?;
     Ok(())
+}
+
+async fn resolve_request_auth(
+    state: &CoreState,
+    provider: &ProviderSettings,
+    stored_key: &str,
+) -> Result<(String, Vec<(String, String)>), String> {
+    if provider.id == COPILOT_PROVIDER_ID || provider.base_url.contains("githubcopilot.com") {
+        let token = ensure_copilot_bearer(state, stored_key).await?;
+        let extra = COPILOT_CHAT_HEADERS
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        return Ok((token, extra));
+    }
+    if let Some(mut secret) = parse_oauth_secret(stored_key) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        if secret.expired(now) {
+            let client = http_client(UPDATE_USER_AGENT)?;
+            secret = match provider.id.as_str() {
+                id if id == XAI_PROVIDER_ID => refresh_xai_token(&client, &secret.refresh).await?,
+                id if id == OPENAI_CODEX_PROVIDER_ID => {
+                    refresh_codex_token(&client, &secret.refresh).await?
+                }
+                _ => secret,
+            };
+            let _ = save_provider_key(&state.home, &provider.id, &secret.encode());
+        }
+        let mut extra = Vec::new();
+        if provider.id == OPENAI_CODEX_PROVIDER_ID {
+            extra.push(("originator".to_owned(), "pi".to_owned()));
+            extra.push((
+                "openai-beta".to_owned(),
+                "responses=experimental".to_owned(),
+            ));
+            if let Some(account) = secret
+                .account_id
+                .clone()
+                .or_else(|| mycode_providers::chatgpt_account_id(&secret.access))
+            {
+                extra.push(("chatgpt-account-id".to_owned(), account));
+            }
+        }
+        return Ok((secret.access, extra));
+    }
+    Ok((stored_key.to_owned(), Vec::new()))
 }
 
 /// Returns a live Copilot bearer, exchanging a fresh one when the cached copy
@@ -2132,15 +2372,7 @@ async fn run_chat_turn(
     let (settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
     // Copilot stores its long-lived OAuth token where other providers keep
     // an API key; each turn exchanges it for a short-lived bearer.
-    let (bearer, extra_headers) = if provider.base_url.contains("githubcopilot.com") {
-        let token = ensure_copilot_bearer(state, &stored_key).await?;
-        (
-            token,
-            vec![("copilot-integration-id".to_owned(), "mycode".to_owned())],
-        )
-    } else {
-        (stored_key, Vec::new())
-    };
+    let (bearer, extra_headers) = resolve_request_auth(state, &provider, &stored_key).await?;
     let mut resolved =
         ResolvedProvider::resolve(&provider, model, &bearer, &settings.effective_user_agent())
             .map_err(|error| format!("provider setup failed: {error:?}"))?;

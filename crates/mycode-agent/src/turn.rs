@@ -206,6 +206,14 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
     )
 }
 
+fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "ask" => "ask_user",
+        "todo" | "todos" => "todo_write",
+        other => other,
+    }
+}
+
 /// Dispatch one registered, schema-valid tool call and return the
 /// resulting [`ToolResultMessage`].
 ///
@@ -234,7 +242,8 @@ pub(crate) async fn dispatch_tool_call(
         },
     );
 
-    let Some(tool) = env.tools.get(&call.name) else {
+    let tool_name = canonical_tool_name(&call.name);
+    let Some(tool) = env.tools.get(tool_name) else {
         return completed_error(env, &call_id, call, format!("unknown tool: {}", call.name));
     };
 

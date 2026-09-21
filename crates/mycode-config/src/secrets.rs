@@ -22,7 +22,7 @@ pub const SECRETS_KIND: &str = "mycode-provider-secrets";
 /// Maximum providers with stored keys.
 pub const MAX_SECRET_PROVIDERS: usize = 64;
 /// Maximum accepted key length in bytes.
-pub const MAX_KEY_BYTES: usize = 4096;
+pub const MAX_KEY_BYTES: usize = 16 * 1024;
 
 /// One key per provider id; serialized as a sorted object map.
 #[derive(Clone, Default, PartialEq, Eq)]

@@ -1523,6 +1523,19 @@ impl Workspace {
             .clone()
     }
 
+    pub(super) fn on_pick_ask_choice(
+        &mut self,
+        index: usize,
+        answer: String,
+        submit: bool,
+        cx: &mut Context<Workspace>,
+    ) {
+        self.apply_action(DesktopAction::AskChoicePicked { index, answer }, cx);
+        if submit {
+            self.on_answer_ask(self.vm.ask_answers.clone(), cx);
+        }
+    }
+
     pub(super) fn on_submit_free_ask(&mut self, cx: &mut Context<Workspace>) {
         let Some(input) = self.ask_input.clone() else {
             return;
@@ -1532,11 +1545,13 @@ impl Workspace {
         };
         let raw = input.read(cx).value().to_string();
         let parts: Vec<String> = raw.split('|').map(|part| part.trim().to_owned()).collect();
-        let answers: Vec<String> = rows
-            .iter()
-            .enumerate()
-            .map(|(index, (_, _, _))| parts.get(index).cloned().unwrap_or_default())
-            .collect();
+        let mut answers = self.vm.ask_answers.clone();
+        answers.resize(rows.len(), String::new());
+        for (index, slot) in answers.iter_mut().enumerate() {
+            if slot.is_empty() {
+                *slot = parts.get(index).cloned().unwrap_or_default();
+            }
+        }
         self.on_answer_ask(answers, cx);
     }
 
@@ -1576,7 +1591,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         if self.ua_input.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("pi agent default"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(mycode_config::default_user_agent())
+            });
             cx.subscribe_in(&input, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = entity.read(cx).value().to_string();
@@ -1711,10 +1728,19 @@ impl Workspace {
         self.apply_action(DesktopAction::ActivePresetChanged(None), cx);
     }
 
-    /// Starts the GitHub device-flow sign-in with the checked model list.
-    pub(super) fn on_start_copilot_sign_in(&mut self, cx: &mut Context<Self>) {
+    /// Starts an OAuth device-flow sign-in with the checked model list.
+    pub(super) fn on_start_oauth_sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some(provider_id) = self.vm.active_preset.clone() else {
+            return;
+        };
         let models = self.vm.preset_models.clone();
-        self.dispatch(BridgeCommand::StartCopilotSignIn { models }, cx);
+        self.dispatch(
+            BridgeCommand::StartOAuthSignIn {
+                provider_id,
+                models,
+            },
+            cx,
+        );
     }
 
     pub(super) fn preset_key_input(
@@ -2203,12 +2229,13 @@ impl Workspace {
         if current.kind == kind && !current.program.is_empty() {
             return;
         }
-        if let Some(detected) = mycode_tools::detect_default_shell()
-            .filter(|detected| detected.kind.as_str() == kind)
+        if let Some(detected) =
+            mycode_tools::detect_default_shell().filter(|detected| detected.kind.as_str() == kind)
         {
             self.set_shell_preference(kind, &detected.program.to_string_lossy(), "user", cx);
         } else if !current.program.is_empty()
-            && mycode_tools::ShellKind::from_program(std::path::Path::new(&current.program)).as_str()
+            && mycode_tools::ShellKind::from_program(std::path::Path::new(&current.program))
+                .as_str()
                 == kind
         {
             self.set_shell_preference(kind, &current.program, "user", cx);
@@ -2223,7 +2250,13 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
-    fn set_shell_preference(&mut self, kind: &str, program: &str, source: &str, cx: &mut Context<Self>) {
+    fn set_shell_preference(
+        &mut self,
+        kind: &str,
+        program: &str,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(settings) = self.vm.settings.as_ref() else {
             return;
         };
@@ -2244,8 +2277,9 @@ impl Workspace {
             if program.is_empty() {
                 return None;
             }
-            let kind = mycode_tools::ShellKind::parse(&configured.kind)
-                .unwrap_or_else(|| mycode_tools::ShellKind::from_program(std::path::Path::new(program)));
+            let kind = mycode_tools::ShellKind::parse(&configured.kind).unwrap_or_else(|| {
+                mycode_tools::ShellKind::from_program(std::path::Path::new(program))
+            });
             Some(mycode_tools::DetectedShell {
                 kind,
                 program: std::path::PathBuf::from(program),

@@ -8,6 +8,7 @@ pub(crate) mod desk;
 mod settings;
 mod sidebar;
 mod skin;
+mod todos;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -91,9 +92,6 @@ pub fn render_root(
         .when(workspace.vm().error.is_some(), |this| {
             this.child(render_error_banner(workspace, cx))
         })
-        .when(workspace.vm().pending_ask.is_some(), |this| {
-            this.child(chat::render_ask_panel(workspace, window, cx))
-        })
         .child(
             div()
                 .id("body")
@@ -122,6 +120,13 @@ pub fn render_root(
         )
         .when(workspace.vm().project_menu_open, |this| {
             this.child(sidebar::render_project_menu_layer(workspace, cx))
+        })
+        .when(
+            workspace.vm().view == MainView::Chat && !workspace.vm().todo_rows.is_empty(),
+            |this| this.child(todos::render_todo_float(workspace, layout, cx)),
+        )
+        .when(workspace.vm().pending_ask.is_some(), |this| {
+            this.child(chat::render_ask_panel(workspace, window, cx))
         })
 }
 

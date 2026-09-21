@@ -41,7 +41,7 @@ pub fn default_user_agent() -> String {
 }
 
 fn os_release() -> String {
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         rustix::system::uname()
             .release()
@@ -52,7 +52,7 @@ fn os_release() -> String {
     {
         windows_release()
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(not(any(unix, windows)))]
     {
         "unknown".to_owned()
     }
@@ -398,7 +398,8 @@ fn tools_are_default(tools: &ToolsSettings) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppSettings {
-    /// Outbound User-Agent; empty means [`DEFAULT_USER_AGENT`].
+    /// Outbound User-Agent. Defaults to the pi agent identity so the
+    /// value is present in `settings.json` and stays configurable.
     pub user_agent: String,
     /// Configured providers.
     pub providers: Vec<ProviderSettings>,
@@ -429,7 +430,7 @@ fn subagents_are_default(subagents: &SubagentSettings) -> bool {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            user_agent: String::new(),
+            user_agent: default_user_agent(),
             providers: Vec::new(),
             // Both first-class vendors ship ready; the user pastes an API
             // key and enables one. At most one backend may be enabled.

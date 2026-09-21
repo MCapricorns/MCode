@@ -848,11 +848,7 @@ fn render_composer(
                                 .min_w_0()
                                 .overflow_hidden()
                                 .min_h(px(40.))
-                                .child(
-                                    Textarea::new(&composer)
-                                        .appearance(false)
-                                        .bordered(false),
-                                ),
+                                .child(Textarea::new(&composer).appearance(false).bordered(false)),
                         ),
                 )
                 .child(
@@ -1620,7 +1616,7 @@ pub(super) fn render_mention_layer(
         .into_any_element()
 }
 
-/// Renders the pending ask panel: one answer row per question.
+/// Floating ask card: questions stay on top of the transcript until answered.
 pub(super) fn render_ask_panel(
     workspace: &mut Workspace,
     window: &mut Window,
@@ -1628,109 +1624,137 @@ pub(super) fn render_ask_panel(
 ) -> gpui_kit::AnyElement {
     let rows: Vec<(String, Vec<String>, bool)> =
         workspace.vm().pending_ask.clone().unwrap_or_default();
+    let picks = workspace.vm().ask_answers.clone();
+    let single = rows.len() == 1;
     let ask_input = workspace.ask_input(window, cx);
     let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
     div()
-        .id("ask-panel")
+        .id("ask-layer")
+        .absolute()
+        .inset_0()
         .flex()
-        .w_full()
+        .items_start()
+        .justify_center()
+        .pt(px(72.))
         .px_4()
-        .flex_col()
-        .gap_2()
-        .pb_2()
         .child(
             div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(Icon::new(IconName::CircleAlert).small())
-                .child("The agent needs your input"),
+                .id("ask-scrim")
+                .absolute()
+                .inset_0()
+                .bg(skin::scrim(theme)),
         )
-        .children(
-            rows.iter()
-                .enumerate()
-                .map(|(index, (question, choices, optional))| {
+        .child(
+            div()
+                .id("ask-card")
+                .relative()
+                .w_full()
+                .max_w(px(460.))
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .rounded(px(14.))
+                .border_1()
+                .border_color(skin::glass_border(theme))
+                .bg(skin::popover(theme))
+                .shadow_lg()
+                .child(
                     div()
-                        .id(format!("ask-row-{index}"))
                         .flex()
-                        .flex_col()
-                        .gap_1()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(super::lamp(desk.violet))
                         .child(
                             div()
                                 .text_sm()
-                                .child(format!("{}. {}", index + 1, question)),
-                        )
-                        .when(!choices.is_empty(), |this| {
-                            this.child(
-                                div()
-                                    .id(format!("ask-choices-{index}"))
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_1()
-                                    .children(choices.iter().enumerate().map(
-                                        |(choice_index, choice)| {
-                                            let answer = choice.clone();
-                                            Button::new(format!(
-                                                "ask-{index}-{choice_index}-{}",
-                                                super::short_id(choice)
-                                            ))
-                                            .label(choice.clone())
-                                            .small()
-                                            .outline()
-                                            .on_click(
-                                                cx.listener(move |workspace, _, _, cx| {
-                                                    let mut answers =
-                                                        vec![String::new(); index + 1];
-                                                    answers[index] = answer.clone();
-                                                    workspace.on_answer_ask(answers, cx);
-                                                }),
-                                            )
-                                        },
-                                    )),
-                            )
-                        })
-                        .when(*optional, |this| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .opacity(0.5)
-                                    .child("This question is optional"),
-                            )
-                        })
-                }),
-        )
-        .child(
-            div()
-                .id("ask-free-row")
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .id("ask-free-input")
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(30.))
-                        .text_sm()
-                        .child(Input::new(&ask_input)),
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .child("The agent needs your input"),
+                        ),
+                )
+                .children(
+                    rows.iter()
+                        .enumerate()
+                        .map(|(index, (question, choices, optional))| {
+                            let picked = picks.get(index).cloned().unwrap_or_default();
+                            div()
+                                .id(format!("ask-row-{index}"))
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(div().text_sm().child(format!(
+                                    "{}. {}",
+                                    index + 1,
+                                    question
+                                )))
+                                .when(!choices.is_empty(), |this| {
+                                    this.child(
+                                        div()
+                                            .id(format!("ask-choices-{index}"))
+                                            .flex()
+                                            .flex_row()
+                                            .flex_wrap()
+                                            .gap_1()
+                                            .children(choices.iter().enumerate().map(
+                                                |(choice_index, choice)| {
+                                                    let answer = choice.clone();
+                                                    let selected = picked == *choice;
+                                                    Button::new(format!(
+                                                        "ask-{index}-{choice_index}-{}",
+                                                        super::short_id(choice)
+                                                    ))
+                                                    .label(choice.clone())
+                                                    .small()
+                                                    .when(selected, |this| this.primary())
+                                                    .when(!selected, |this| this.outline())
+                                                    .on_click(cx.listener(
+                                                        move |workspace, _, _, cx| {
+                                                            workspace.on_pick_ask_choice(
+                                                                index,
+                                                                answer.clone(),
+                                                                single,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                },
+                                            )),
+                                    )
+                                })
+                                .when(*optional, |this| {
+                                    this.child(div().text_xs().opacity(0.5).child("Optional"))
+                                })
+                        }),
                 )
                 .child(
-                    Button::new("ask-submit")
-                        .label("Answer all")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_submit_free_ask(cx);
-                        })),
+                    div()
+                        .id("ask-free-row")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("ask-free-input")
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(32.))
+                                .text_sm()
+                                .child(Input::new(&ask_input)),
+                        )
+                        .child(
+                            Button::new("ask-submit")
+                                .label("Answer")
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_submit_free_ask(cx);
+                                })),
+                        ),
                 ),
         )
-        .border_t_1()
-        .border_color(theme.border)
         .into_any_element()
 }
 

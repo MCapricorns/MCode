@@ -419,7 +419,9 @@ pub struct WorkspaceState {
     pub live_jobs: Vec<LiveJob>,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
-    /// Durable task list rows: (content, status).
+    /// Draft answers aligned with [`Self::pending_ask`].
+    pub ask_answers: Vec<String>,
+    /// Durable task list rows: (content, status). Completed tasks are dropped.
     pub todo_rows: Vec<(String, String)>,
     /// Cumulative usage per provider/model, in first-seen order.
     pub usage_totals: Vec<UsageTotal>,
@@ -591,6 +593,8 @@ pub enum DesktopAction {
     TodoUpdated(Vec<(String, String)>),
     /// The agent asked the user structured questions.
     AskRequested(Vec<(String, Vec<String>, bool)>),
+    /// The user picked one choice on a pending ask question.
+    AskChoicePicked { index: usize, answer: String },
     /// The user submitted answers locally; clear the pending panel.
     AskAnswered,
     /// Settings were persisted under CAS; carries the new revision.
@@ -753,7 +757,9 @@ pub fn group_sessions(
                 .find(|(key, _)| same_project_path(key, project))
             {
                 Some((_, rows)) => rows.push(session.clone()),
-                None => grouped.others.push((project.to_owned(), vec![session.clone()])),
+                None => grouped
+                    .others
+                    .push((project.to_owned(), vec![session.clone()])),
             },
             None => grouped.unbound.push(session.clone()),
         }
@@ -981,9 +987,25 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             row.cache = row.cache.saturating_add(cache.unwrap_or_default());
             row.requests = row.requests.saturating_add(1);
         }
-        DesktopAction::TodoUpdated(tasks) => state.todo_rows = tasks,
-        DesktopAction::AskRequested(rows) => state.pending_ask = Some(rows),
-        DesktopAction::AskAnswered => state.pending_ask = None,
+        DesktopAction::TodoUpdated(tasks) => {
+            state.todo_rows = tasks
+                .into_iter()
+                .filter(|(_, status)| status != "done")
+                .collect();
+        }
+        DesktopAction::AskRequested(rows) => {
+            state.ask_answers = vec![String::new(); rows.len()];
+            state.pending_ask = Some(rows);
+        }
+        DesktopAction::AskChoicePicked { index, answer } => {
+            if let Some(slot) = state.ask_answers.get_mut(index) {
+                *slot = answer;
+            }
+        }
+        DesktopAction::AskAnswered => {
+            state.pending_ask = None;
+            state.ask_answers.clear();
+        }
         DesktopAction::ChatThinkingDelta(delta) => {
             append_streaming(state, true, delta);
         }
@@ -1625,6 +1647,55 @@ mod tests {
         );
         assert!(state.sessions[0].active, "reload keeps the open mark");
         assert!(!state.sessions[1].active);
+    }
+
+    #[test]
+    fn todo_updates_drop_completed_rows() {
+        let mut state = WorkspaceState::default();
+        reduce(
+            &mut state,
+            DesktopAction::TodoUpdated(vec![
+                ("plan".to_owned(), "in progress".to_owned()),
+                ("ship".to_owned(), "done".to_owned()),
+                ("review".to_owned(), "pending".to_owned()),
+            ]),
+        );
+        assert_eq!(
+            state.todo_rows,
+            vec![
+                ("plan".to_owned(), "in progress".to_owned()),
+                ("review".to_owned(), "pending".to_owned()),
+            ]
+        );
+        reduce(
+            &mut state,
+            DesktopAction::TodoUpdated(vec![("plan".to_owned(), "done".to_owned())]),
+        );
+        assert!(state.todo_rows.is_empty());
+    }
+
+    #[test]
+    fn ask_picks_accumulate_until_submit() {
+        let mut state = WorkspaceState::default();
+        reduce(
+            &mut state,
+            DesktopAction::AskRequested(vec![
+                ("one?".to_owned(), vec!["a".to_owned()], false),
+                ("two?".to_owned(), Vec::new(), true),
+            ]),
+        );
+        assert_eq!(state.ask_answers, vec!["", ""]);
+        reduce(
+            &mut state,
+            DesktopAction::AskChoicePicked {
+                index: 0,
+                answer: "a".to_owned(),
+            },
+        );
+        assert_eq!(state.ask_answers[0], "a");
+        reduce(&mut state, DesktopAction::AskAnswered);
+        assert!(state.pending_ask.is_none());
+        assert!(state.ask_answers.is_empty());
     }
 
     #[test]
@@ -2348,8 +2419,10 @@ mod tests {
 
     #[test]
     fn session_project_bound_is_what_groups_this_project() {
-        let mut state = WorkspaceState::default();
-        state.sessions = vec![summary("ses-a", 0), summary("ses-b", 0)];
+        let mut state = WorkspaceState {
+            sessions: vec![summary("ses-a", 0), summary("ses-b", 0)],
+            ..WorkspaceState::default()
+        };
         reduce(
             &mut state,
             DesktopAction::ProjectOpened(r"D:\my_private_pro\MCode".to_owned()),
@@ -2381,8 +2454,10 @@ mod tests {
 
     #[test]
     fn unbound_sessions_are_assigned_to_the_active_project() {
-        let mut state = WorkspaceState::default();
-        state.sessions = vec![summary("ses-a", 0), summary("ses-b", 0)];
+        let mut state = WorkspaceState {
+            sessions: vec![summary("ses-a", 0), summary("ses-b", 0)],
+            ..WorkspaceState::default()
+        };
         reduce(
             &mut state,
             DesktopAction::UnboundSessionsAssigned(r"D:\proj".to_owned()),
@@ -2394,7 +2469,8 @@ mod tests {
 
     #[test]
     fn paired_subagent_route_stays_valid() {
-        let mut settings = SettingsState::from_settings(&mycode_config::AppSettings::default(), 0, Vec::new());
+        let mut settings =
+            SettingsState::from_settings(&mycode_config::AppSettings::default(), 0, Vec::new());
         settings.providers.push(mycode_config::ProviderSettings {
             id: "openai-main".to_owned(),
             kind: "openai-completions".to_owned(),
