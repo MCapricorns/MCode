@@ -24,13 +24,15 @@
 //! ```
 //!
 //! * [`Agent`] owns the conversation state and the steer/follow-up
-//!   queues; [`AgentHandle`] lets other tasks steer, follow up, or
+//!   queues; [`agent::AgentHandle`] lets other tasks steer, follow up, or
 //!   abort while a turn streams.
 //! * [`TurnEnv`] injects everything ambient — provider, tool registry,
 //!   hooks, cancellation, and the event bus. Registered schema-valid
 //!   tools execute directly; no permission callback is required.
-//! * [`HookRunner`] owns the loop's hook points. Production currently passes
-//!   through; tests may install a tool-call gate that rewrites or blocks.
+//! * [`HookRunner`] owns the loop's hook points: production installs a
+//!   before-request rewrite (history compaction) and a before-tool
+//!   observer; tests additionally install a tool-call gate that rewrites
+//!   or blocks arguments.
 
 pub mod agent;
 pub mod env;
@@ -39,7 +41,7 @@ mod prompt;
 pub mod session;
 mod turn;
 
-pub use agent::{Agent, AgentConfig, AgentHandle, AgentState, QueueMode};
+pub use agent::{Agent, AgentConfig};
 pub use env::TurnEnv;
-pub use hooks::{GateResult, HookEvent, HookRunner};
+pub use hooks::HookRunner;
 pub use prompt::build_system_prompt;

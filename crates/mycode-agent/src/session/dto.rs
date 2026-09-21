@@ -27,15 +27,6 @@ pub enum HeadStamp {
 }
 
 impl HeadStamp {
-    /// Returns the event payload when the head is an event.
-    #[must_use]
-    pub fn event(&self) -> Option<&SessionEventId> {
-        match self {
-            Self::Empty => None,
-            Self::Event(event) => Some(event),
-        }
-    }
-
     /// Returns `true` only for the empty head.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -280,15 +271,11 @@ pub enum SessionProgress {
     Recovering,
     /// Re-verifying committed records and rebuilding the in-memory index.
     Replaying,
-    /// Publishing one durable manifest commit.
-    Committing,
 }
 
 /// One `pull` observation of a running session operation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionPull {
-    /// The operation is still running.
-    Pending,
     /// The operation advanced through one recovery phase.
     Progress(SessionProgress),
     /// The operation finished successfully.
@@ -381,7 +368,9 @@ pub enum SessionError {
     Corrupt,
     /// A fixed bound was reached (payload, page, or branch count).
     Limit,
-    /// The operation was cancelled through its close signal.
+    /// The operation was cancelled through its close signal or outlived its
+    /// per-operation deadline; the service itself stays available for
+    /// further operations.
     Cancelled,
     /// The service or its storage substrate is unavailable.
     Unavailable,

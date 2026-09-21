@@ -75,6 +75,10 @@ pub(crate) struct TaskOperationAdmission {
 pub(crate) enum TaskActorError<E> {
     UnknownOperation,
     Pack(E),
+    /// Per-operation cancellation: the close signal fired or the operation's
+    /// deadline elapsed. The worker stays alive for other operations.
+    Cancelled,
+    /// The actor hit a fatal condition and the worker stopped.
     Unavailable,
 }
 
@@ -167,11 +171,11 @@ impl<A: PackTaskActor> TaskActorClient<A> {
             }),
         )
         .await
-        .map_err(|_| TaskActorError::Unavailable)?
+        .map_err(|_| TaskActorError::Cancelled)?
         .map_err(|_| TaskActorError::Unavailable)?;
         timeout_at(deadline, response)
             .await
-            .map_err(|_| TaskActorError::Unavailable)?
+            .map_err(|_| TaskActorError::Cancelled)?
             .map_err(|_| TaskActorError::Unavailable)?
     }
 
@@ -186,11 +190,11 @@ impl<A: PackTaskActor> TaskActorClient<A> {
             self.sender.send(Command::Pull { operation, reply }),
         )
         .await
-        .map_err(|_| TaskActorError::Unavailable)?
+        .map_err(|_| TaskActorError::Cancelled)?
         .map_err(|_| TaskActorError::Unavailable)?;
         timeout_at(deadline, response)
             .await
-            .map_err(|_| TaskActorError::Unavailable)?
+            .map_err(|_| TaskActorError::Cancelled)?
             .map_err(|_| TaskActorError::Unavailable)?
     }
 
@@ -324,6 +328,9 @@ async fn run_worker<A: PackTaskActor>(
                         }
                     }
                     Err(error) => {
+                        // Only a fatal actor condition stops the worker;
+                        // per-operation cancellation and deadline timeouts
+                        // leave it serving every other session.
                         let keep_running = error != TaskActorError::Unavailable;
                         let _ = reply.send(Err(error));
                         keep_running
@@ -341,6 +348,8 @@ async fn run_worker<A: PackTaskActor>(
                         }
                     }
                     Err(error) => {
+                        // Mirrors the invoke arm: cancellation of one
+                        // operation never retires the worker.
                         let keep_running = error != TaskActorError::Unavailable;
                         let _ = reply.send(Err(error));
                         keep_running
@@ -381,15 +390,15 @@ async fn invoke_operation<A: PackTaskActor>(
     tokio::pin!(invocation);
     let mut operation = tokio::select! {
         biased;
-        () = close.closed() => return Err(TaskActorError::Unavailable),
+        () = close.closed() => return Err(TaskActorError::Cancelled),
         result = &mut invocation => result
-            .map_err(|_| TaskActorError::Unavailable)?
+            .map_err(|_| TaskActorError::Cancelled)?
             .map_err(map_actor_error::<A>)?,
     };
     let admission = A::take_admission(&mut operation).ok_or(TaskActorError::Unavailable)?;
     close.bind_admission(admission);
     if close.is_closed() {
-        return Err(TaskActorError::Unavailable);
+        return Err(TaskActorError::Cancelled);
     }
     let id = TaskActorOperationId(*next_operation);
     *next_operation += 1;
@@ -432,9 +441,9 @@ async fn pull_operation<A: PackTaskActor>(
     tokio::pin!(pull);
     tokio::select! {
         biased;
-        () = operation.close.closed() => Err(TaskActorError::Unavailable),
+        () = operation.close.closed() => Err(TaskActorError::Cancelled),
         result = &mut pull => result
-            .map_err(|_| TaskActorError::Unavailable)?
+            .map_err(|_| TaskActorError::Cancelled)?
             .map_err(map_actor_error::<A>),
     }
 }
@@ -468,8 +477,13 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
+    use std::time::Duration;
 
-    use super::{TaskCloseSignal, TaskOperationAdmission};
+    use tokio::time::Instant;
+
+    use super::{
+        PackTaskActor, TaskActorClient, TaskActorError, TaskCloseSignal, TaskOperationAdmission,
+    };
     use crate::session::runtime::AdmissionError;
     use crate::session::runtime::admission::AdmissionLedger;
     use crate::session::runtime::admission::{MAX_LIVE_RESOURCES, MAX_OPEN_OPERATIONS};
@@ -478,6 +492,121 @@ mod tests {
         future
             .as_mut()
             .poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    /// An actor whose request `0` outlives any test deadline; every other
+    /// request completes immediately.
+    struct SlowOnceActor {
+        ledger: AdmissionLedger,
+    }
+
+    struct SlowOnceOperation {
+        admission: Option<TaskOperationAdmission>,
+    }
+
+    impl PackTaskActor for SlowOnceActor {
+        type Request = u8;
+        type Operation = SlowOnceOperation;
+        type Pull = u8;
+        type Error = ();
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn is_fatal(_error: Self::Error) -> bool {
+            false
+        }
+
+        async fn invoke(
+            &mut self,
+            request: &Self::Request,
+        ) -> Result<Self::Operation, Self::Error> {
+            if *request == 0 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+            let admission = TaskOperationAdmission::new(
+                self.ledger.open_operation().expect("operation admission"),
+                self.ledger.admit_resource().expect("resource admission"),
+            );
+            Ok(SlowOnceOperation {
+                admission: Some(admission),
+            })
+        }
+
+        async fn pull(
+            &mut self,
+            _operation: &mut Self::Operation,
+        ) -> Result<Self::Pull, Self::Error> {
+            Ok(7)
+        }
+
+        async fn drop_operation(&mut self, _operation: Self::Operation) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn take_admission(operation: &mut Self::Operation) -> Option<TaskOperationAdmission> {
+            operation.admission.take()
+        }
+    }
+
+    fn far_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
+    /// Regression: a per-operation close signal cancels exactly that
+    /// operation; the worker keeps serving later ones.
+    #[tokio::test]
+    async fn per_operation_close_keeps_the_worker_alive() {
+        let client = TaskActorClient::start(SlowOnceActor {
+            ledger: AdmissionLedger::new(),
+        });
+        let close = TaskCloseSignal::new();
+        close.close();
+        let error = client
+            .invoke(1, far_deadline(), close)
+            .await
+            .expect_err("a closed signal cancels the invoke");
+        assert_eq!(error, TaskActorError::Cancelled);
+
+        let close = TaskCloseSignal::new();
+        let operation = client
+            .invoke(1, far_deadline(), close)
+            .await
+            .expect("worker must survive a per-operation cancel");
+        let pull = client
+            .pull(operation, far_deadline())
+            .await
+            .expect("later operations still run");
+        assert_eq!(pull, 7);
+        client.close(operation);
+    }
+
+    /// Regression: one lapsed deadline cancels only that operation instead
+    /// of permanently stopping the worker for every session.
+    #[tokio::test]
+    async fn per_operation_deadline_timeout_keeps_the_worker_alive() {
+        let client = TaskActorClient::start(SlowOnceActor {
+            ledger: AdmissionLedger::new(),
+        });
+        let soon = Instant::now() + Duration::from_millis(50);
+        let error = client
+            .invoke(0, soon, TaskCloseSignal::new())
+            .await
+            .expect_err("the deadline elapses while the actor hangs");
+        assert_eq!(error, TaskActorError::Cancelled);
+
+        let close = TaskCloseSignal::new();
+        let operation = client
+            .invoke(1, far_deadline(), close)
+            .await
+            .expect("worker must survive a lapsed deadline");
+        let pull = client
+            .pull(operation, far_deadline())
+            .await
+            .expect("later operations still run");
+        assert_eq!(pull, 7);
+        client.close(operation);
     }
 
     #[tokio::test]

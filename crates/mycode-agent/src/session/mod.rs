@@ -21,13 +21,9 @@ mod service;
 mod store;
 
 #[doc(inline)]
-pub use digest::{DIGEST_PREFIX, is_canonical_digest};
-#[doc(inline)]
 pub use dto::{
-    AppendedResult, BranchHead, BranchMutationKind, BranchedResult, ConflictResult, CreatedResult,
-    EventKind, EventReservationView, EventsResult, HeadStamp, LoadedEvent, MAX_BRANCHES,
-    MAX_EVENT_PAYLOAD_BYTES, MAX_READ_LIMIT, MAX_USAGE_PAYLOAD_BYTES, OpenedResult, SessionError,
-    SessionEvent, SessionProgress, SessionPull, SessionRequest, SessionResult,
+    BranchHead, BranchMutationKind, EventKind, HeadStamp, SessionError, SessionEvent,
+    SessionRequest, SessionResult,
 };
 #[doc(inline)]
 pub use ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};

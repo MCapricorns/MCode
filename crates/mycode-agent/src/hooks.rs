@@ -1,7 +1,12 @@
 //! `HookRunner` defines the agent loop's hook dispatch points.
 //!
-//! The production runner currently has no installed hooks. Tests can install a
-//! tool-call gate to verify argument rebinding and blocked dispatch.
+//! Production installs two of them through
+//! [`HookRunner::with_before_request`] (history compaction immediately
+//! before a provider request) and [`HookRunner::with_before_tool`] (an
+//! observer fired after tool-call admission, right before dispatch).
+//! Tests can additionally install a tool-call gate via
+//! [`HookRunner::with_test_gate`] to verify argument rebinding and
+//! blocked dispatch.
 //!
 //! The three dispatch semantics (pi's model):
 //!
@@ -55,11 +60,18 @@ pub enum HookEvent {
     StopGate,
 }
 
-/// Hook runner with no production hook implementation. Every method passes through:
-/// [`notify`](HookRunner::notify) does nothing, [`transform`](HookRunner::transform)
-/// returns its value unchanged, and [`gate`](HookRunner::gate) always
-/// passes except when tests install [`HookRunner::with_test_gate`], which
-/// may rewrite arguments or block.
+/// Hook runner for the loop's dispatch points.
+///
+/// [`notify`](HookRunner::notify), [`transform`](HookRunner::transform),
+/// and the [`GateResult::Pass`] arm of [`gate`](HookRunner::gate) are
+/// pass-throughs with no production subscriber today. The live production
+/// paths are [`prepare_request`](HookRunner::prepare_request), which runs
+/// the installed before-request rewrite (history compaction), and
+/// [`observe_before_tool`](HookRunner::observe_before_tool), which fires
+/// the installed before-tool observer immediately before dispatch;
+/// panics in the observer are contained and never affect the turn.
+/// [`with_test_gate`](HookRunner::with_test_gate) adds the test-only
+/// tool-call gate that rewrites arguments or blocks the dispatch.
 type TestGate = Arc<dyn Fn(&mut Value) -> GateResult + Send + Sync>;
 /// The observer clones what it needs while invoked and returns a future;
 /// asynchronous observers may offload blocking work (file snapshots) onto

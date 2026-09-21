@@ -321,6 +321,11 @@ impl SessionService {
             .await
             .map_err(map_task_error)?;
         loop {
+            // Refresh the deadline per pull: recovery replays in 1 MiB
+            // chunks, so a large session needs many sequential pulls and
+            // each one gets its own full window instead of sharing the
+            // invoke's budget.
+            let deadline = Instant::now() + DEFAULT_DEADLINE;
             match self.client().pull(operation, deadline).await {
                 Ok(pull) => match pull {
                     super::dto::SessionPull::Complete(result) => {
@@ -331,7 +336,7 @@ impl SessionService {
                         self.client().close(operation);
                         return Err(error);
                     }
-                    super::dto::SessionPull::Pending | super::dto::SessionPull::Progress(_) => {
+                    super::dto::SessionPull::Progress(_) => {
                         continue;
                     }
                 },
@@ -347,6 +352,7 @@ impl SessionService {
 fn map_task_error(error: TaskActorError<SessionTaskError>) -> SessionError {
     match error {
         TaskActorError::UnknownOperation | TaskActorError::Unavailable => SessionError::Unavailable,
+        TaskActorError::Cancelled => SessionError::Cancelled,
         TaskActorError::Pack(SessionTaskError::Admission) => SessionError::Limit,
         TaskActorError::Pack(SessionTaskError::Storage) => SessionError::Unavailable,
     }
@@ -356,6 +362,9 @@ fn map_task_error(error: TaskActorError<SessionTaskError>) -> SessionError {
 mod tests {
     use mycode_config::HomeLayout;
 
+    use super::super::dto::{EventKind, HeadStamp};
+    use super::super::ids::SessionCallId;
+    use super::super::store::SessionPaths;
     use super::{SessionError, SessionService};
 
     fn home() -> (tempfile::TempDir, HomeLayout) {
@@ -380,5 +389,179 @@ mod tests {
         service.shutdown().await;
         let error = survivor.create().await.expect_err("shutdown rejects");
         assert_eq!(error, SessionError::Unavailable);
+    }
+
+    /// Regression: recovery must carry the open tool-call set into the
+    /// assembled branch, so a ToolResult for a ToolCall committed before a
+    /// restart passes the ordering check instead of failing with
+    /// `InvalidArgument`.
+    #[tokio::test]
+    async fn recovered_open_tool_call_accepts_its_tool_result() {
+        let (_parent, layout) = home();
+        let call = SessionCallId::parse("call1-0123456789abcdef0123456789abcde1").expect("call id");
+        let (session, branch, head) = {
+            let service = SessionService::new(&layout);
+            let created = service.create().await.expect("session created");
+            let reservation = service
+                .reserve_event(
+                    &created.session_id,
+                    &created.branch_id,
+                    EventKind::ToolCall,
+                    Some(call.clone()),
+                    b"tool call payload",
+                )
+                .await
+                .expect("tool call reserved");
+            let appended = service
+                .append(
+                    &created.session_id,
+                    &created.branch_id,
+                    &HeadStamp::Empty,
+                    &reservation,
+                )
+                .await
+                .expect("tool call committed");
+            service.shutdown().await;
+            (created.session_id, created.branch_id, appended.head)
+        };
+
+        // A fresh service recovers the ledger from disk; the recovered
+        // branch must still hold the call open for its result.
+        let service = SessionService::new(&layout);
+        service.open(&session).await.expect("session recovered");
+        let reservation = service
+            .reserve_event(
+                &session,
+                &branch,
+                EventKind::ToolResult,
+                Some(call),
+                b"tool result payload",
+            )
+            .await
+            .expect("recovered ledger accepts the tool result");
+        service
+            .append(&session, &branch, &head, &reservation)
+            .await
+            .expect("tool result committed");
+        service.shutdown().await;
+    }
+
+    /// Regression: a committed length that is not record-aligned is
+    /// corruption for that session, not a storage failure that retires the
+    /// worker for everyone.
+    #[tokio::test]
+    async fn misaligned_committed_length_is_corrupt_not_unavailable() {
+        let (_parent, layout) = home();
+        let (session, branch) = {
+            let service = SessionService::new(&layout);
+            let created = service.create().await.expect("session created");
+            let reservation = service
+                .reserve_event(
+                    &created.session_id,
+                    &created.branch_id,
+                    EventKind::Message,
+                    None,
+                    b"payload",
+                )
+                .await
+                .expect("event reserved");
+            service
+                .append(
+                    &created.session_id,
+                    &created.branch_id,
+                    &HeadStamp::Empty,
+                    &reservation,
+                )
+                .await
+                .expect("event committed");
+            service.shutdown().await;
+            (created.session_id, created.branch_id)
+        };
+
+        // Pad the log and bump the manifest's committed length by two bytes
+        // so the committed prefix ends inside the frame header.
+        let paths = SessionPaths::new(&layout, &session);
+        let log_path = layout
+            .owned_join(paths.branch_events(&branch))
+            .expect("log path");
+        let mut log_bytes = std::fs::read(&log_path).expect("branch log readable");
+        log_bytes.extend_from_slice(b"xx");
+        std::fs::write(&log_path, &log_bytes).expect("branch log padded");
+        let manifest_path = layout.owned_join(paths.manifest()).expect("manifest path");
+        let mut manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&manifest_path).expect("manifest readable"),
+        )
+        .expect("manifest json");
+        let committed = manifest["branches"][0]["committedBytes"]
+            .as_u64()
+            .expect("committed bytes");
+        manifest["branches"][0]["committedBytes"] = serde_json::Value::from(committed + 2);
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("manifest encodable"),
+        )
+        .expect("manifest rewritten");
+
+        let service = SessionService::new(&layout);
+        let error = service
+            .open(&session)
+            .await
+            .expect_err("misaligned committed length fails closed");
+        assert_eq!(
+            error,
+            SessionError::Corrupt,
+            "misclassification would brick the worker as Storage"
+        );
+        // The worker survives the corruption and still serves others.
+        service
+            .create()
+            .await
+            .expect("worker still serves fresh sessions");
+        service.shutdown().await;
+    }
+
+    /// Regression: replay verification is chunked per pull, so a session
+    /// larger than one verification budget recovers across several pulls,
+    /// each with its own fresh deadline window.
+    #[tokio::test]
+    async fn large_session_recovers_across_chunked_pulls() {
+        let (_parent, layout) = home();
+        let payload = vec![b'a'; 600 * 1024];
+        let (session, branch, head) = {
+            let service = SessionService::new(&layout);
+            let created = service.create().await.expect("session created");
+            let mut head = HeadStamp::Empty;
+            for _ in 0..3 {
+                let reservation = service
+                    .reserve_event(
+                        &created.session_id,
+                        &created.branch_id,
+                        EventKind::Message,
+                        None,
+                        &payload,
+                    )
+                    .await
+                    .expect("event reserved");
+                let appended = service
+                    .append(&created.session_id, &created.branch_id, &head, &reservation)
+                    .await
+                    .expect("event committed");
+                head = appended.head;
+            }
+            service.shutdown().await;
+            (created.session_id, created.branch_id, head)
+        };
+
+        // Roughly 1.8 MiB of committed records: verification needs more
+        // than one 1 MiB pull before the open action can run.
+        let service = SessionService::new(&layout);
+        let opened = service
+            .open(&session)
+            .await
+            .expect("multi-pull recovery completes");
+        assert_eq!(opened.heads.len(), 1);
+        assert_eq!(opened.heads[0].branch_id, branch);
+        assert_eq!(opened.heads[0].head, head);
+        service.shutdown().await;
     }
 }
