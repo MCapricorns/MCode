@@ -271,6 +271,21 @@ pub enum BridgeEvent {
         /// One-line message.
         message: String,
     },
+    /// In-progress token counts for the open turn. Not a ledger write.
+    UsageSnapshot {
+        /// Session identity spelling.
+        session_id: String,
+        /// Model id the turn is running on.
+        model: String,
+        /// Input tokens summed so far this turn.
+        input: u64,
+        /// Output tokens summed so far this turn.
+        output: u64,
+        /// Prompt tokens served from the provider cache, when reported.
+        cache: Option<u64>,
+        /// Elapsed milliseconds since the turn started.
+        elapsed_ms: u64,
+    },
     /// A durable usage record was committed.
     UsageRecorded {
         /// Session identity spelling.

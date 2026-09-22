@@ -12,6 +12,9 @@
 
 ### Fixed
 
+- 切换项目只过滤侧栏，不再把所有会话绑进 This Project。
+- Inspector 用量跟随当前模型，任务进行中就刷新，不再等整轮结束。网关把 `input_tokens` 报成字符串时也不再显示 in=0。
+- 模型和思考强度在同一个面板里选，不再拆成三个下拉。
 - 子代理不再因为整段 SSE 累计超限而失败。
 - 会话头落后时跟上真实 tip，不再提示 “the session moved on, reopen it”。
 - 切出当前项目后，TASKS 和子代理界面会隐藏。Inspector 里的子代理可以点开进度小窗。

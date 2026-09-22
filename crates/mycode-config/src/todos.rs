@@ -65,19 +65,26 @@ impl TodoDocument {
     ///
     /// Returns [`ConfigErrorKind::AuthorityValidation`] for any violation.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let invalid = || ConfigError::authority_rejection();
+        let invalid = |detail: &str| ConfigError::authority_rejection().with_detail(detail);
         if self.tasks.len() > MAX_TODO_TASKS {
-            return Err(invalid());
+            return Err(invalid(&format!("at most {MAX_TODO_TASKS} tasks")));
         }
         let mut in_progress = 0usize;
         for (index, task) in self.tasks.iter().enumerate() {
-            if !is_todo_id(&task.id)
-                || task.content.is_empty()
-                || task.content.chars().count() > MAX_TODO_CONTENT_CHARS
-                || task.blocked_by.len() > MAX_TODO_DEPS
-                || task.blocked_by.contains(&task.id)
-            {
-                return Err(invalid());
+            if !is_todo_id(&task.id) {
+                return Err(invalid(&format!(
+                    "task id {} is not todo- plus 16 hex",
+                    task.id
+                )));
+            }
+            if task.content.is_empty() || task.content.chars().count() > MAX_TODO_CONTENT_CHARS {
+                return Err(invalid("task content is empty or too long"));
+            }
+            if task.blocked_by.len() > MAX_TODO_DEPS || task.blocked_by.contains(&task.id) {
+                return Err(invalid(&format!(
+                    "task {} has an invalid dependency",
+                    task.id
+                )));
             }
             if matches!(task.status, TodoStatus::InProgress) {
                 in_progress += 1;
@@ -86,18 +93,21 @@ impl TodoDocument {
                 if !self.tasks[..index].iter().any(|other| other.id == *dep)
                     && !self.tasks[index + 1..].iter().any(|other| other.id == *dep)
                 {
-                    return Err(invalid());
+                    return Err(invalid(&format!(
+                        "task {} depends on unknown id {dep}",
+                        task.id
+                    )));
                 }
             }
             if self.tasks[..index].iter().any(|other| other.id == task.id) {
-                return Err(invalid());
+                return Err(invalid(&format!("duplicate task id {}", task.id)));
             }
         }
         if in_progress > 1 {
-            return Err(invalid());
+            return Err(invalid("at most one task may be in_progress"));
         }
         if has_cycle(&self.tasks) {
-            return Err(invalid());
+            return Err(invalid("task dependencies contain a cycle"));
         }
         Ok(())
     }
@@ -137,7 +147,28 @@ pub fn new_todo_id() -> Option<String> {
     Some(id)
 }
 
-fn is_todo_id(value: &str) -> bool {
+pub(crate) fn todo_file_revision(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Header {
+        format_version: u32,
+        kind: String,
+        revision: u64,
+        #[serde(default)]
+        tasks: Vec<serde_json::Value>,
+    }
+    let header: Header = serde_json::from_slice(bytes)
+        .map_err(|error| ConfigError::authority_rejection().with_detail(error.to_string()))?;
+    if header.format_version != TODO_FORMAT_VERSION || header.kind != TODO_KIND {
+        return Err(ConfigError::authority_rejection().with_detail("todo header mismatch"));
+    }
+    AuthorityRevision::new(header.revision)
+}
+
+#[must_use]
+/// Reports whether `value` is a canonical `todo-` plus 16 hex id.
+pub fn is_todo_id(value: &str) -> bool {
     value.len() == 5 + 16
         && value.starts_with("todo-")
         && value[5..]
@@ -228,22 +259,12 @@ pub fn read_todo_revision(
     let Some(bytes) = bytes else {
         return Ok(AuthorityRevision::ABSENT);
     };
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    #[allow(dead_code)]
-    struct Header {
-        format_version: u32,
-        kind: String,
-        revision: u64,
-        #[serde(default)]
-        tasks: Vec<serde_json::Value>,
+    match todo_file_revision(&bytes) {
+        Ok(revision) => Ok(revision),
+        // A corrupt or foreign file must not block `todo_write`. The replace
+        // path treats the same bytes as absent and overwrites them.
+        Err(_) => Ok(AuthorityRevision::ABSENT),
     }
-    let header: Header =
-        serde_json::from_slice(&bytes).map_err(|_| ConfigError::authority_rejection())?;
-    if header.format_version != TODO_FORMAT_VERSION || header.kind != TODO_KIND {
-        return Err(ConfigError::authority_rejection());
-    }
-    AuthorityRevision::new(header.revision)
 }
 
 /// Replaces one session's todo document under revision CAS.
@@ -267,24 +288,10 @@ pub fn replace_todo_document(
         crate::MAX_AUTHORITY_DOCUMENT_BYTES,
         |current| {
             let current_revision = match current {
-                Some(bytes) => {
-                    #[derive(Deserialize)]
-                    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-                    #[allow(dead_code)]
-                    struct Header {
-                        format_version: u32,
-                        kind: String,
-                        revision: u64,
-                        #[serde(default)]
-                        tasks: Vec<serde_json::Value>,
-                    }
-                    let header: Header = serde_json::from_slice(bytes)
-                        .map_err(|_| ConfigError::authority_rejection())?;
-                    if header.format_version != TODO_FORMAT_VERSION || header.kind != TODO_KIND {
-                        return Err(ConfigError::authority_rejection());
-                    }
-                    AuthorityRevision::new(header.revision)?
-                }
+                Some(bytes) => match todo_file_revision(bytes) {
+                    Ok(revision) => revision,
+                    Err(_) => AuthorityRevision::ABSENT,
+                },
                 None => AuthorityRevision::ABSENT,
             };
             if current_revision != expected_revision {

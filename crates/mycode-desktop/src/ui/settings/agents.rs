@@ -1,14 +1,16 @@
 //! The Agents settings page: delegation capacity and one card per subagent
-//! role with its thinking/provider/model dropdowns.
+//! role. Model and thinking are one picker, not three dropdowns.
 use gpui_kit::component::button::Button;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, div, px,
 };
 
-use super::widgets::{dropdown_field, row_header, settings_card, settings_row};
+use super::widgets::{row_header, settings_card, settings_row};
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
@@ -126,16 +128,6 @@ fn agent_role_card(
     let thinking_label = thinking.clone();
     let provider_label = provider.clone();
     let model_label = model.clone();
-    let mut provider_ids: Vec<String> = vec!["inherit".to_owned()];
-    provider_ids.extend(providers.iter().map(|(id, _)| id.clone()));
-    let mut models_for_provider: Vec<String> = vec!["inherit".to_owned()];
-    models_for_provider.extend(
-        providers
-            .iter()
-            .find(|(id, _)| *id == provider)
-            .map(|(_, models)| models.clone())
-            .unwrap_or_default(),
-    );
     let thinking_options = {
         let mut levels = vec!["inherit".to_owned()];
         levels.extend(crate::view_model::reasoning_levels_for(
@@ -186,78 +178,157 @@ fn agent_role_card(
                         }),
                 ),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(agent_choice_dropdown(
-                    &role,
-                    "thinking",
-                    "Thinking",
-                    &thinking_label,
-                    &thinking_options,
-                    open_field == Some("thinking"),
-                    cx,
-                ))
-                .child(agent_choice_dropdown(
-                    &role,
-                    "provider",
-                    "Provider",
-                    &provider_label,
-                    &provider_ids,
-                    open_field == Some("provider"),
-                    cx,
-                ))
-                .child(agent_choice_dropdown(
-                    &role,
-                    "model",
-                    "Model",
-                    &model_label,
-                    &models_for_provider,
-                    open_field == Some("model"),
-                    cx,
-                )),
-        )
+        .child(agent_route_picker(
+            &role,
+            &format!("{provider_label} \u{b7} {model_label} \u{b7} {thinking_label}"),
+            &thinking_options,
+            &thinking_label,
+            &providers,
+            open_field == Some("route"),
+            cx,
+        ))
         .into_any_element()
 }
 
-/// One Agents-page dropdown over the shared [`dropdown_field`] widget: the
-/// open flag lives in the shared subagent menu state and the pick routes to
-/// the role's route/thinking handler.
-#[allow(clippy::too_many_arguments)]
-fn agent_choice_dropdown(
+/// One route control: thinking chips and model rows in the same panel.
+fn agent_route_picker(
     role: &str,
-    field: &str,
-    label: &str,
     current: &str,
-    options: &[String],
+    thinking: &[String],
+    thinking_current: &str,
+    providers: &[(String, Vec<String>)],
     open: bool,
     cx: &Context<Workspace>,
 ) -> AnyElement {
+    let theme = cx.theme();
     let toggle_role = role.to_owned();
-    let toggle_field = field.to_owned();
-    dropdown_field(
-        &format!("agent-{role}-{field}"),
-        label,
-        None,
-        current,
-        options,
-        open,
-        move |workspace, open, cx| {
-            workspace.on_toggle_subagent_menu(&toggle_role, &toggle_field, open, cx)
-        },
-        {
+    div()
+        .id(format!("agent-route-{role}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .id(format!("agent-route-toggle-{role}"))
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .h(px(28.))
+                .rounded(px(3.))
+                .border_1()
+                .border_color(theme.border)
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.secondary))
+                .on_click({
+                    let role = toggle_role.clone();
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_toggle_subagent_menu(&role, "route", !open, cx);
+                    })
+                })
+                .child(div().text_sm().truncate().child(current.to_owned()))
+                .child(div().text_xs().opacity(0.5).child(if open {
+                    "\u{25b4}"
+                } else {
+                    "\u{25be}"
+                })),
+        )
+        .when(open, |this| {
             let role = role.to_owned();
-            let field = field.to_owned();
-            move |workspace, pick, cx| match field.as_str() {
-                "thinking" => workspace.on_set_subagent_thinking(&role, Some(pick.to_owned()), cx),
-                "provider" => {
-                    workspace.on_set_subagent_route(&role, Some(pick.to_owned()), None, cx)
+            this.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_2()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(div().flex().flex_row().flex_wrap().gap_1().children(
+                        thinking.iter().map(|level| {
+                            let picked = level.clone();
+                            let role = role.clone();
+                            let on = level == thinking_current;
+                            div()
+                                .id(format!("agent-think-{role}-{level}"))
+                                .px_2()
+                                .h(px(24.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(3.))
+                                .text_xs()
+                                .cursor_pointer()
+                                .border_1()
+                                .border_color(if on { theme.primary } else { theme.border })
+                                .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    workspace.on_set_subagent_thinking(
+                                        &role,
+                                        Some(picked.clone()),
+                                        cx,
+                                    );
+                                }))
+                                .child(level.clone())
+                        }),
+                    ))
+                    .child(agent_model_row(&role, "inherit", None, cx))
+                    .children(providers.iter().flat_map(|(provider, models)| {
+                        let mut rows = vec![
+                            div()
+                                .text_xs()
+                                .opacity(0.5)
+                                .pt_1()
+                                .child(provider.clone())
+                                .into_any_element(),
+                        ];
+                        rows.extend(models.iter().map(|model| {
+                            agent_model_row(&role, model, Some(provider.as_str()), cx)
+                        }));
+                        rows
+                    })),
+            )
+        })
+        .into_any_element()
+}
+
+fn agent_model_row(
+    role: &str,
+    model: &str,
+    provider: Option<&str>,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let role = role.to_owned();
+    let model = model.to_owned();
+    let provider = provider.map(str::to_owned);
+    div()
+        .id(format!(
+            "agent-model-{role}-{}-{model}",
+            provider.as_deref().unwrap_or("inherit")
+        ))
+        .h(px(26.))
+        .flex()
+        .items_center()
+        .px_2()
+        .rounded(px(3.))
+        .text_sm()
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.secondary))
+        .on_click({
+            let model = model.clone();
+            cx.listener(move |workspace, _, _, cx| {
+                if model == "inherit" {
+                    workspace.on_set_subagent_route(&role, Some("inherit".to_owned()), None, cx);
+                } else {
+                    workspace.on_set_subagent_route(
+                        &role,
+                        provider.clone(),
+                        Some(model.clone()),
+                        cx,
+                    );
                 }
-                _ => workspace.on_set_subagent_route(&role, None, Some(pick.to_owned()), cx),
-            }
-        },
-        cx,
-    )
+            })
+        })
+        .child(model)
+        .into_any_element()
 }

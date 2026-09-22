@@ -244,28 +244,12 @@ impl Workspace {
         self.dispatch(BridgeCommand::CreateSession, cx);
     }
 
-    /// Switches the sidebar's active project and binds the open chat to it.
+    /// Filters the sidebar to one project. Chats stay on the project they
+    /// were opened in; switching must not drag every session into This Project.
     pub(crate) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
         self.apply_action(DesktopAction::ActiveProjectChanged(project.clone()), cx);
-        if let Some(project) = project {
-            if let Some(session_id) = self.vm.active.as_ref().map(|c| c.session_id.clone()) {
-                self.apply_action(
-                    DesktopAction::SessionProjectBound {
-                        session_id: session_id.clone(),
-                        project: project.clone(),
-                    },
-                    cx,
-                );
-                self.dispatch(
-                    BridgeCommand::SetProjectDir {
-                        session_id,
-                        path: Some(project.clone()),
-                    },
-                    cx,
-                );
-            }
-            self.apply_action(DesktopAction::UnboundSessionsAssigned(project), cx);
+        if project.is_some() {
             self.refresh_skills(cx);
         }
         self.persist_ui_state(cx);

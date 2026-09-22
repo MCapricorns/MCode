@@ -390,10 +390,6 @@ impl Workspace {
         self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
     }
 
-    pub(crate) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
-    }
-
     pub(crate) fn on_toggle_shell_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ShellKindMenuToggled(open), cx);
     }
@@ -414,6 +410,18 @@ impl Workspace {
     /// Picks one model of the selected provider. The reducer appends an
     /// unknown model to the provider row (so the next turn can use it) or
     /// refuses the pick at the per-provider cap.
+    pub(crate) fn on_select_model_on(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.vm.selected_provider.as_deref() != Some(provider_id) {
+            self.on_select_provider(provider_id, cx);
+        }
+        self.on_select_model(model_id, cx);
+    }
+
     pub(crate) fn on_select_model(&mut self, model_id: &str, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ModelSelected(model_id.to_owned()), cx);
         if self

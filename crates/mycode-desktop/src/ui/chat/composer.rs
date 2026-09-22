@@ -28,7 +28,6 @@ pub(super) fn render_composer(
         composer.update(cx, |state, cx| state.set_value(text, window, cx));
     }
     let model_label: SharedString = model_picker_label(workspace.vm()).into();
-    let reasoning_label: SharedString = reasoning_chip_label(workspace.vm()).into();
     let has_session = workspace.vm().active.is_some();
     let sending = workspace.vm().sending;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
@@ -59,14 +58,6 @@ pub(super) fn render_composer(
         .unwrap_or_else(|| "Set folder".to_owned())
         .into();
     let has_project = session_project.is_some();
-    // Thinking effort rides the provider wire; hide the chip when no
-    // provider is enabled or the catalog model does not reason.
-    let show_reasoning_chip = workspace
-        .vm()
-        .settings
-        .as_ref()
-        .is_some_and(|settings| settings.providers.iter().any(|provider| provider.enabled))
-        && selected_model_supports_reasoning(workspace.vm());
     let project_icon = if has_project {
         IconName::FolderOpen
     } else {
@@ -144,9 +135,8 @@ pub(super) fn render_composer(
                             "model",
                             IconName::Bot,
                             model_label,
-                            // `provider · model` is the longest chip label and
-                            // grows with the catalog; clip it here so it never
-                            // displaces the send button.
+                            // `provider · model · thinking` is the longest chip
+                            // label; clip it so it never displaces send.
                             true,
                             |workspace, _window, cx| {
                                 let open = !workspace.vm().model_menu_open;
@@ -154,19 +144,6 @@ pub(super) fn render_composer(
                             },
                             cx,
                         ))
-                        .when(show_reasoning_chip, |this| {
-                            this.child(composer_chip(
-                                "reasoning",
-                                IconName::Sparkles,
-                                reasoning_label,
-                                false,
-                                |workspace, _window, cx| {
-                                    let open = !workspace.vm().reasoning_menu_open;
-                                    workspace.on_toggle_reasoning_menu(open, cx);
-                                },
-                                cx,
-                            ))
-                        })
                         .child(div().flex_1().min_w_0())
                         .when(sending && has_draft, |this| {
                             this.child(
@@ -338,10 +315,6 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
 }
 
 /// Composer chip label for the thinking-effort submenu.
-fn reasoning_chip_label(vm: &WorkspaceState) -> String {
-    format!("Thinking \u{b7} {}", selected_reasoning_level(vm))
-}
-
 fn model_picker_label(vm: &WorkspaceState) -> String {
     let provider = vm
         .selected_provider
@@ -353,8 +326,13 @@ fn model_picker_label(vm: &WorkspaceState) -> String {
                 .unwrap_or_else(|| id.to_owned())
         })
         .unwrap_or_else(|| "Model".to_owned());
-    match vm.selected_model.as_deref() {
+    let base = match vm.selected_model.as_deref() {
         Some(model) => format!("{provider} \u{b7} {model}"),
         None => provider,
+    };
+    if selected_model_supports_reasoning(vm) {
+        format!("{base} \u{b7} {}", selected_reasoning_level(vm))
+    } else {
+        base
     }
 }

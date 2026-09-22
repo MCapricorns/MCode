@@ -71,6 +71,25 @@ impl Workspace {
                 }
                 DesktopAction::Failed(message)
             }
+            BridgeEvent::UsageSnapshot {
+                session_id,
+                model,
+                input,
+                output,
+                cache,
+                elapsed_ms,
+            } => {
+                if !matches_active(&session_id) {
+                    return;
+                }
+                DesktopAction::UsageSnapshot {
+                    model,
+                    input,
+                    output,
+                    cache,
+                    elapsed_ms,
+                }
+            }
             BridgeEvent::UsageRecorded {
                 session_id,
                 provider,

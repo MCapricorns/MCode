@@ -7,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::{ContentBlock, ReasoningLevel, TextBlock, ThinkingBlock, ToolCall};
+use mycode_core::{ContentBlock, ReasoningLevel, TextBlock, ThinkingBlock, ToolCall, Usage};
 
 /// Applies the requested reasoning effort to an OpenAI-style body.
 pub(crate) fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
@@ -24,6 +24,80 @@ pub(crate) fn apply_reasoning_effort(body: &mut Value, level: ReasoningLevel) {
                 body["reasoning_effort"] = json!(token);
             }
         }
+    }
+}
+
+/// Reads a token count from the first present alias.
+///
+/// Gateways disagree on names (`prompt_tokens` vs `input_tokens`) and on
+/// whether the number is a JSON number or a string. A missing field is 0.
+pub(crate) fn token_count(value: &Value, keys: &[&str]) -> u64 {
+    for key in keys {
+        let Some(field) = value.get(*key) else {
+            continue;
+        };
+        if let Some(count) = field.as_u64() {
+            return count;
+        }
+        if let Some(count) = field.as_i64().filter(|count| *count >= 0) {
+            return count as u64;
+        }
+        if let Some(count) = field
+            .as_f64()
+            .filter(|count| count.is_finite() && *count >= 0.0)
+        {
+            return count as u64;
+        }
+        if let Some(text) = field.as_str()
+            && let Ok(count) = text.trim().parse::<u64>()
+        {
+            return count;
+        }
+    }
+    0
+}
+
+/// Builds usage from either OpenAI or Responses field names.
+pub(crate) fn usage_from_value(usage: &Value) -> Usage {
+    let cache = token_count(
+        usage,
+        &[
+            "cache_read_tokens",
+            "cache_read_input_tokens",
+            "cached_tokens",
+        ],
+    )
+    .max(
+        usage
+            .get("prompt_tokens_details")
+            .or_else(|| usage.get("input_tokens_details"))
+            .map(|details| token_count(details, &["cached_tokens", "cache_read_tokens"]))
+            .unwrap_or(0),
+    );
+    Usage {
+        input_tokens: token_count(usage, &["input_tokens", "prompt_tokens", "input"]),
+        output_tokens: token_count(usage, &["output_tokens", "completion_tokens", "output"]),
+        cache_read_tokens: (cache > 0).then_some(cache),
+    }
+}
+
+/// Keeps a non-zero count when a later partial usage object reports 0.
+pub(crate) fn merge_usage(previous: Option<Usage>, next: Usage) -> Usage {
+    let Some(previous) = previous else {
+        return next;
+    };
+    Usage {
+        input_tokens: if next.input_tokens > 0 {
+            next.input_tokens
+        } else {
+            previous.input_tokens
+        },
+        output_tokens: if next.output_tokens > 0 {
+            next.output_tokens
+        } else {
+            previous.output_tokens
+        },
+        cache_read_tokens: next.cache_read_tokens.or(previous.cache_read_tokens),
     }
 }
 

@@ -76,6 +76,10 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             for session in &mut state.sessions {
                 session.active = session.session_id == session_id;
             }
+            if switched {
+                rebuild_session_usage(state);
+                state.live_turn = None;
+            }
         }
         DesktopAction::ComposerChanged(text) => {
             let bounded: String = text.chars().take(super::MAX_COMPOSER_CHARS).collect();
@@ -184,6 +188,21 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ResourcesLoaded(files) => state.resources = files,
         DesktopAction::SkillsLoaded(skills) => state.skills = skills,
+        DesktopAction::UsageSnapshot {
+            model,
+            input,
+            output,
+            cache,
+            elapsed_ms,
+        } => {
+            state.live_turn = Some(TurnStats {
+                model,
+                input,
+                output,
+                cache,
+                elapsed_ms,
+            });
+        }
         DesktopAction::UsageRecorded {
             provider,
             model,
@@ -218,6 +237,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             row.output = row.output.saturating_add(output);
             row.cache = row.cache.saturating_add(cache.unwrap_or_default());
             row.requests = row.requests.saturating_add(1);
+            state.live_turn = None;
         }
         DesktopAction::TodoUpdated(tasks) => {
             state.todo_rows = tasks
@@ -271,6 +291,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.streaming = None;
             }
             state.live_jobs.clear();
+            state.live_turn = None;
             state.sending = false;
         }
         DesktopAction::ChatFailed(message) => {
@@ -283,6 +304,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.error = Some(message);
             }
             state.live_jobs.clear();
+            state.live_turn = None;
             state.sending = false;
         }
         DesktopAction::Failed(message) => {
@@ -605,7 +627,6 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsReasoningChanged(level) => {
             state.reasoning_menu_open = false;
-            state.model_menu_open = false;
             if state
                 .settings
                 .as_ref()
@@ -714,6 +735,50 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.shell_kind_menu_open = false;
     state.mention = None;
     was_open
+}
+
+fn rebuild_session_usage(state: &mut WorkspaceState) {
+    let Some(entries) = state
+        .active
+        .as_ref()
+        .map(|conversation| &conversation.entries)
+    else {
+        state.usage_totals.clear();
+        state.last_turn = None;
+        return;
+    };
+    let mut totals: Vec<UsageTotal> = Vec::new();
+    let mut last = None;
+    for entry in entries {
+        if entry.kind != EntryKind::Usage {
+            continue;
+        }
+        let Some((model, input, output)) = super::parse_usage_text(&entry.text) else {
+            continue;
+        };
+        if let Some(row) = totals.iter_mut().find(|row| row.key == model) {
+            row.input = row.input.saturating_add(input);
+            row.output = row.output.saturating_add(output);
+            row.requests = row.requests.saturating_add(1);
+        } else {
+            totals.push(UsageTotal {
+                key: model.clone(),
+                input,
+                output,
+                requests: 1,
+                ..UsageTotal::default()
+            });
+        }
+        last = Some(TurnStats {
+            model,
+            input,
+            output,
+            cache: None,
+            elapsed_ms: 0,
+        });
+    }
+    state.usage_totals = totals;
+    state.last_turn = last;
 }
 
 fn assign_unbound_sessions(state: &mut WorkspaceState, project: &str) {
@@ -931,6 +996,8 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         call_id: call_id.to_owned(),
         role: role.to_owned(),
         label: String::new(),
+        prompt: String::new(),
+        path: String::new(),
         log: vec![step.clone()],
         step,
         done,
@@ -959,8 +1026,21 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
                     job.label = detail.to_owned();
                 }
             }
+            "prompt" => {
+                upsert_live_job(state, call_id, role, "starting", false);
+                if let Some(job) = live_job_mut(state, call_id) {
+                    job.prompt = detail.chars().take(8_000).collect();
+                }
+            }
+            "path" => {
+                upsert_live_job(state, call_id, role, "starting", false);
+                if let Some(job) = live_job_mut(state, call_id) {
+                    job.path = detail.to_owned();
+                }
+            }
             "done" => upsert_live_job(state, call_id, role, "done", true),
-            "tool" | "step" => upsert_live_job(state, call_id, role, detail, false),
+            "tool" => upsert_live_job(state, call_id, role, &format!("running {detail}"), false),
+            "step" => upsert_live_job(state, call_id, role, detail, false),
             other => upsert_live_job(state, call_id, role, other, false),
         }
         return;

@@ -48,6 +48,10 @@ pub struct LiveJob {
     pub role: String,
     /// Human-facing brief from the parent turn.
     pub label: String,
+    /// Full task brief handed to the subagent.
+    pub prompt: String,
+    /// Working directory for the child, when known.
+    pub path: String,
     /// Latest nested tool or progress line.
     pub step: String,
     /// Recent progress lines for the detail window.
@@ -122,6 +126,26 @@ pub struct UsageTotal {
 #[must_use]
 pub fn cache_percent(cache: u64, input: u64) -> Option<u64> {
     (input > 0 && cache > 0).then(|| (cache.min(input) * 100) / input)
+}
+
+/// Whether a `provider/model` usage key belongs to `model`.
+#[must_use]
+pub fn usage_key_matches(key: &str, model: &str) -> bool {
+    key == model || key.rsplit_once('/').is_some_and(|(_, id)| id == model)
+}
+
+/// Parses a projected usage line: `model: N in / M out`.
+#[must_use]
+pub fn parse_usage_text(text: &str) -> Option<(String, u64, u64)> {
+    let (model, rest) = text.split_once(':')?;
+    let rest = rest.trim();
+    let (input, rest) = rest.split_once(" in / ")?;
+    let output = rest.split_whitespace().next()?;
+    Some((
+        model.trim().to_owned(),
+        input.trim().parse().ok()?,
+        output.trim().parse().ok()?,
+    ))
 }
 
 /// Metrics for one completed model turn.
@@ -420,8 +444,11 @@ pub struct WorkspaceState {
     pub transcript_extra: usize,
     /// Cumulative usage per provider/model, in first-seen order.
     pub usage_totals: Vec<UsageTotal>,
-    /// Most recent turn's timing and token metrics, when usage is enabled.
+    /// Most recent committed turn's timing and token metrics.
     pub last_turn: Option<TurnStats>,
+    /// Token counts for the turn that is still running, when the provider
+    /// has reported any. Cleared when the turn commits or fails.
+    pub live_turn: Option<TurnStats>,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,
     /// In-flight Copilot device-flow sign-in, when any.
@@ -578,6 +605,14 @@ pub enum DesktopAction {
     CopilotSignInStarted(CopilotSignIn),
     /// The Copilot device flow finished; `Err` keeps the panel with a message.
     CopilotSignInFinished(Result<(), String>),
+    /// Live token counts for the turn that is still running.
+    UsageSnapshot {
+        model: String,
+        input: u64,
+        output: u64,
+        cache: Option<u64>,
+        elapsed_ms: u64,
+    },
     /// A durable usage record arrived.
     UsageRecorded {
         provider: String,

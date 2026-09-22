@@ -112,9 +112,6 @@ pub(super) fn render_chat(
         .when(workspace.vm().model_menu_open, |this| {
             this.child(menus::render_model_menu(workspace, cx))
         })
-        .when(workspace.vm().reasoning_menu_open, |this| {
-            this.child(menus::render_reasoning_menu(workspace, cx))
-        })
         .when(
             workspace
                 .vm()
@@ -159,6 +156,11 @@ fn collect_transcript_items(entries: &[ConversationEntry]) -> Vec<TranscriptItem
                 call: entry,
                 result,
             });
+        } else if entry.kind == EntryKind::AssistantMessage
+            && entry.text.trim().is_empty()
+            && entry.thinking.trim().is_empty()
+        {
+            // A step that only issued tool calls. The tool rows carry it.
         } else if entry.kind == EntryKind::ToolResult
             && entry.call_id.is_some()
             && entries[..index]

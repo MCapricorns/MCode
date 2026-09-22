@@ -440,12 +440,30 @@ impl HeadWriter {
         let mut head = self.head.lock().await;
         let reservation = self
             .service
-            .reserve_event(&self.session, &self.branch, kind, ledger_call, payload)
+            .reserve_event(
+                &self.session,
+                &self.branch,
+                kind,
+                ledger_call.clone(),
+                payload,
+            )
             .await?;
-        let appended = self
+        let appended = match self
             .service
             .append(&self.session, &self.branch, &head, &reservation)
-            .await?;
+            .await
+        {
+            Err(SessionError::Conflict(conflict)) => {
+                let reservation = self
+                    .service
+                    .reserve_event(&self.session, &self.branch, kind, ledger_call, payload)
+                    .await?;
+                self.service
+                    .append(&self.session, &self.branch, &conflict.actual, &reservation)
+                    .await?
+            }
+            other => other?,
+        };
         let event_id = match appended.head {
             HeadStamp::Event(event) => event,
             HeadStamp::Empty => return Err(SessionError::Corrupt),

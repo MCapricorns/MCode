@@ -116,8 +116,8 @@ pub use subagents::{
 };
 pub use todos::{
     MAX_TODO_CONTENT_CHARS, MAX_TODO_DEPS, MAX_TODO_TASKS, TODO_FORMAT_VERSION, TODO_KIND,
-    TodoDocument, TodoStatus, TodoTask, new_todo_id, read_todo_document, read_todo_revision,
-    replace_todo_document,
+    TodoDocument, TodoStatus, TodoTask, is_todo_id, new_todo_id, read_todo_document,
+    read_todo_revision, replace_todo_document,
 };
 #[doc(inline)]
 pub use transaction_id::TransactionId;

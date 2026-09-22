@@ -482,6 +482,14 @@ Use `task` for one bounded subagent role. Keep small work in main.",
                     // would bill a ten-step turn as one.
                     if let Some(usage) = message.usage.as_ref() {
                         turn_usage.fold(usage);
+                        let _ = pump_events.send(BridgeEvent::UsageSnapshot {
+                            session_id: pump_session_id.clone(),
+                            model: usage_model.clone(),
+                            input: turn_usage.input,
+                            output: turn_usage.output,
+                            cache: turn_usage.cache,
+                            elapsed_ms: turn_started.elapsed().as_millis() as u64,
+                        });
                     }
                     // A step that requests tools is not the end of the turn.
                     // Commit it now so the ledger and the transcript keep the

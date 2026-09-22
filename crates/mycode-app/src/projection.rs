@@ -140,12 +140,8 @@ pub(crate) fn project_assistant_from(event_id: &str, payload: &[u8]) -> Conversa
                     }
                     thinking.push_str(&block.text);
                 }
-                ContentBlock::ToolCall(call) => {
-                    if !text.is_empty() {
-                        text.push('\n');
-                    }
-                    text.push_str(&format!("tool call {}", call.name));
-                }
+                // Tool calls already render as their own ledger rows.
+                ContentBlock::ToolCall(_) => {}
                 _ => {}
             }
         }

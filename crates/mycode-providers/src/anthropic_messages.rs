@@ -14,6 +14,7 @@ use mycode_core::{
 use mycode_core::{ProviderError, ProviderErrorKind, ReasoningLevel, Request, StreamEvent};
 
 use crate::driver::FrameReducer;
+use crate::wire_common::{merge_usage, usage_from_value};
 
 /// Output ceiling sent with every request; the Messages API requires it.
 pub const MAX_TOKENS_DEFAULT: u64 = 4096;
@@ -273,9 +274,18 @@ impl FrameReducer for MessagesReducer {
         let event_type = event["type"].as_str().unwrap_or_default();
         match event_type {
             "message_start" => {
-                let usage = &event["message"]["usage"];
-                self.input_tokens = usage["input_tokens"].as_u64().unwrap_or_default();
-                self.cache_read_tokens = usage["cache_read_input_tokens"].as_u64();
+                let parsed = usage_from_value(&event["message"]["usage"]);
+                let merged = merge_usage(
+                    Some(Usage {
+                        input_tokens: self.input_tokens,
+                        output_tokens: self.output_tokens,
+                        cache_read_tokens: self.cache_read_tokens,
+                    }),
+                    parsed,
+                );
+                self.input_tokens = merged.input_tokens;
+                self.output_tokens = merged.output_tokens;
+                self.cache_read_tokens = merged.cache_read_tokens;
             }
             "content_block_start" => {
                 let index = event["index"].as_u64().unwrap_or_default() as usize;
@@ -388,10 +398,19 @@ impl FrameReducer for MessagesReducer {
                         _ => StopReason::Stop,
                     });
                 }
-                if let Some(usage) = event["usage"].as_object() {
-                    self.output_tokens = usage["output_tokens"]
-                        .as_u64()
-                        .unwrap_or(self.output_tokens);
+                if event.get("usage").is_some() {
+                    let parsed = usage_from_value(&event["usage"]);
+                    let merged = merge_usage(
+                        Some(Usage {
+                            input_tokens: self.input_tokens,
+                            output_tokens: self.output_tokens,
+                            cache_read_tokens: self.cache_read_tokens,
+                        }),
+                        parsed,
+                    );
+                    self.input_tokens = merged.input_tokens;
+                    self.output_tokens = merged.output_tokens;
+                    self.cache_read_tokens = merged.cache_read_tokens;
                 }
             }
             "message_stop" => {

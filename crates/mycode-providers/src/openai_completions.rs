@@ -10,7 +10,9 @@ use mycode_core::{ContentBlock, Message, StopReason, ToolSpec, Usage};
 use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
-use crate::wire_common::{apply_reasoning_effort, assemble_blocks, join_text};
+use crate::wire_common::{
+    apply_reasoning_effort, assemble_blocks, join_text, merge_usage, usage_from_value,
+};
 
 /// Concatenation separator for multi-part system prompts.
 const SYSTEM_JOIN: &str = "\n\n";
@@ -260,15 +262,8 @@ impl FrameReducer for CompletionsReducer {
                 });
             }
         }
-        if let Some(usage) = chunk["usage"].as_object() {
-            self.usage = Some(Usage {
-                input_tokens: usage["prompt_tokens"].as_u64().unwrap_or_default(),
-                cache_read_tokens: usage
-                    .get("prompt_tokens_details")
-                    .and_then(|details| details.get("cached_tokens"))
-                    .and_then(serde_json::Value::as_u64),
-                output_tokens: usage["completion_tokens"].as_u64().unwrap_or_default(),
-            });
+        if let Some(usage) = chunk.get("usage").filter(|usage| !usage.is_null()) {
+            self.usage = Some(merge_usage(self.usage, usage_from_value(usage)));
         }
         events
     }
@@ -466,6 +461,31 @@ mod tests {
         };
         assert_eq!(call.id, "call-9");
         assert_eq!(call.arguments, json!({"path": 1}));
+    }
+
+    #[test]
+    fn usage_accepts_responses_names_and_ignores_a_later_zero() {
+        let mut reducer = CompletionsReducer::new();
+        let _ = reducer.feed(
+            &json!({"choices": [{"delta": {}}], "usage": {"input_tokens": "11", "output_tokens": 2}})
+                .to_string(),
+        );
+        let _ = reducer.feed(
+            &json!({"choices": [], "usage": {"prompt_tokens": 0, "completion_tokens": 0}})
+                .to_string(),
+        );
+        let events = reducer.feed("[DONE]");
+        let StreamEvent::Done { message } = events.last().expect("terminal") else {
+            panic!("done required");
+        };
+        assert_eq!(
+            message.usage,
+            Some(Usage {
+                input_tokens: 11,
+                output_tokens: 2,
+                cache_read_tokens: None,
+            })
+        );
     }
 
     #[test]

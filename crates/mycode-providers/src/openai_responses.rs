@@ -11,7 +11,9 @@ use mycode_core::{AssistantMessage, ContentBlock, Message, StopReason, ToolSpec,
 use mycode_core::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
-use crate::wire_common::{apply_reasoning_effort, assemble_blocks, join_text};
+use crate::wire_common::{
+    apply_reasoning_effort, assemble_blocks, join_text, merge_usage, usage_from_value,
+};
 
 /// Converts one provider-neutral request into a Responses body.
 #[must_use]
@@ -195,11 +197,7 @@ impl FrameReducer for ResponsesReducer {
             }
             "response.completed" | "response.incomplete" => {
                 let usage = &event["response"]["usage"];
-                self.usage = Some(Usage {
-                    input_tokens: usage["input_tokens"].as_u64().unwrap_or_default(),
-                    cache_read_tokens: usage["input_tokens_details"]["cached_tokens"].as_u64(),
-                    output_tokens: usage["output_tokens"].as_u64().unwrap_or_default(),
-                });
+                self.usage = Some(merge_usage(self.usage, usage_from_value(usage)));
                 return vec![self.assemble()];
             }
             "response.failed" | "error" => {

@@ -506,7 +506,6 @@ impl Workspace {
         let entry = next.role_mut(role);
         entry.thinking = thinking.filter(|level| level != "inherit" && level != "default");
         self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
-        self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
     }
 
     pub(crate) fn on_set_subagent_route(
@@ -562,7 +561,6 @@ impl Workspace {
             }
         }
         self.apply_action(DesktopAction::SettingsSubagentsChanged(next), cx);
-        self.apply_action(DesktopAction::SubagentMenuToggled(None), cx);
     }
 
     // ---- platform shell ----

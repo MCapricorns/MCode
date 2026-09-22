@@ -265,6 +265,7 @@ impl mycode_tools::builtin::TaskHost for BridgeTaskHost {
         }
         let isolation = resolve_isolation(&role, request.isolation.as_deref());
         let _ = progress.progress(format!("task|{}|queued|{}", role.name, request.description));
+        let _ = progress.progress(format!("task|{}|prompt|{}", role.name, request.prompt));
         let permit = tokio::select! {
             permit = self.slots.acquire() => permit.map_err(|_| fail("task slots closed".to_owned()))?,
             _ = cancel.cancelled() => return Err(fail("task cancelled".to_owned())),
@@ -327,17 +328,10 @@ impl BridgeTaskHost {
             run_session,
         ));
 
+        // A parent interrupt must not kill the child. The next main turn
+        // decides whether to wait, re-dispatch, or stop.
         let child_cancel = CancellationToken::new();
-        let link = {
-            let child_cancel = child_cancel.clone();
-            let parent = cancel.clone();
-            tokio::spawn(async move {
-                tokio::select! {
-                    _ = parent.cancelled() => child_cancel.cancel(),
-                    _ = child_cancel.cancelled() => {}
-                }
-            })
-        };
+        let _parent_cancel = cancel;
         let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
         let role_name = role.name.clone();
         let progress_sink = progress.clone();
@@ -355,10 +349,8 @@ impl BridgeTaskHost {
             }
         });
 
-        let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
-            .with_cancel(child_cancel.clone())
-            .with_events(event_tx)
-            .with_cwd(run_dir);
+        let path = run_dir.display().to_string();
+        let _ = progress.progress(format!("task|{}|path|{path}", role.name));
         let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
         system.push_str("\n\n# Role: ");
         system.push_str(&role.name);
@@ -374,34 +366,48 @@ impl BridgeTaskHost {
         }
         let mut agent = Agent::new(config);
         let prompt = Message::User(mycode_core::UserMessage::text(request.prompt.clone()));
-        let outcome = tokio::time::timeout(SUBAGENT_TIMEOUT, agent.prompt(prompt, &env)).await;
-        link.abort();
-        forwarder.abort();
-        match outcome {
-            Ok(Ok(_)) => (),
-            Ok(Err(error)) => return Err(fail(format!("subagent failed: {error}"))),
-            Err(_) => {
-                child_cancel.cancel();
-                return Err(fail("subagent timed out".to_owned()));
-            }
-        };
-        let answer = agent
-            .state()
-            .messages()
-            .iter()
-            .rev()
-            .find_map(|message| match message {
-                Message::Assistant(assistant) => {
-                    let text = assistant.text();
-                    (!text.trim().is_empty()).then_some(text)
+        let role_name = role.name.clone();
+        let detached_path = path.clone();
+        let run = tokio::spawn(async move {
+            let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
+                .with_cancel(child_cancel.clone())
+                .with_events(event_tx)
+                .with_cwd(run_dir);
+            let outcome = tokio::time::timeout(SUBAGENT_TIMEOUT, agent.prompt(prompt, &env)).await;
+            forwarder.abort();
+            match outcome {
+                Ok(Ok(_)) => (),
+                Ok(Err(error)) => return Err(fail(format!("subagent failed: {error}"))),
+                Err(_) => {
+                    child_cancel.cancel();
+                    return Err(fail("subagent timed out".to_owned()));
                 }
-                _ => None,
-            })
-            .unwrap_or_default();
-        if answer.trim().is_empty() {
-            return Err(fail("subagent returned no answer".to_owned()));
+            };
+            let answer = agent
+                .state()
+                .messages()
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    Message::Assistant(assistant) => {
+                        let text = assistant.text();
+                        (!text.trim().is_empty()).then_some(text)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if answer.trim().is_empty() {
+                return Err(fail("subagent returned no answer".to_owned()));
+            }
+            Ok(answer)
+        });
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Ok(format!(
+                "subagent {role_name} is still running at {detached_path}. The parent interrupt did not stop it."
+            )),
+            joined = run => joined.unwrap_or_else(|error| Err(fail(format!("subagent task failed: {error}")))),
         }
-        Ok(answer)
     }
 
     /// Resolves a per-role provider/model override, or inherits the turn.
