@@ -2,6 +2,20 @@
 
 显著变化从 `0.4.0` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
 
+## [0.4.2] - 2026-09-22
+
+### Changed
+
+- 窗口改称 MYCode Harness。整窗是同一套半透明磨砂，标题栏的 DAY/NIGHT 可以直接切换。
+- 去掉 TAPE 条和不会消失的整行错误横幅。提示改到右下角，三秒后消失。
+- About 里可以手动检查更新，并写上作者 MaMy 与感谢名单。
+- 一个会话只属于一个文件夹。切换项目或拖入另一个文件夹时，正在干活的会话留在原目录，新文件夹用自己的会话。
+
+### Fixed
+
+- Windows 上 `exec` / `shell` 的输出在控制台代码页不是系统 ANSI/OEM 页时，仍按 OEM 再 ANSI 解码，中文不再变成替换字符。
+- 对话栏铺满中间列，随窗口缩放，不再留出两侧空白。
+
 ## [0.4.1] - 2026-09-22
 
 ### Changed
@@ -42,5 +56,6 @@
 - 最近项目的删除会立刻从列表消失，相近路径不再抢同一个点击目标。
 - `edit` 的结果按 diff 预览增删行；`grep` / `find` 的命中逐行展开，不再收成一块截断文本。
 
+[0.4.2]: https://github.com/MCapricorns/MCode/releases/tag/v0.4.2
 [0.4.1]: https://github.com/MCapricorns/MCode/releases/tag/v0.4.1
 [0.4.0]: https://github.com/MCapricorns/MCode/releases/tag/v0.4.0
