@@ -122,9 +122,11 @@ where
 
 /// Decode captured process text.
 ///
-/// Precedence: byte-order marks, strict UTF-8, the active console output
-/// code page (Windows child processes such as PowerShell emit the console
-/// code page when their streams are redirected), then lossy UTF-8.
+/// Precedence: byte-order marks, strict UTF-8, then Windows legacy pages.
+/// A GUI host often has no console, so `GetConsoleOutputCP` is 0 or UTF-8
+/// while `cmd` / `dir` still write the OEM page (GBK on Chinese Windows).
+/// Redirected pipes are bytes, not a console, so the OEM page is tried
+/// before the ANSI page and the console output page.
 pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
     if let Some(payload) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
         return String::from_utf8_lossy(payload).into_owned();
@@ -144,14 +146,37 @@ pub(crate) fn decode_captured_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Decodes bytes in the machine's console output code page when that page is
-/// not UTF-8 already.
+/// Decodes bytes with the OEM page, then the ANSI page, then the console
+/// output page. UTF-8 and page 0 are skipped; the first page that converts
+/// wins.
 #[cfg(windows)]
 fn decode_console_codepage(bytes: &[u8]) -> Option<String> {
-    // SAFETY: GetConsoleOutputCP reads a process-global value; no handles
+    // SAFETY: these queries read process-global code-page ids. No handles
     // or buffers are involved.
-    let codepage = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
-    decode_multibyte(bytes, codepage)
+    let oem = unsafe { windows_sys::Win32::Globalization::GetOEMCP() };
+    let ansi = unsafe { windows_sys::Win32::Globalization::GetACP() };
+    let console = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+    decode_legacy_pages(bytes, &[oem, ansi, console])
+}
+
+/// Tries each code page in order, skipping UTF-8 and duplicates.
+#[cfg(windows)]
+fn decode_legacy_pages(bytes: &[u8], pages: &[u32]) -> Option<String> {
+    let mut seen = [0_u32; 4];
+    let mut count = 0_usize;
+    for &page in pages {
+        if page == 0 || page == 65001 || seen[..count].contains(&page) {
+            continue;
+        }
+        if count < seen.len() {
+            seen[count] = page;
+            count += 1;
+        }
+        if let Some(text) = decode_multibyte(bytes, page) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 #[cfg(not(windows))]
@@ -228,17 +253,27 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn console_code_page_decodes_legacy_bytes_only_as_fallback() {
+    fn oem_or_ansi_page_decodes_gbk_when_the_system_page_is_936() {
         let gbk = [0xd6, 0xd0, 0xce, 0xc4];
-        // SAFETY: test reads the process console output code page only.
-        let console = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+        // SAFETY: tests read process-global code-page ids only.
+        let oem = unsafe { windows_sys::Win32::Globalization::GetOEMCP() };
+        let ansi = unsafe { windows_sys::Win32::Globalization::GetACP() };
         let decoded = decode_captured_text(&gbk);
-        if console == 936 {
-            assert_eq!(decoded, "中文", "GBK console output must decode");
+        if oem == 936 || ansi == 936 {
+            assert_eq!(decoded, "中文", "GBK dir output must decode");
         } else {
             assert_ne!(decoded, "中文");
-            assert!(decoded.contains('\u{fffd}'));
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn utf8_console_page_still_falls_through_to_oem() {
+        let gbk = [0xd6, 0xd0, 0xce, 0xc4];
+        assert_eq!(
+            decode_legacy_pages(&gbk, &[65001, 936]),
+            Some("中文".to_owned())
+        );
     }
 
     #[cfg(windows)]
