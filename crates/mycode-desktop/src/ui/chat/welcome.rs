@@ -96,8 +96,9 @@ pub(super) fn render_welcome(
                 .id("welcome-actions")
                 .flex()
                 .flex_row()
+                .items_center()
                 .gap_2()
-                .mt_2()
+                .mt_3()
                 .child(
                     welcome_action(
                         "welcome-open-project",
@@ -133,10 +134,10 @@ pub(super) fn render_welcome(
                     .flex_col()
                     .gap_1()
                     .p_2()
-                    .rounded(px(3.))
+                    .rounded(skin::radius_card())
                     .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.sidebar)
+                    .border_color(skin::glass_border(theme))
+                    .bg(skin::frost_card(theme))
                     .child(
                         div()
                             .text_xs()
@@ -157,9 +158,9 @@ pub(super) fn render_welcome(
                             .gap_2()
                             .px_2()
                             .py(px(7.))
-                            .rounded(px(3.))
+                            .rounded(skin::radius_control())
                             .cursor_pointer()
-                            .hover(|this| this.bg(theme.secondary))
+                            .hover(|this| this.bg(skin::frost_hover(theme)))
                             .on_click({
                                 let project = project.clone();
                                 cx.listener(move |workspace, _, _, cx| {
@@ -216,46 +217,14 @@ fn welcome_action(
     emphasized: bool,
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let fill = if emphasized {
-        theme.primary
-    } else {
-        theme.secondary_active
-    };
     let ink = if emphasized {
-        theme.primary_foreground
-    } else {
         theme.foreground
-    };
-    let hover = if emphasized {
-        theme.primary_hover
     } else {
-        theme.secondary_hover
+        theme.muted_foreground
     };
-    let border = if emphasized {
-        theme.primary
-    } else {
-        theme.border
-    };
-    div()
-        .id(id)
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .px_3()
-        .py(px(7.))
-        .rounded(px(8.))
-        .border_1()
-        .border_color(border)
-        .bg(fill)
+    skin::glass_button(id, emphasized, theme)
+        .min_w(px(176.))
         .text_color(ink)
-        .text_sm()
-        .cursor_pointer()
-        .hover(move |style| {
-            style
-                .bg(hover)
-                .border_color(if emphasized { hover } else { border })
-        })
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))
         .child(label)
 }

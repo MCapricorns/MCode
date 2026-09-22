@@ -261,7 +261,6 @@ pub struct Desk {
     pub faint: Hsla,
     pub screen: Hsla,
     pub screen_dim: Hsla,
-    pub think_bg: Hsla,
 }
 
 impl Desk {
@@ -276,7 +275,6 @@ impl Desk {
                 faint: hex(0x8A7D70),
                 screen: hex(0x161310),
                 screen_dim: hex(0xC4B8AA),
-                think_bg: hex_a(0xE0B15A, 0.08),
             }
         } else {
             Self {
@@ -288,7 +286,6 @@ impl Desk {
                 faint: hex(0x9C8E7E),
                 screen: hex(0xFFFCF8),
                 screen_dim: hex(0x6A5E52),
-                think_bg: hex_a(0xA15C28, 0.06),
             }
         }
     }

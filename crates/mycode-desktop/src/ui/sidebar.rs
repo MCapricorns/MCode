@@ -75,11 +75,12 @@ pub(super) fn render_sidebar(
                         .gap_2()
                         .px_2()
                         .py(px(7.))
-                        .rounded(px(3.))
+                        .rounded(skin::radius_control())
                         .border_1()
-                        .border_color(theme.border)
+                        .border_color(skin::glass_border(theme))
+                        .bg(skin::frost(theme))
                         .cursor_pointer()
-                        .hover(|this| this.bg(theme.secondary))
+                        .hover(|this| this.bg(skin::frost_hover(theme)))
                         .on_click(cx.listener(|workspace, _, _, cx| {
                             let open = !workspace.vm().project_menu_open;
                             workspace.on_toggle_project_menu(open, cx);
@@ -218,14 +219,15 @@ fn session_row(
         .group("session-row")
         .px_2()
         .py(px(6.))
-        .rounded(px(3.))
+        .rounded(skin::radius_control())
         .border_l_1()
         .border_color(theme.transparent)
         .when(is_open, |this| {
-            this.bg(theme.sidebar_accent).border_color(desk.amber)
+            this.bg(skin::frost_accent(theme))
+                .border_color(desk.amber.opacity(0.7))
         })
         .cursor_pointer()
-        .hover(|this| this.bg(theme.sidebar_accent))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .text_color(if is_open {
             theme.sidebar_accent_foreground
         } else {
@@ -282,9 +284,9 @@ fn switch_group_header(project: &str, cx: &Context<Workspace>) -> impl IntoEleme
         .gap_1()
         .px_2()
         .py(px(5.))
-        .rounded(px(7.))
+        .rounded(skin::radius_control())
         .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click({
             let project = project.clone();
             cx.listener(move |workspace, _, _, cx| {
@@ -501,11 +503,11 @@ fn project_menu_row(
         .gap_2()
         .px_2()
         .py(px(7.))
-        .rounded(px(3.))
+        .rounded(skin::radius_control())
         .group("project-row")
         .cursor_pointer()
-        .when(selected, |this| this.bg(theme.secondary))
-        .hover(|this| this.bg(theme.secondary))
+        .when(selected, |this| this.bg(skin::frost_accent(theme)))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click({
             let path = path.clone();
             cx.listener(move |workspace, _, _, cx| {
@@ -578,9 +580,9 @@ fn menu_action_row(
         .gap_2()
         .px_2()
         .py(px(6.))
-        .rounded_md()
+        .rounded(skin::radius_control())
         .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
         .child(Icon::new(icon).small().text_color(theme.muted_foreground))
         .child(div().text_sm().child(label.to_owned()))

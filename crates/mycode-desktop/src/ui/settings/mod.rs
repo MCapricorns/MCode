@@ -55,7 +55,6 @@ pub(super) fn render_settings_view(
         .h_full()
         .flex()
         .flex_col()
-        .bg(theme.background)
         .child(
             div()
                 .id("settings-header")
@@ -338,8 +337,8 @@ fn render_settings_nav(
         .flex_col()
         .flex_shrink_0()
         .border_r_1()
-        .border_color(theme.border)
-        .bg(theme.sidebar)
+        .border_color(crate::ui::skin::glass_border(theme))
+        .bg(crate::ui::skin::glass_sidebar(theme))
         .child(crate::ui::sidebar::pane_head(
             "SETTINGS",
             Some(&format!("{index:02}")),
@@ -417,9 +416,10 @@ fn nav_row(
         .border_color(theme.transparent)
         .cursor_pointer()
         .when(selected, |this| {
-            this.bg(theme.sidebar_accent).border_color(desk.amber)
+            this.bg(crate::ui::skin::frost_accent(theme))
+                .border_color(desk.amber.opacity(0.7))
         })
-        .hover(|this| this.bg(theme.sidebar_accent))
+        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_show_settings_section(candidate, cx);
         }))

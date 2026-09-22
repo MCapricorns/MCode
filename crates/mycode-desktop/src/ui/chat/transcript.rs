@@ -1,16 +1,16 @@
 //! The transcript timeline: streaming bubble, committed entries, tool
 //! blocks, and user rows with their edit/recall hover actions.
 use gpui_kit::assets::IconName;
-use gpui_kit::component::text::TextView;
+use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    StatefulInteractiveElement, Styled, div, px, rems,
 };
 
-use crate::ui::skin::mono_chip;
+use crate::ui::skin::{self, mono_chip};
 use crate::ui::{desk::Desk, ellipsis};
 use crate::view_model::{ConversationEntry, EntryKind, StreamingReply};
 use crate::workspace::Workspace;
@@ -48,7 +48,7 @@ pub(super) fn render_streaming_entry(
                     theme,
                 ))
             })
-            .when(!streaming.text.is_empty(), |this| {
+            .when(!streaming.text.trim().is_empty(), |this| {
                 this.child(mono_chip(
                     "AGENT",
                     desk.green,
@@ -62,7 +62,7 @@ pub(super) fn render_streaming_entry(
                 ))
             })
             .when(
-                streaming.thinking.is_empty() && streaming.text.is_empty(),
+                streaming.thinking.trim().is_empty() && streaming.text.trim().is_empty(),
                 |this| {
                     this.child(
                         div()
@@ -95,17 +95,19 @@ pub(super) fn render_entry(entry: &ConversationEntry, theme: &Theme) -> gpui_kit
                             theme,
                         ))
                 })
-                .child(mono_chip(
-                    "AGENT",
-                    desk.green,
-                    desk.green.opacity(0.35),
-                    theme,
-                ))
-                .child(agent_text(
-                    format!("agent-md-{}", entry.event_id).into(),
-                    SharedString::from(&entry.text),
-                    theme,
-                ))
+                .when(!entry.text.trim().is_empty(), |this| {
+                    this.child(mono_chip(
+                        "AGENT",
+                        desk.green,
+                        desk.green.opacity(0.35),
+                        theme,
+                    ))
+                    .child(agent_text(
+                        format!("agent-md-{}", entry.event_id).into(),
+                        SharedString::from(entry.text.trim()),
+                        theme,
+                    ))
+                })
         })
         .into_any_element(),
         EntryKind::ToolResult => {
@@ -181,13 +183,13 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
     div()
         .id(id)
         .w_full()
+        .max_w(px(720.))
         .border_1()
-        .border_dashed()
-        .border_color(theme.border)
-        .rounded(px(3.))
+        .border_color(skin::glass_border(theme))
+        .rounded(skin::radius_card())
         .px_3()
         .py_2()
-        .bg(desk.think_bg)
+        .bg(skin::frost(theme))
         .flex()
         .flex_col()
         .gap_1()
@@ -218,13 +220,19 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
 /// be unique per entry — `ElementId::CodeLocation` would collide across
 /// blocks since all bubbles render from the same call site.
 fn agent_text(id: SharedString, text: SharedString, theme: &Theme) -> impl IntoElement {
+    // The theme default leaves a full rem between paragraphs, which paints
+    // as a tall empty slab when a reply is short or still streaming.
+    let style = TextViewStyle::default().paragraph_gap(rems(0.35));
     div()
         .w_full()
-        .rounded(px(3.))
+        .max_w(px(720.))
+        .rounded(skin::radius_card())
         .px_3()
         .py_2()
-        .bg(theme.secondary)
-        .child(TextView::markdown(id, text).selectable(true))
+        .border_1()
+        .border_color(skin::glass_border(theme))
+        .bg(skin::frost(theme))
+        .child(TextView::markdown(id, text).style(style).selectable(true))
 }
 
 /// Stable short stamp for the gutter: the entry id is a ledger identity, not
@@ -262,15 +270,18 @@ pub(super) fn render_tool_block(
     let mut card = div()
         .flex()
         .flex_col()
-        .w_full()
-        .rounded(px(3.))
+        .rounded(skin::radius_card())
         .border_1()
         .border_color(if failed {
-            desk.red.opacity(0.4)
+            desk.red.opacity(0.45)
         } else {
-            theme.border
+            skin::glass_border(theme)
         })
-        .bg(theme.sidebar)
+        .bg(skin::frost(theme))
+        // A pending call is one label. Stretching it across the column
+        // leaves an empty bar; a finished call keeps the reading width.
+        .when(waiting, |this| this.self_start())
+        .when(!waiting, |this| this.w_full().max_w(px(720.)))
         .child(
             div()
                 .flex()
@@ -283,8 +294,7 @@ pub(super) fn render_tool_block(
                 .child(crate::ui::lamp(lamp_color))
                 .child(
                     div()
-                        .min_w_0()
-                        .truncate()
+                        .when(!waiting, |this| this.min_w_0().truncate())
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.foreground)
                         .child(call.text.to_string()),
@@ -292,7 +302,12 @@ pub(super) fn render_tool_block(
         );
     if let Some(result) = result {
         let body = result_body(call.text.as_ref(), result, theme, &desk);
-        card = card.child(div().border_t_1().border_color(theme.border).child(body));
+        card = card.child(
+            div()
+                .border_t_1()
+                .border_color(skin::glass_border(theme))
+                .child(body),
+        );
     }
     desk_block(
         call,
@@ -343,7 +358,7 @@ fn result_body(
             .py_1()
             .text_xs()
             .font_family(theme.mono_font_family.clone())
-            .bg(desk.screen)
+            .bg(desk.screen.opacity(0.45))
             .text_color(if failed { desk.red } else { desk.screen_dim })
             .child(ellipsis(&text, 2000))
             .into_any_element()
@@ -466,6 +481,13 @@ pub(super) fn render_user_entry(
                 .flex_row()
                 .gap_2()
                 .w_full()
+                .max_w(px(720.))
+                .rounded(skin::radius_card())
+                .border_1()
+                .border_color(skin::glass_border(theme))
+                .bg(skin::frost(theme))
+                .px_3()
+                .py_2()
                 .text_sm()
                 .child(div().text_color(desk.cyan).child("▸"))
                 .child(
@@ -494,11 +516,11 @@ pub(super) fn render_user_entry(
                         .gap_1()
                         .px_2()
                         .h(px(22.))
-                        .rounded(px(6.))
+                        .rounded(skin::radius_control())
                         .text_xs()
                         .cursor_pointer()
                         .text_color(theme.muted_foreground)
-                        .hover(|this| this.bg(theme.secondary))
+                        .hover(|this| this.bg(skin::frost_hover(theme)))
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             workspace.on_edit_message(index, cx);
                         }))
@@ -514,11 +536,11 @@ pub(super) fn render_user_entry(
                         .gap_1()
                         .px_2()
                         .h(px(22.))
-                        .rounded(px(6.))
+                        .rounded(skin::radius_control())
                         .text_xs()
                         .cursor_pointer()
                         .text_color(theme.muted_foreground)
-                        .hover(|this| this.bg(theme.secondary))
+                        .hover(|this| this.bg(skin::frost_hover(theme)))
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             workspace.on_recall_message(index, cx);
                         }))

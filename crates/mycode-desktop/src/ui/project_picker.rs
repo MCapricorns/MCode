@@ -2,8 +2,8 @@
 //! a real directory path through the existing session flow.
 //!
 //! The first screen is the drive list, so a session that starts on `C:` can
-//! still switch to another drive. Colors follow the welcome "Just start
-//! chatting" control: secondary fill, foreground ink, hairline border.
+//! still switch to another drive. Footer actions use the same glass button
+//! as the welcome screen.
 
 use std::path::{Path, PathBuf};
 
@@ -98,10 +98,10 @@ pub(crate) fn render(
                         .h(px(480.))
                         .flex()
                         .flex_col()
-                        .rounded(px(8.))
+                        .rounded(skin::radius_card())
                         .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.sidebar)
+                        .border_color(skin::glass_border(&theme))
+                        .bg(skin::frost_card(&theme))
                         .text_color(theme.foreground)
                         .shadow_lg()
                         .overflow_hidden()
@@ -127,7 +127,7 @@ fn picker_header(theme: &gpui_kit::component::theme::Theme, path_label: &str) ->
         .flex_col()
         .gap_1()
         .border_b_1()
-        .border_color(theme.border)
+        .border_color(skin::glass_border(theme))
         .child(
             div()
                 .text_sm()
@@ -198,18 +198,22 @@ fn drive_strip(
                 .id(format!("picker-drive-{index}"))
                 .px_2()
                 .py(px(4.))
-                .rounded(px(8.))
+                .rounded(skin::radius_control())
                 .text_xs()
                 .border_1()
-                .border_color(if selected { theme.ring } else { theme.border })
-                .bg(if selected {
-                    theme.secondary_active
+                .border_color(if selected {
+                    theme.yellow.opacity(0.55)
                 } else {
-                    theme.secondary
+                    skin::glass_border(theme)
+                })
+                .bg(if selected {
+                    skin::frost_accent(theme)
+                } else {
+                    skin::frost(theme)
                 })
                 .text_color(theme.foreground)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.secondary_hover))
+                .hover(|style| style.bg(skin::frost_hover(theme)))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_picker_enter(path.clone(), cx);
                 }))
@@ -248,7 +252,7 @@ fn picker_list(
                 .rounded(px(6.))
                 .when(is_dir, |row| {
                     row.cursor_pointer()
-                        .hover(|style| style.bg(theme.secondary_hover))
+                        .hover(|style| style.bg(skin::frost_hover(theme)))
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             workspace.on_picker_enter(path.clone(), cx);
                         }))
@@ -309,7 +313,7 @@ fn picker_footer(
         .justify_between()
         .gap_2()
         .border_t_1()
-        .border_color(theme.border)
+        .border_color(skin::glass_border(theme))
         .child(
             div()
                 .text_xs()
@@ -340,29 +344,20 @@ fn picker_footer(
         )
 }
 
-/// Same fill, ink, and border as the welcome "Just start chatting" action.
+/// Same glass, ink, and border as the welcome actions.
 fn desk_button(
     id: &'static str,
     label: &'static str,
     enabled: bool,
     theme: &gpui_kit::component::theme::Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    div()
-        .id(id)
-        .px_3()
-        .py(px(6.))
-        .rounded(px(8.))
-        .text_sm()
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.secondary)
+    skin::glass_button(id, false, theme)
+        .when(!enabled, |this| this.opacity(0.45))
         .text_color(if enabled {
             theme.foreground
         } else {
             theme.muted_foreground
         })
-        .cursor_pointer()
-        .hover(|style| style.bg(theme.secondary_hover))
         .child(label)
 }
 

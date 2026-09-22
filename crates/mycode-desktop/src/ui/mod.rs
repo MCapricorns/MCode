@@ -1,4 +1,4 @@
-//! GPUI rendering for the workspace in the Desk look: warm paper and ink,
+//! GPUI rendering for the workspace in the Desk look: frosted glass and ink,
 //! a same-hue honey wash, hairline borders, and signal-color lamps over the
 //! project/sidebar/conversation/settings structure.
 mod chat;
@@ -351,8 +351,8 @@ fn render_tape(
         .flex_shrink_0()
         .overflow_hidden()
         .border_b_1()
-        .border_color(theme.border)
-        .bg(theme.background)
+        .border_color(skin::glass_border(theme))
+        .bg(skin::glass(theme))
         .text_xs()
         .child(
             div()

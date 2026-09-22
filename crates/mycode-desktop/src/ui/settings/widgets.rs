@@ -14,8 +14,7 @@ use gpui_kit::{
 
 use crate::workspace::Workspace;
 
-/// One settings card: the desk version keeps the hairline border but sits on
-/// a square, flat panel with a mono caption header.
+/// One settings card: hairline glass, a frosted fill, and a mono caption.
 pub(super) fn settings_card(
     id: &str,
     title: &str,
@@ -29,10 +28,10 @@ pub(super) fn settings_card(
         .flex_col()
         .gap_3()
         .p_4()
-        .rounded(px(3.))
+        .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_color(theme.border)
-        .bg(theme.sidebar)
+        .border_color(crate::ui::skin::glass_border(theme))
+        .bg(crate::ui::skin::frost_card(theme))
         .child(
             div()
                 .id(format!("card-{id}-header"))
@@ -198,10 +197,10 @@ pub(super) fn dropdown_field(
                     .p_1()
                     .max_h(px(220.))
                     .overflow_y_scroll()
-                    .rounded_md()
+                    .rounded(crate::ui::skin::radius_control())
                     .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.background)
+                    .border_color(crate::ui::skin::glass_border(theme))
+                    .bg(crate::ui::skin::frost_card(theme))
                     .children(options.iter().map(|option| {
                         let option = option.clone();
                         let row_option = option.clone();
@@ -218,7 +217,7 @@ pub(super) fn dropdown_field(
                             .rounded_md()
                             .text_sm()
                             .cursor_pointer()
-                            .hover(|this| this.bg(theme.secondary))
+                            .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
                             .on_click(cx.listener(move |workspace, _, _, cx| {
                                 pick(workspace, &row_option, cx);
                             }))

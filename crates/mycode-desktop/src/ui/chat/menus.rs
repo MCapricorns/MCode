@@ -10,7 +10,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use crate::ui::skin::popover_panel;
+use crate::ui::skin::{self, popover_panel};
 use crate::view_model::{MentionKind, selected_reasoning_level};
 use crate::workspace::Workspace;
 
@@ -204,17 +204,21 @@ fn thinking_strip(
                 .h(px(24.))
                 .flex()
                 .items_center()
-                .rounded(px(3.))
+                .rounded(skin::radius_control())
                 .text_xs()
                 .cursor_pointer()
                 .border_1()
-                .border_color(if on { theme.primary } else { theme.border })
-                .bg(if on {
-                    theme.secondary
+                .border_color(if on {
+                    theme.yellow.opacity(0.55)
                 } else {
-                    theme.background
+                    skin::glass_border(theme)
                 })
-                .hover(|this| this.bg(theme.secondary))
+                .bg(if on {
+                    skin::frost_accent(theme)
+                } else {
+                    skin::frost(theme)
+                })
+                .hover(|this| this.bg(skin::frost_hover(theme)))
                 .on_click(move |_, _, cx| {
                     let picked = picked.clone();
                     let _ = weak.update(cx, |workspace, cx| {
@@ -299,10 +303,10 @@ fn menu_row(
         .justify_between()
         .gap_2()
         .px_2()
-        .rounded_md()
+        .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary))
+        .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
         .child(div().min_w_0().truncate().child(label))
         .when(selected, |this| {
