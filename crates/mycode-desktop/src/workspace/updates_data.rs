@@ -161,6 +161,11 @@ impl Workspace {
     /// Escape dismisses the topmost floating menu first; with nothing open it
     /// leaves the settings view.
     pub(crate) fn on_escape(&mut self, cx: &mut Context<Self>) {
+        if self.project_picker.is_some() {
+            self.project_picker = None;
+            cx.notify();
+            return;
+        }
         let mut dismissed = close_floating_menus(&mut self.vm);
         if dismissed {
             cx.notify();

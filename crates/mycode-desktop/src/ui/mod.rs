@@ -1,11 +1,10 @@
-//! GPUI rendering for the workspace in the Desk look (docs/design/demo.html):
-//! tinted panels on a mint-to-violet ambient wash, hairline borders, small
-//! radii (3px chips and rows, 12-16px on the theme's own controls), dense
-//! mono captions, and signal-color lamps over the
+//! GPUI rendering for the workspace in the Desk look: warm paper and ink,
+//! a same-hue honey wash, hairline borders, and signal-color lamps over the
 //! project/sidebar/conversation/settings structure.
 mod chat;
 mod context;
 pub(crate) mod desk;
+pub(crate) mod project_picker;
 mod settings;
 mod sidebar;
 mod skin;
@@ -128,6 +127,9 @@ pub fn render_root(
         )
         .when(workspace.vm().pending_ask.is_some(), |this| {
             this.child(chat::render_ask_panel(workspace, window, cx))
+        })
+        .when(workspace.project_picker.is_some(), |this| {
+            this.child(project_picker::render(workspace, cx))
         })
 }
 

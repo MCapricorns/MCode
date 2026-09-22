@@ -284,25 +284,59 @@ impl Workspace {
 
     // ---- project selection ----
 
-    /// Opens the native folder picker and binds the chosen directory.
+    /// Opens the in-app folder browser and binds the chosen directory.
     pub(crate) fn on_open_project_dialog(&mut self, cx: &mut Context<Self>) {
-        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose a project folder for the agent".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = receiver.await else {
-                return;
-            };
-            let Some(directory) = paths.first() else {
-                return;
-            };
-            let project = directory.to_string_lossy().into_owned();
-            let _ = this.update(cx, |workspace, cx| workspace.bind_project(&project, cx));
-        })
-        .detach();
+        self.project_picker = Some(crate::ui::project_picker::ProjectPicker::open());
+        cx.notify();
+    }
+
+    pub(crate) fn on_picker_cancel(&mut self, cx: &mut Context<Self>) {
+        self.project_picker = None;
+        cx.notify();
+    }
+
+    pub(crate) fn on_picker_enter(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.project_picker = Some(crate::ui::project_picker::browse(Some(path)));
+        cx.notify();
+    }
+
+    pub(crate) fn on_picker_up(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self
+            .project_picker
+            .as_ref()
+            .and_then(|picker| picker.current.clone())
+        else {
+            return;
+        };
+        self.project_picker = Some(crate::ui::project_picker::browse(
+            crate::ui::project_picker::parent_folder(&current),
+        ));
+        cx.notify();
+    }
+
+    pub(crate) fn on_picker_home(&mut self, cx: &mut Context<Self>) {
+        self.project_picker = Some(crate::ui::project_picker::ProjectPicker::open());
+        cx.notify();
+    }
+
+    pub(crate) fn on_picker_roots(&mut self, cx: &mut Context<Self>) {
+        self.project_picker = Some(crate::ui::project_picker::browse(None));
+        cx.notify();
+    }
+
+    pub(crate) fn on_picker_confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self
+            .project_picker
+            .as_ref()
+            .and_then(|picker| picker.current.clone())
+        else {
+            return;
+        };
+        if !path.is_dir() {
+            return;
+        }
+        self.project_picker = None;
+        self.bind_project(&path.to_string_lossy(), cx);
     }
 
     /// Opens one of the remembered recent projects.

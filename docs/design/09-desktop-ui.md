@@ -1,6 +1,6 @@
 # 桌面 UI
 
-`mycode-desktop` 是唯一产品前端。视觉权威是 [demo.html](demo.html)（Desk：平涂、发丝线、近零圆角、mono 账本）。
+`mycode-desktop` 是唯一产品前端。视觉是暖纸墨 Desk：平涂、发丝线、小圆角、mono 账本，蜂蜜色作唯一强调色。
 
 ## 1. 布局
 
@@ -17,7 +17,7 @@
 
 ## 3. 项目选择
 
-系统目录选择器绑定真实路径到当前会话（无会话则先创建）。`ui.json` 记 `session_projects` 与 `recent_projects`。侧栏按项目文件夹名分组。新聊天继承当前项目。
+应用内 GPUI 文件夹浏览器绑定真实路径到当前会话（无会话则先创建），不再调系统目录框。`ui.json` 记 `session_projects` 与 `recent_projects`。侧栏按项目文件夹名分组。新聊天继承当前项目。
 
 未绑定项目时工具 cwd 是 `~/.mycode/scratch`，不会在 home 里生成以会话 id 命名的项目文件夹。
 

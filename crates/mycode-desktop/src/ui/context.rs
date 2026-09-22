@@ -1,5 +1,5 @@
 //! Right inspector: session facts, token bars, last-turn ledger, task queue,
-//! and prompt resources — the demo.html `.insp` column.
+//! and prompt resources — the inspector column.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;

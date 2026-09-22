@@ -1,7 +1,6 @@
 //! The welcome hero shown while the conversation is empty.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -100,22 +99,28 @@ pub(super) fn render_welcome(
                 .gap_2()
                 .mt_2()
                 .child(
-                    Button::new("welcome-open-project")
-                        .icon(IconName::FolderOpen)
-                        .label("Open project folder")
-                        .primary()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_open_project_dialog(cx);
-                        })),
+                    welcome_action(
+                        "welcome-open-project",
+                        IconName::FolderOpen,
+                        "Open project folder",
+                        true,
+                        theme,
+                    )
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_open_project_dialog(cx);
+                    })),
                 )
                 .child(
-                    Button::new("welcome-new-chat")
-                        .icon(IconName::MessageSquare)
-                        .label("Just start chatting")
-                        .ghost()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_new_session(cx);
-                        })),
+                    welcome_action(
+                        "welcome-new-chat",
+                        IconName::MessageSquare,
+                        "Just start chatting",
+                        false,
+                        theme,
+                    )
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_new_session(cx);
+                    })),
                 ),
         )
         .when(!recents.is_empty(), |this| {
@@ -202,6 +207,57 @@ pub(super) fn render_welcome(
             )
         })
         .into_any_element()
+}
+
+fn welcome_action(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    emphasized: bool,
+    theme: &Theme,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let fill = if emphasized {
+        theme.primary
+    } else {
+        theme.secondary
+    };
+    let ink = if emphasized {
+        theme.primary_foreground
+    } else {
+        theme.foreground
+    };
+    let hover = if emphasized {
+        theme.primary_hover
+    } else {
+        theme.secondary_hover
+    };
+    let border = if emphasized {
+        theme.primary
+    } else {
+        theme.border
+    };
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py(px(7.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(border)
+        .bg(fill)
+        .text_color(ink)
+        .text_sm()
+        .cursor_pointer()
+        .hover(move |style| {
+            style
+                .bg(hover)
+                .border_color(if emphasized { hover } else { border })
+        })
+        .child(Icon::new(icon).with_size(px(15.)).text_color(ink))
+        .child(label)
 }
 
 fn capability_chip(

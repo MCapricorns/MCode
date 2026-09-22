@@ -10,4 +10,3 @@
 | [01-agent-core.md](01-agent-core.md) | Agent loop、ledger、自动压缩 |
 | [02-tools-permissions.md](02-tools-permissions.md) | 工具 registry、subagent / MCP / web |
 | [09-desktop-ui.md](09-desktop-ui.md) | Desk 布局、桥接、设置与欢迎页 |
-| [demo.html](demo.html) | 视觉权威（交易台 Desk） |

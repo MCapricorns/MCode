@@ -1,10 +1,10 @@
-//! Frosted translucent panels and gradient accents over the active theme.
-//! Day and night each stay on their own surface: light stays light, dark
-//! stays dark, with a mint-to-violet ambient wash behind the glass.
+//! Warm paper panels and a same-hue honey wash over the active theme.
+//! Day stays light and night stays dark. Gradients stay inside one family
+//! so the window does not read as a mint-to-violet rainbow.
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{
     Background, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Stateful,
-    Styled as _, black, div, linear_color_stop, linear_gradient, px,
+    Styled as _, div, linear_color_stop, linear_gradient, px,
 };
 
 fn is_dark(theme: &Theme) -> bool {
@@ -21,80 +21,88 @@ fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
     }
 }
 
-/// Rotates a color's hue for gradient endpoints.
-fn hue_shift(color: Hsla, degrees: f32) -> Hsla {
-    Hsla {
-        h: color.h + degrees,
-        ..color
-    }
-}
-
-/// Ambient gradient behind the window: sky easing toward mint and violet.
+/// Ambient wash behind the window: a whisper of honey, same hue both ends.
 pub(super) fn ambient(theme: &Theme) -> Background {
     let dark = is_dark(theme);
-    let start = mix(theme.background, theme.cyan, if dark { 0.16 } else { 0.10 });
+    let start = mix(
+        theme.background,
+        theme.yellow,
+        if dark { 0.07 } else { 0.10 },
+    );
     let end = mix(
         theme.background,
-        theme.magenta,
-        if dark { 0.18 } else { 0.08 },
+        theme.secondary,
+        if dark { 0.40 } else { 0.55 },
     );
     linear_gradient(
-        152.,
+        168.,
         linear_color_stop(start, 0.),
         linear_color_stop(end, 1.),
     )
 }
 
-/// Frosted panel fill used by the composer card.
+/// Paper panel fill used by the composer card.
 pub(super) fn glass(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(theme.background, theme.cyan, if dark { 0.10 } else { 0.06 });
+    let base = mix(
+        theme.background,
+        theme.yellow,
+        if dark { 0.05 } else { 0.04 },
+    );
     Hsla {
-        a: if dark { 0.62 } else { 0.78 },
+        a: if dark { 0.86 } else { 0.94 },
         ..base
     }
 }
 
-/// Frosted sidebar / inspector fill, slightly violet-tinted.
+/// Sidebar / inspector fill, slightly warmer than the page.
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(theme.sidebar, theme.magenta, if dark { 0.12 } else { 0.06 });
+    let base = mix(theme.sidebar, theme.yellow, if dark { 0.05 } else { 0.03 });
     Hsla {
-        a: if dark { 0.52 } else { 0.72 },
+        a: if dark { 0.90 } else { 0.96 },
         ..base
     }
 }
 
-/// Border tone matching the frosted panels.
+/// Hairline border, warmed a little so it does not read as cold gray.
 pub(super) fn glass_border(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(theme.border, theme.cyan, if dark { 0.22 } else { 0.12 });
+    let base = mix(theme.border, theme.yellow, if dark { 0.18 } else { 0.12 });
     Hsla {
-        a: if dark { 0.55 } else { 0.60 },
+        a: if dark { 0.70 } else { 0.85 },
         ..base
     }
 }
 
-/// Near-opaque frosted popover fill.
+/// Near-opaque popover fill.
 pub(super) fn popover(theme: &Theme) -> Hsla {
-    let base = mix(theme.popover, theme.magenta, 0.06);
-    Hsla { a: 0.94, ..base }
+    let base = mix(theme.popover, theme.yellow, 0.04);
+    Hsla { a: 0.97, ..base }
 }
 
 /// Scrim drawn over the app behind an open menu layer.
 pub(super) fn scrim(theme: &Theme) -> Hsla {
-    Hsla {
-        a: if is_dark(theme) { 0.35 } else { 0.10 },
-        ..black()
+    if is_dark(theme) {
+        Hsla {
+            a: 0.55,
+            ..theme.background
+        }
+    } else {
+        Hsla {
+            a: 0.22,
+            ..theme.foreground
+        }
     }
 }
 
-/// Brand gradient for welcome and hero accents: mint → sky → violet.
+/// Short same-hue accent for the welcome mark: honey into a deeper honey.
 pub(super) fn accent(theme: &Theme, angle: f32) -> Background {
+    let deep = mix(theme.yellow, theme.red, 0.28);
     linear_gradient(
         angle,
-        linear_color_stop(theme.green, 0.),
-        linear_color_stop(hue_shift(theme.magenta, 12.), 1.),
+        linear_color_stop(theme.yellow, 0.),
+        linear_color_stop(deep, 1.),
     )
 }
 

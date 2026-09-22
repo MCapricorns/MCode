@@ -4355,6 +4355,7 @@ dependencies = [
  "mycode-config",
  "mycode-providers",
  "mycode-tools",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 

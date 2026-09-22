@@ -85,6 +85,8 @@ pub struct Workspace {
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
     mention_query: Option<String>,
     pending_catalog_refresh: bool,
+    /// In-app folder browser. `None` while the native dialog is not used.
+    pub(crate) project_picker: Option<crate::ui::project_picker::ProjectPicker>,
     runtime_ticks: u64,
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
@@ -127,6 +129,7 @@ impl Workspace {
             pending_composer_prefill: None,
             mention_query: None,
             pending_catalog_refresh: false,
+            project_picker: None,
             runtime_ticks: 0,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
         });
