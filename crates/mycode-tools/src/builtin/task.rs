@@ -96,6 +96,7 @@ impl Tool for TaskTool {
 
     fn description(&self) -> &str {
         "Delegate one scoped unit of work to a named subagent role. \
+         Independent `task` calls in the same response run at the same time. \
          `scout` is read-only reconnaissance; `artisan` makes the primary \
          change; `steward` does residual cleanup; `sentinel` reviews a \
          finished diff. Custom roles from agents/*.md are also valid. \
@@ -105,7 +106,8 @@ impl Tool for TaskTool {
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
             "task: pick a role (`scout`/`artisan`/`steward`/`sentinel`) and \
-             send a self-contained brief; the child cannot ask you questions.",
+             send a self-contained brief. Several independent task calls in \
+             one response run together; do not wait between them.",
         )
     }
 

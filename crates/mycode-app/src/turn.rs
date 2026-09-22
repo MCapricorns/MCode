@@ -330,7 +330,9 @@ inputSchema. Never guess parameters.",
     system_prompt.push_str(
         "\n\nFor current web facts, call `web_search`, then `fetch_content` on the \
 URLs you will cite. Snippets are not evidence.\n\
-Use `task` for one bounded subagent role. Keep small work in main.",
+Use `task` for a bounded subagent role. Independent `task` calls in the \
+same response run at the same time — emit every scout together instead \
+of waiting for the previous child. Keep small work in main.",
     );
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&mycode_agent::build_system_prompt(&registry));

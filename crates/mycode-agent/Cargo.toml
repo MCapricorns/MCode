@@ -16,6 +16,7 @@ getrandom.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

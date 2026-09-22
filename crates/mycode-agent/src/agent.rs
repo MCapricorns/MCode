@@ -478,7 +478,11 @@ async fn double_loop(
                 }
                 has_tool_calls = true;
             } else {
-                for (index, call) in calls.iter().enumerate() {
+                // Consecutive `task` calls in one response run together.
+                // Every other tool stays in order so an abort can still
+                // answer the calls that never started.
+                let mut index = 0;
+                while index < calls.len() {
                     if token.is_cancelled() {
                         // Abort mid-dispatch of a multi-call response.
                         // The assistant message carrying *all* the calls
@@ -494,8 +498,25 @@ async fn double_loop(
                         aborted = true;
                         break 'outer;
                     }
-                    let message = turn::dispatch_tool_call(env, token, call).await;
-                    turn::push_message(env, state, Message::ToolResult(message));
+                    if is_concurrent_task(&calls[index]) {
+                        let start = index;
+                        while index < calls.len() && is_concurrent_task(&calls[index]) {
+                            index += 1;
+                        }
+                        let results = futures_util::future::join_all(
+                            calls[start..index]
+                                .iter()
+                                .map(|call| turn::dispatch_tool_call(env, token, call)),
+                        )
+                        .await;
+                        for message in results {
+                            turn::push_message(env, state, Message::ToolResult(message));
+                        }
+                    } else {
+                        let message = turn::dispatch_tool_call(env, token, &calls[index]).await;
+                        turn::push_message(env, state, Message::ToolResult(message));
+                        index += 1;
+                    }
                 }
                 has_tool_calls = true;
             }
@@ -535,4 +556,10 @@ async fn double_loop(
         return Ok(TurnOutcome::Steered);
     }
     Ok(TurnOutcome::Completed)
+}
+
+/// `task` calls from one assistant message share a batch. The host
+/// semaphore still caps how many children actually run.
+fn is_concurrent_task(call: &ToolCall) -> bool {
+    call.name == "task"
 }
