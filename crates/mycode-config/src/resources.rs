@@ -220,9 +220,9 @@ pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
         return None;
     }
     let mut out = String::from(
-        "Skills are available now. When a task matches a skill, read that SKILL.md \
-and follow it without being asked. The catalog is on demand: do not paste every \
-skill body into the prompt.",
+        "Skills (on demand): when a task matches a skill, call `read` on that \
+SKILL.md and follow it. Do not wait for the user to name the skill. Do not \
+paste skill bodies into the prompt.",
     );
     for skill in files {
         out.push_str(&format!(

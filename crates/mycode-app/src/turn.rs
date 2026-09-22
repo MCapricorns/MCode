@@ -15,7 +15,6 @@ use mycode_config::{
 };
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
-use mycode_tools::ToolDyn as _;
 use mycode_tools::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
@@ -250,16 +249,15 @@ async fn run_chat_turn(
             home: todo_home,
         });
         registry.register(Arc::new(mycode_tools::builtin::TodoWriteTool::new(store)));
-        // MCP tools ride the same registry; they never shadow an existing
-        // registration (registry.register is last-wins per name).
-        for tool in mcp_tools {
-            let name = tool.spec().name;
-            if registry.get(&name).is_none() {
-                registry.register(tool);
-            }
-        }
         registry
     });
+    let mcp_catalog = crate::mcp_tools::McpCatalog::from_tools(mcp_tools);
+    if let Some(catalog) = mcp_catalog.clone() {
+        registry.register(Arc::new(crate::mcp_tools::SearchTool::new(Arc::clone(
+            &catalog,
+        ))));
+        registry.register(Arc::new(crate::mcp_tools::UseTool::new(catalog)));
+    }
 
     // Split the last committed user message off as the prompt; everything
     // before it is replay history.
@@ -304,12 +302,34 @@ Use `web_search` then `fetch_content` for current web facts (Querit or AnySearch
         );
         system_prompt.push_str(&part);
     }
-    // Skill bodies and role rules stay off the standing prompt. Grok Build
-    // reads a skill file only when its path is given, and fetches an MCP
-    // schema on first use instead of inlining every catalog each turn.
+    // Grok Build call pattern: a short index, then the model loads the
+    // body or schema itself. Full skill text and MCP schemas stay off this
+    // prompt.
+    let user_home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from);
+    let mut skills = mycode_config::discover_skills(&cwd, user_home.as_deref());
+    let hidden_skills = skills.len().saturating_sub(32);
+    skills.truncate(32);
+    if let Some(mut catalog) = mycode_config::render_skill_catalog(&skills) {
+        if hidden_skills > 0 {
+            catalog.push_str(&format!(
+                "\n- and {hidden_skills} more; read the matching SKILL.md by path"
+            ));
+        }
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&catalog);
+    }
+    if mcp_catalog.is_some() {
+        system_prompt.push_str(
+            "\n\nMCP tools are connected but not inlined. Call `search_tool` with the \
+tool name, then `use_tool` with arguments that match the returned \
+inputSchema. Never guess parameters.",
+        );
+    }
     system_prompt.push_str(
-        "\n\nSkills stay on disk. Read a SKILL.md with `read` only when the user \
-names /slug or gives its path.\n\
+        "\n\nFor current web facts, call `web_search`, then `fetch_content` on the \
+URLs you will cite. Snippets are not evidence.\n\
 Use `task` for one bounded subagent role. Keep small work in main.",
     );
     system_prompt.push_str("\n\n");

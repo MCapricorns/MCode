@@ -1,10 +1,10 @@
 //! Bridges enabled MCP servers into the agent's tool registry.
 //!
-//! Each configured server is connected at turn start (initialize +
-//! tools/list); every listed tool becomes a [`ToolDyn`] whose spec carries
-//! the server's own `inputSchema` verbatim. A failed server is skipped —
-//! the turn proceeds with the remaining tools rather than failing.
+//! Servers are connected at turn start. Their tools are not inlined into
+//! the model tool list. The model calls `search_tool` for one schema, then
+//! `use_tool` with arguments that match it. A failed server is skipped.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use mycode_config::AppSettings;
@@ -157,6 +157,171 @@ pub(crate) async fn connect_mcp_tools(
         }
     }
     tools
+}
+
+/// Connected MCP tools, addressed by name. Schemas stay here until
+/// `search_tool` is called.
+pub(crate) struct McpCatalog {
+    by_name: HashMap<String, Arc<DynamicMcpTool>>,
+    names: String,
+}
+
+impl McpCatalog {
+    pub(crate) fn from_tools(tools: Vec<Arc<DynamicMcpTool>>) -> Option<Arc<Self>> {
+        if tools.is_empty() {
+            return None;
+        }
+        let mut by_name = HashMap::new();
+        let mut names = Vec::new();
+        for tool in tools {
+            names.push(tool.tool.name.clone());
+            by_name.insert(tool.tool.name.clone(), tool);
+        }
+        names.sort();
+        names.dedup();
+        let extra = names.len().saturating_sub(40);
+        let mut listed = names.into_iter().take(40).collect::<Vec<_>>().join(", ");
+        if extra > 0 {
+            listed.push_str(&format!(", and {extra} more"));
+        }
+        Some(Arc::new(Self {
+            by_name,
+            names: listed,
+        }))
+    }
+
+    fn get(&self, name: &str) -> Option<&Arc<DynamicMcpTool>> {
+        self.by_name.get(name)
+    }
+}
+
+fn object_schema(properties: Value, required: &[&str]) -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false
+    })
+}
+
+fn arg_name(args: &Value) -> Result<String, ToolError> {
+    args.get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| ToolError::InvalidArgs("name is required".to_owned()))
+}
+
+/// Grok-style schema lookup. The model must call this before `use_tool`.
+pub(crate) struct SearchTool {
+    catalog: Arc<McpCatalog>,
+}
+
+impl SearchTool {
+    pub(crate) fn new(catalog: Arc<McpCatalog>) -> Self {
+        Self { catalog }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolDyn for SearchTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "search_tool".to_owned(),
+            description: format!(
+                "Retrieve one connected MCP tool's description and inputSchema before calling use_tool. Never guess parameter names. Connected: {}.",
+                self.catalog.names
+            ),
+            params_schema: object_schema(
+                serde_json::json!({
+                    "name": {"type": "string", "description": "Exact tool name from the connected list."}
+                }),
+                &["name"],
+            ),
+        }
+    }
+
+    fn prompt_snippet_dyn(&self) -> Option<&str> {
+        Some("search_tool: fetch one MCP inputSchema before use_tool. Never guess parameters.")
+    }
+
+    async fn execute_dyn(
+        &self,
+        args: Value,
+        _ctx: &ToolCtx,
+        _out: &mut ToolStream,
+    ) -> Result<ToolResult, ToolError> {
+        let name = arg_name(&args)?;
+        let Some(tool) = self.catalog.get(&name) else {
+            return Err(ToolError::InvalidArgs(format!(
+                "no MCP tool named {name}. Connected: {}",
+                self.catalog.names
+            )));
+        };
+        let spec = tool.spec();
+        Ok(ToolResult::text(format!(
+            "name: {}\nserver: {}\ndescription: {}\ninputSchema: {}",
+            spec.name, tool.server_id, spec.description, spec.params_schema
+        )))
+    }
+}
+
+/// Calls one MCP tool whose schema was retrieved with `search_tool`.
+pub(crate) struct UseTool {
+    catalog: Arc<McpCatalog>,
+}
+
+impl UseTool {
+    pub(crate) fn new(catalog: Arc<McpCatalog>) -> Self {
+        Self { catalog }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolDyn for UseTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "use_tool".to_owned(),
+            description: "Call a connected MCP tool. Arguments must match the inputSchema returned by search_tool for that name. Do not call this before search_tool.".to_owned(),
+            params_schema: object_schema(
+                serde_json::json!({
+                    "name": {"type": "string"},
+                    "arguments": {"type": "object", "description": "Arguments matching search_tool's inputSchema."}
+                }),
+                &["name", "arguments"],
+            ),
+        }
+    }
+
+    fn prompt_snippet_dyn(&self) -> Option<&str> {
+        Some("use_tool: call an MCP tool only after search_tool returned its schema.")
+    }
+
+    async fn execute_dyn(
+        &self,
+        args: Value,
+        ctx: &ToolCtx,
+        out: &mut ToolStream,
+    ) -> Result<ToolResult, ToolError> {
+        let name = arg_name(&args)?;
+        let Some(tool) = self.catalog.get(&name) else {
+            return Err(ToolError::InvalidArgs(format!(
+                "no MCP tool named {name}. Connected: {}",
+                self.catalog.names
+            )));
+        };
+        let arguments = args
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !arguments.is_object() {
+            return Err(ToolError::InvalidArgs(
+                "arguments must be an object".to_owned(),
+            ));
+        }
+        tool.execute_dyn(arguments, ctx, out).await
+    }
 }
 
 /// Builds and initializes one MCP client for a server row over stdio or
@@ -367,5 +532,42 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {\n\
             .await
             .expect_err("invalid args");
         assert!(matches!(err, ToolError::InvalidArgs(_)));
+    }
+
+    #[tokio::test]
+    async fn search_tool_returns_schema_and_use_tool_calls_it() {
+        let tool = tool_over(scripted("found 3 pages")).await;
+        let catalog = McpCatalog::from_tools(vec![tool]).expect("catalog");
+        let search = SearchTool::new(Arc::clone(&catalog));
+        let spec = search.spec();
+        assert_eq!(spec.name, "search_tool");
+        assert!(spec.params_schema.get("inputSchema").is_none());
+        assert!(!spec.description.contains("\"query\""));
+
+        let ctx = ToolCtx::new(".");
+        let mut stream = mycode_tools::stream::ToolStream::channel().0;
+        let found = search
+            .execute_dyn(json!({"name": "search_docs"}), &ctx, &mut stream)
+            .await
+            .expect("schema");
+        let text = match &found.content[0] {
+            mycode_core::ContentBlock::Text(text) => text.text.clone(),
+            other => panic!("unexpected block: {other:?}"),
+        };
+        assert!(text.contains("inputSchema"), "{text}");
+        assert!(text.contains("query"), "{text}");
+
+        let used = UseTool::new(catalog)
+            .execute_dyn(
+                json!({"name": "search_docs", "arguments": {"query": "rust"}}),
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("call");
+        match &used.content[0] {
+            mycode_core::ContentBlock::Text(text) => assert_eq!(text.text, "found 3 pages"),
+            other => panic!("unexpected block: {other:?}"),
+        }
     }
 }
