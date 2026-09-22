@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 #[path = "shell_detect.rs"]
 mod detect;
 
-#[cfg(windows)]
 use detect::runtime_shell;
 
 pub use detect::{
@@ -435,6 +434,20 @@ async fn prepare_posix_shell(
     let pin_cwd = cwd.to_path_buf();
     let pin_work = run_blocking_supervised("shell resolution", cancel, move |worker_cancel| {
         let env = snapshot_child_environment()?;
+        if let Some(detected) = runtime_shell() {
+            let program = detected.program.to_str().ok_or_else(|| {
+                ToolError::InvalidArgs(
+                    "shell program path is not valid Unicode and cannot be recorded".into(),
+                )
+            })?;
+            let invocation = prepare_from_snapshot(&pin_cwd, program, &args, &env, &worker_cancel)
+                .map_err(ResolveError::into_tool_error)?;
+            return Ok(PreparedShell {
+                identifier: program.to_owned(),
+                invocation,
+                lease,
+            });
+        }
         let mut last_not_found = None;
         for candidate in SHELL_CANDIDATES {
             match prepare_from_snapshot(&pin_cwd, candidate.executable, &args, &env, &worker_cancel)
