@@ -333,10 +333,7 @@ fn removing_a_recent_project_drops_it_from_the_list() {
         project_dir: Some(alpha.to_owned()),
         ..WorkspaceState::default()
     };
-    reduce(
-        &mut state,
-        DesktopAction::RecentRemoved(remove.to_owned()),
-    );
+    reduce(&mut state, DesktopAction::RecentRemoved(remove.to_owned()));
     assert_eq!(state.recents, vec![beta.to_owned()]);
     assert_eq!(state.project_dir, None);
 }

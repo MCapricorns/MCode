@@ -892,10 +892,7 @@ fn session_project_bound_is_what_groups_this_project() {
     } else {
         "/work/MCode"
     };
-    reduce(
-        &mut state,
-        DesktopAction::ProjectOpened(project.to_owned()),
-    );
+    reduce(&mut state, DesktopAction::ProjectOpened(project.to_owned()));
     let grouped = group_sessions(
         &state.sessions,
         &state.session_projects,
@@ -911,11 +908,7 @@ fn session_project_bound_is_what_groups_this_project() {
             project: project.to_owned(),
         },
     );
-    let grouped = group_sessions(
-        &state.sessions,
-        &state.session_projects,
-        Some(same_project),
-    );
+    let grouped = group_sessions(&state.sessions, &state.session_projects, Some(same_project));
     assert_eq!(grouped.current.len(), 1);
     assert_eq!(grouped.current[0].session_id, "ses-a");
     assert_eq!(grouped.unbound.len(), 1);
