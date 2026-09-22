@@ -457,18 +457,21 @@ fn captured_text_prefers_utf8_over_legacy_code_pages() {
     utf16be.extend("中文".encode_utf16().flat_map(u16::to_be_bytes));
     assert_eq!(decode_captured_text(&utf16be), "中文");
 
-    // GBK bytes for "中文" (code page 936): decoded when the console output
-    // code page matches, kept lossy otherwise.
+    // GBK bytes for "中文". The decoder tries OEM, then ANSI, then the
+    // console page. A single-byte page still converts these bytes, so a
+    // non-936 host must not be required to emit U+FFFD.
     let legacy_code_page = [0xd6, 0xd0, 0xce, 0xc4];
     #[cfg(windows)]
     {
-        let console = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+        // SAFETY: tests read process-global code-page ids only.
+        let oem = unsafe { windows_sys::Win32::Globalization::GetOEMCP() };
+        let ansi = unsafe { windows_sys::Win32::Globalization::GetACP() };
         let decoded = decode_captured_text(&legacy_code_page);
-        if console == 936 {
-            assert_eq!(decoded, "中文", "GBK console output must decode");
+        if oem == 936 || ansi == 936 {
+            assert_eq!(decoded, "中文", "GBK OEM or ANSI output must decode");
         } else {
             assert_ne!(decoded, "中文");
-            assert!(decoded.contains('\u{fffd}'));
+            assert!(!decoded.is_empty());
         }
     }
     #[cfg(not(windows))]
