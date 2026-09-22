@@ -10,7 +10,7 @@ members = [
     "crates/mycode-desktop",
 ]
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 
@@ -47,7 +47,6 @@ rustix = "1"
 windows-sys = "0.61"
 junction = { version = "2", default-features = false }
 sha2 = "0.11"
-fs2 = "0.4"
 getrandom = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1", features = ["serde"] }
