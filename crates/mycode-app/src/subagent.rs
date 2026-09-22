@@ -71,6 +71,24 @@ impl BridgeTaskHost {
     }
 }
 
+/// `git` for a worktree lease. On Windows the desktop process has no
+/// console, so a plain spawn of `git.exe` allocates a black window.
+fn git_command() -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // CREATE_NO_WINDOW: do not allocate a console for this child.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new("git");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("git")
+    }
+}
+
 /// One git worktree lease: a disposable checkout plus its manifest, so a
 /// crashed process can recover leases on the next start.
 pub(crate) struct WorktreeLease {
@@ -89,7 +107,7 @@ impl WorktreeLease {
         let leases = home.root().join("task-worktrees");
         std::fs::create_dir_all(&leases).map_err(|error| format!("lease dir: {error}"))?;
         let path = leases.join(&id);
-        let output = std::process::Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(repo)
             .args(["worktree", "add", "--detach"])
@@ -113,7 +131,7 @@ impl WorktreeLease {
 
     /// Releases the lease; best-effort because the work may be done.
     pub(crate) fn release(self) {
-        let output = std::process::Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(&self.path)
             .args(["worktree", "remove", "--force"])
@@ -125,7 +143,7 @@ impl WorktreeLease {
             && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&record)
             && let Some(repo) = value["repo"].as_str()
         {
-            let _ = std::process::Command::new("git")
+            let _ = git_command()
                 .arg("-C")
                 .arg(repo)
                 .args(["worktree", "remove", "--force"])
@@ -154,7 +172,7 @@ pub(crate) fn recover_task_worktrees(home: &HomeLayout) {
                 && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 && let (Some(repo), Some(lease)) = (value["repo"].as_str(), value["path"].as_str())
             {
-                let _ = std::process::Command::new("git")
+                let _ = git_command()
                     .arg("-C")
                     .arg(repo)
                     .args(["worktree", "remove", "--force"])
