@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px, rems,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::ui::skin::popover_panel;
@@ -172,9 +172,7 @@ pub(super) fn render_model_menu(
         .pb_1()
         .child(
             popover_panel("model-menu", theme)
-                .mx_auto()
                 .w_full()
-                .max_w(rems(46.))
                 .max_h(px(420.))
                 .overflow_y_scroll()
                 .p_2()
@@ -213,9 +211,7 @@ pub(super) fn render_reasoning_menu(
         .pb_1()
         .child(
             popover_panel("reasoning-menu", theme)
-                .mx_auto()
                 .w_full()
-                .max_w(rems(46.))
                 .p_2()
                 .flex()
                 .flex_col()
@@ -384,9 +380,7 @@ pub(super) fn render_mention_layer(
         .pb_1()
         .child(
             popover_panel("mention-menu", theme)
-                .mx_auto()
                 .w_full()
-                .max_w(rems(46.))
                 .max_h(px(300.))
                 .overflow_y_scroll()
                 .p_2()

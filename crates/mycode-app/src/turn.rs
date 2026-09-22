@@ -174,6 +174,17 @@ async fn run_chat_turn(
     // Replay history is rebuilt from the ledger's typed events: display
     // entries flatten tool traffic into text, which breaks the
     // tool_use/tool_result pairing providers validate.
+    // Follow the durable tip when the desktop snapshot is behind. A stale
+    // expected head otherwise surfaces as "the session moved on".
+    let expected_head = match state.service.open(&session).await {
+        Ok(opened) => opened
+            .heads
+            .iter()
+            .find(|head| head.branch_id == branch)
+            .map(|head| head.head.clone())
+            .unwrap_or(expected_head),
+        Err(_) => expected_head,
+    };
     let history = ledger_history(&state.service, &session, &branch, &expected_head)
         .await
         .map_err(render_error)?;
@@ -276,19 +287,14 @@ async fn run_chat_turn(
     let history = crate::compaction::compact_history(&compact_scope, history).await;
 
     let resources = mycode_config::discover_resources(home, &cwd);
-    let mut system_prompt = String::from(
-        "You are MYCode, a coding agent. Answer concisely and explain what you did.\n\n\
-Skills, MCP tools, and subagents are already available. Use a matching skill, \
-MCP tool, or `task` role as soon as it fits — do not wait for the user to name \
-it. The tool list below is the live plugin surface.",
-    );
+    let mut system_prompt =
+        String::from("You are MYCode, a coding agent. Answer concisely and explain what you did.");
     system_prompt.push_str(
         "\n\nFile work MUST use the native tools: `find` and `grep` to locate \
 files and code, `read` to inspect them, `write` and `edit` to change them. \
 Use `shell` only when a task genuinely needs a process (build, test, git, \
 package installs) — never to search, read, or write files.\n\
-Use `web_search` then `fetch_content` for current web facts (Querit or AnySearch). \
-Use `task` to delegate to scout/artisan/steward/sentinel when a scoped role fits.",
+Use `web_search` then `fetch_content` for current web facts (Querit or AnySearch).",
     );
     for part in mycode_config::render_resource_prompt(&resources) {
         system_prompt.push_str(
@@ -298,27 +304,16 @@ Use `task` to delegate to scout/artisan/steward/sentinel when a scoped role fits
         );
         system_prompt.push_str(&part);
     }
-    let user_home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(std::path::PathBuf::from);
-    let skills = mycode_config::discover_skills(&cwd, user_home.as_deref());
-    if let Some(catalog) = mycode_config::render_skill_catalog(&skills) {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&catalog);
-    }
-    // The tool registry's usage hints ride along, so the model knows which
-    // tools exist and how to call them (a custom prompt alone drops them).
+    // Skill bodies and role rules stay off the standing prompt. Grok Build
+    // reads a skill file only when its path is given, and fetches an MCP
+    // schema on first use instead of inlining every catalog each turn.
     system_prompt.push_str(
-        "
-
-",
+        "\n\nSkills stay on disk. Read a SKILL.md with `read` only when the user \
+names /slug or gives its path.\n\
+Use `task` for one bounded subagent role. Keep small work in main.",
     );
+    system_prompt.push_str("\n\n");
     system_prompt.push_str(&mycode_agent::build_system_prompt(&registry));
-    let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
-    system_prompt.push_str(&crate::subagent::delegation_directive(
-        &role_catalog,
-        &settings.subagents,
-    ));
 
     let turn_started = std::time::Instant::now();
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);

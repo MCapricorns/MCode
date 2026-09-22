@@ -13,7 +13,6 @@ pub(crate) const MAX_FRAME_BYTES: usize = 1024 * 1024;
 #[derive(Debug, Default)]
 pub struct FrameParser {
     buffer: Vec<u8>,
-    scanned: usize,
 }
 
 impl FrameParser {
@@ -32,14 +31,18 @@ impl FrameParser {
     pub fn feed(&mut self, chunk: &[u8]) -> Result<Vec<String>, ProviderError> {
         let mut frames = Vec::new();
         for &byte in chunk {
+            if self.buffer.len() >= MAX_FRAME_BYTES {
+                self.buffer.clear();
+                return Err(ProviderError::with_message(
+                    ProviderErrorKind::Protocol,
+                    "SSE frame exceeds the size limit",
+                ));
+            }
             self.buffer.push(byte);
             if byte == b'\n' {
-                let line = self.buffer.clone();
-                self.buffer.clear();
+                let line = std::mem::take(&mut self.buffer);
                 if let Some(data) = self.take_data_line(&line) {
-                    self.scanned += data.len();
-                    if self.scanned > MAX_FRAME_BYTES {
-                        self.scanned = 0;
+                    if data.len() > MAX_FRAME_BYTES {
                         return Err(ProviderError::with_message(
                             ProviderErrorKind::Protocol,
                             "SSE frame exceeds the size limit",
@@ -135,5 +138,17 @@ mod tests {
         let big = format!("data: {}\n", "x".repeat(MAX_FRAME_BYTES + 1));
         let error = parser.feed(big.as_bytes()).unwrap_err();
         assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+    }
+
+    #[test]
+    fn many_small_frames_are_not_one_frame() {
+        let mut parser = FrameParser::new();
+        let line = format!("data: {}\n", "x".repeat(1024));
+        let mut total = 0usize;
+        while total <= MAX_FRAME_BYTES {
+            let frames = parser.feed(line.as_bytes()).expect("small frame");
+            assert_eq!(frames.len(), 1);
+            total += frames[0].len();
+        }
     }
 }

@@ -128,8 +128,15 @@ pub fn render_root(
             this.child(sidebar::render_project_menu_layer(workspace, cx))
         })
         .when(
-            workspace.vm().view == MainView::Chat && !workspace.vm().todo_rows.is_empty(),
+            workspace.vm().view == MainView::Chat
+                && crate::view_model::task_surface_visible(workspace.vm())
+                && !workspace.vm().todo_rows.is_empty(),
             |this| this.child(todos::render_todo_float(workspace, layout, cx)),
+        )
+        .when(
+            workspace.vm().subagent_window.is_some()
+                && crate::view_model::task_surface_visible(workspace.vm()),
+            |this| this.child(context::render_subagent_window(workspace, cx)),
         )
         .when(workspace.vm().pending_ask.is_some(), |this| {
             this.child(chat::render_ask_panel(workspace, window, cx))

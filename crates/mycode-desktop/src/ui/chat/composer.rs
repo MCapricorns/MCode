@@ -8,7 +8,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rems,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::ui::{desk::Desk, ellipsis, project_label, skin};
@@ -91,9 +91,7 @@ pub(super) fn render_composer(
                 .flex_col()
                 .gap_1()
                 .p_2()
-                .mx_auto()
                 .w_full()
-                .max_w(rems(46.))
                 .rounded(px(3.))
                 .border_1()
                 .border_color(theme.border)
@@ -129,7 +127,6 @@ pub(super) fn render_composer(
                         .id("composer-chip-row")
                         .flex()
                         .flex_row()
-                        .flex_wrap()
                         .items_center()
                         .gap_1()
                         .pt_1()
@@ -171,13 +168,6 @@ pub(super) fn render_composer(
                             ))
                         })
                         .child(div().flex_1().min_w_0())
-                        .child(
-                            div()
-                                .text_xs()
-                                .flex_shrink_0()
-                                .text_color(theme.muted_foreground)
-                                .child("Enter to send"),
-                        )
                         .when(sending && has_draft, |this| {
                             this.child(
                                 Button::new("queue")
@@ -270,9 +260,7 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
         .flex()
         .flex_col()
         .gap_1()
-        .mx_auto()
         .w_full()
-        .max_w(rems(46.))
         .pb_1()
         .child(
             div()
@@ -287,6 +275,33 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .font_family(theme.mono_font_family.clone())
                         .text_color(desk.faint)
                         .child(format!("QUEUED  {}", items.len())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Sends when this turn ends"),
+                )
+                .child(
+                    div()
+                        .id("queued-interrupt")
+                        .flex_shrink_0()
+                        .px_2()
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.secondary_active)
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.secondary_hover))
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_interrupt_queued(0, cx);
+                        }))
+                        .child("Interrupt & send"),
                 ),
         )
         .children(items.into_iter().enumerate().map(|(index, text)| {

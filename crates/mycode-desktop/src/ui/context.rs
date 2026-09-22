@@ -240,127 +240,138 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                 theme,
             ))
         })
-        .when(!vm.live_jobs.is_empty(), |this| {
-            this.child(insp_sec(
-                "subagents",
-                Some(("SUBAGENTS".to_owned(), None)),
-                vm.live_jobs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, job)| {
-                        let (lamp, label, color) = if job.done {
-                            (desk.green, "DONE", desk.green)
-                        } else {
-                            (desk.amber, "RUN", desk.amber)
-                        };
-                        let title = if job.role.is_empty() {
-                            if job.label.is_empty() {
-                                "task".to_owned()
+        .when(
+            crate::view_model::task_surface_visible(vm) && !vm.live_jobs.is_empty(),
+            |this| {
+                this.child(insp_sec(
+                    "subagents",
+                    Some(("SUBAGENTS".to_owned(), None)),
+                    vm.live_jobs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, job)| {
+                            let (lamp, label, color) = if job.done {
+                                (desk.green, "DONE", desk.green)
                             } else {
-                                job.label.clone()
-                            }
-                        } else if job.label.is_empty() {
-                            job.role.clone()
-                        } else {
-                            format!("{} · {}", job.role, job.label)
-                        };
-                        div()
-                            .id(format!("subagent-{index}"))
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .py(px(6.))
-                            .border_b_1()
-                            .border_dashed()
-                            .border_color(theme.border)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_start()
-                                    .gap_2()
-                                    .child(super::lamp(lamp))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_sm()
-                                            .whitespace_normal()
-                                            .when(job.done, |this| this.opacity(0.5))
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .text_xs()
-                                            .font_family(theme.mono_font_family.clone())
-                                            .text_color(color)
-                                            .child(label),
-                                    ),
-                            )
-                            .when(!job.step.is_empty(), |this| {
-                                this.child(
+                                (desk.amber, "RUN", desk.amber)
+                            };
+                            let title = if job.role.is_empty() {
+                                if job.label.is_empty() {
+                                    "task".to_owned()
+                                } else {
+                                    job.label.clone()
+                                }
+                            } else if job.label.is_empty() {
+                                job.role.clone()
+                            } else {
+                                format!("{} · {}", job.role, job.label)
+                            };
+                            let call_id = job.call_id.clone();
+                            div()
+                                .id(format!("subagent-{index}"))
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .py(px(6.))
+                                .border_b_1()
+                                .border_dashed()
+                                .border_color(theme.border)
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    workspace.on_open_subagent(&call_id, cx);
+                                }))
+                                .child(
                                     div()
-                                        .pl(px(18.))
-                                        .text_xs()
-                                        .text_color(desk.faint)
-                                        .whitespace_normal()
-                                        .child(job.step.clone()),
+                                        .flex()
+                                        .flex_row()
+                                        .items_start()
+                                        .gap_2()
+                                        .child(super::lamp(lamp))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_sm()
+                                                .whitespace_normal()
+                                                .when(job.done, |this| this.opacity(0.5))
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_xs()
+                                                .font_family(theme.mono_font_family.clone())
+                                                .text_color(color)
+                                                .child(label),
+                                        ),
                                 )
-                            })
-                            .into_any_element()
-                    })
-                    .collect(),
-                theme,
-            ))
-        })
-        .when(!vm.todo_rows.is_empty(), |this| {
-            this.child(insp_sec(
-                "tasks",
-                Some(("SESSION QUEUE".to_owned(), None)),
-                vm.todo_rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (content, status))| {
-                        let (lamp, label, color) = match status.as_str() {
-                            "done" => (desk.green, "DONE", desk.green),
-                            "in progress" => (desk.amber, "RUN", desk.amber),
-                            _ => (desk.faint, "QUEUE", desk.faint),
-                        };
-                        div()
-                            .id(format!("todo-{index}"))
-                            .flex()
-                            .flex_row()
-                            .items_start()
-                            .gap_2()
-                            .py(px(6.))
-                            .border_b_1()
-                            .border_dashed()
-                            .border_color(theme.border)
-                            .child(super::lamp(lamp))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .whitespace_normal()
-                                    .when(status == "done", |this| this.opacity(0.5))
-                                    .child(content.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_xs()
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(color)
-                                    .child(label),
-                            )
-                            .into_any_element()
-                    })
-                    .collect(),
-                theme,
-            ))
-        })
+                                .when(!job.step.is_empty(), |this| {
+                                    this.child(
+                                        div()
+                                            .pl(px(18.))
+                                            .text_xs()
+                                            .text_color(desk.faint)
+                                            .whitespace_normal()
+                                            .child(job.step.clone()),
+                                    )
+                                })
+                                .into_any_element()
+                        })
+                        .collect(),
+                    theme,
+                ))
+            },
+        )
+        .when(
+            crate::view_model::task_surface_visible(vm) && !vm.todo_rows.is_empty(),
+            |this| {
+                this.child(insp_sec(
+                    "tasks",
+                    Some(("SESSION QUEUE".to_owned(), None)),
+                    vm.todo_rows
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (content, status))| {
+                            let (lamp, label, color) = match status.as_str() {
+                                "done" => (desk.green, "DONE", desk.green),
+                                "in progress" => (desk.amber, "RUN", desk.amber),
+                                _ => (desk.faint, "QUEUE", desk.faint),
+                            };
+                            div()
+                                .id(format!("todo-{index}"))
+                                .flex()
+                                .flex_row()
+                                .items_start()
+                                .gap_2()
+                                .py(px(6.))
+                                .border_b_1()
+                                .border_dashed()
+                                .border_color(theme.border)
+                                .child(super::lamp(lamp))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .whitespace_normal()
+                                        .when(status == "done", |this| this.opacity(0.5))
+                                        .child(content.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_xs()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_color(color)
+                                        .child(label),
+                                )
+                                .into_any_element()
+                        })
+                        .collect(),
+                    theme,
+                ))
+            },
+        )
         .child(insp_sec(
             "resources",
             Some(("PROMPT RESOURCES".to_owned(), None)),
@@ -526,6 +537,113 @@ fn bar_row(
                 .font_family(theme.mono_font_family.clone())
                 .text_color(desk.faint)
                 .child(figure.to_owned()),
+        )
+        .into_any_element()
+}
+
+/// Small window for one inspector subagent so its progress is readable.
+pub(super) fn render_subagent_window(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let call_id = workspace.vm().subagent_window.clone().unwrap_or_default();
+    let job = workspace
+        .vm()
+        .live_jobs
+        .iter()
+        .find(|job| job.call_id == call_id)
+        .cloned();
+    let title = job.as_ref().map(|job| {
+        if job.role.is_empty() {
+            if job.label.is_empty() {
+                "Subagent".to_owned()
+            } else {
+                job.label.clone()
+            }
+        } else if job.label.is_empty() {
+            job.role.clone()
+        } else {
+            format!("{} \u{b7} {}", job.role, job.label)
+        }
+    });
+    let log = job.map(|job| job.log).unwrap_or_default();
+    let last = log.len().saturating_sub(1);
+    div()
+        .id("subagent-window-layer")
+        .absolute()
+        .top(px(88.))
+        .right(px(336.))
+        .w(px(360.))
+        .max_h(px(420.))
+        .flex()
+        .flex_col()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(super::skin::glass_border(theme))
+        .bg(super::skin::popover(theme))
+        .shadow_lg()
+        .overflow_hidden()
+        .occlude()
+        .child(
+            div()
+                .px_3()
+                .py_2()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child(title.unwrap_or_else(|| "Subagent".to_owned())),
+                )
+                .child(
+                    div()
+                        .id("subagent-window-close")
+                        .px_2()
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|this| this.bg(theme.secondary))
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            cx.stop_propagation();
+                            workspace.on_open_subagent("", cx);
+                        }))
+                        .child("Close"),
+                ),
+        )
+        .child(
+            div()
+                .id("subagent-window-log")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .children(log.into_iter().enumerate().map(|(index, line)| {
+                    let current = index == last;
+                    div()
+                        .id(format!("subagent-log-{index}"))
+                        .text_color(if current {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(line)
+                })),
         )
         .into_any_element()
 }

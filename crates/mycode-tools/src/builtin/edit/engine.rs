@@ -853,14 +853,15 @@ fn line_diff_preview(old: &str, new: &str) -> String {
         return truncated_sides(&old_lines, &new_lines, PREVIEW_LINE_BYTES, MAX_EMITTED);
     }
     let mut out = String::new();
-    let mut emitted = 0usize;
-    for (sign, line) in changed_lines(&old_lines, &new_lines) {
+    for (emitted, (sign, line)) in changed_lines(&old_lines, &new_lines)
+        .into_iter()
+        .enumerate()
+    {
         if emitted >= MAX_EMITTED {
             out.push_str("[diff truncated]\n");
             break;
         }
         push_preview_line(&mut out, sign, line, PREVIEW_LINE_BYTES);
-        emitted += 1;
     }
     out
 }
@@ -919,13 +920,13 @@ fn changed_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str)> {
 }
 
 fn truncated_sides(old: &[&str], new: &[&str], line_bytes: usize, max_emitted: usize) -> String {
+    let old_take = max_emitted / 2;
+    let shown = old.len().min(old_take);
     let mut out = String::new();
-    let mut emitted = 0usize;
-    for line in old.iter().take(max_emitted / 2) {
+    for line in old.iter().take(old_take) {
         push_preview_line(&mut out, '-', line, line_bytes);
-        emitted += 1;
     }
-    for line in new.iter().take(max_emitted.saturating_sub(emitted)) {
+    for line in new.iter().take(max_emitted.saturating_sub(shown)) {
         push_preview_line(&mut out, '+', line, line_bytes);
     }
     out.push_str("[diff truncated]\n");
@@ -941,6 +942,15 @@ fn push_preview_line(out: &mut String, sign: char, line: &str, line_bytes: usize
         out.push('\u{2026}');
     }
     out.push('\n');
+}
+
+pub(super) fn snippet(text: &str) -> String {
+    let (cut, truncated) = crate::builtin::truncate_bytes(text, MAX_DIFF_SNIPPET);
+    let mut visible = cut.replace('\r', "\\r").replace('\n', "\\n");
+    if truncated {
+        visible.push('\u{2026}');
+    }
+    visible
 }
 
 #[cfg(test)]
@@ -960,13 +970,4 @@ mod diff_preview_tests {
         assert!(!diff.contains("- keep"), "{diff}");
         assert!(!diff.contains("+ trail"), "{diff}");
     }
-}
-
-pub(super) fn snippet(text: &str) -> String {
-    let (cut, truncated) = crate::builtin::truncate_bytes(text, MAX_DIFF_SNIPPET);
-    let mut visible = cut.replace('\r', "\\r").replace('\n', "\\n");
-    if truncated {
-        visible.push('…');
-    }
-    visible
 }

@@ -42,6 +42,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 streaming: None,
             });
             state.live_jobs.clear();
+            state.subagent_window = None;
             state.transcript_extra = 0;
         }
         DesktopAction::SessionDeleted => {
@@ -49,6 +50,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.sending = false;
             state.queued.clear();
             state.live_jobs.clear();
+            state.subagent_window = None;
             state.pending_ask = None;
             state.error = None;
             state.transcript_extra = 0;
@@ -60,9 +62,12 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 .map(|active| active.session_id.as_str())
                 != Some(conversation.session_id.as_str());
             if switched {
-                // Queue and sending belong to the previous session's turn.
+                // Queue, tasks, and asks belong to the previous session.
                 state.queued.clear();
                 state.live_jobs.clear();
+                state.subagent_window = None;
+                state.todo_rows.clear();
+                state.pending_ask = None;
                 state.sending = false;
                 state.transcript_extra = 0;
             }
@@ -115,6 +120,15 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if !state.queued.is_empty() {
                 state.queued.remove(0);
             }
+        }
+        DesktopAction::QueuedMessagePromoted(index) => {
+            if index < state.queued.len() {
+                let item = state.queued.remove(index);
+                state.queued.insert(0, item);
+            }
+        }
+        DesktopAction::SubagentWindowChanged(call_id) => {
+            state.subagent_window = call_id;
         }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
@@ -500,6 +514,9 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::ActiveProjectChanged(project) => {
             state.project_dir = project;
+            if !super::task_surface_visible(state) {
+                state.subagent_window = None;
+            }
         }
         DesktopAction::RecentRemoved(project) => {
             state
@@ -885,7 +902,7 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
             job.role = role.to_owned();
         }
         if !step.is_empty() {
-            job.step = step.to_owned();
+            push_job_step(job, step);
         }
         job.done = done;
         return;
@@ -900,22 +917,34 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
             job.role = role.to_owned();
         }
         if !step.is_empty() {
-            job.step = step.to_owned();
+            push_job_step(job, step);
         }
         job.done = done;
         return;
     }
+    let step = if step.is_empty() {
+        "starting".to_owned()
+    } else {
+        step.to_owned()
+    };
     state.live_jobs.push(LiveJob {
         call_id: call_id.to_owned(),
         role: role.to_owned(),
         label: String::new(),
-        step: if step.is_empty() {
-            "starting".to_owned()
-        } else {
-            step.to_owned()
-        },
+        log: vec![step.clone()],
+        step,
         done,
     });
+}
+
+fn push_job_step(job: &mut super::LiveJob, step: &str) {
+    job.step = step.to_owned();
+    if job.log.last().is_none_or(|last| last != step) {
+        job.log.push(step.to_owned());
+        if job.log.len() > 48 {
+            job.log.remove(0);
+        }
+    }
 }
 
 fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str, message: &str) {

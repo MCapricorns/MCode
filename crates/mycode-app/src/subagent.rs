@@ -169,7 +169,11 @@ pub(crate) fn recover_task_worktrees(home: &HomeLayout) {
 }
 
 /// Parent-prompt section listing enabled roles and the routing contract.
+///
+/// Not injected on every turn; the standing prompt stays short and the
+/// `task` tool carries the call contract.
 #[must_use]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
     let enabled: Vec<&SubagentRole> = catalog
         .roles

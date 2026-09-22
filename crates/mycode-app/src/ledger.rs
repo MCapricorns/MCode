@@ -272,9 +272,22 @@ pub(crate) async fn send_message(
     let reservation = service
         .reserve_event(session, branch, EventKind::Message, None, &payload)
         .await?;
-    let appended = service
+    let appended = match service
         .append(session, branch, expected_head, &reservation)
-        .await?;
+        .await
+    {
+        // A stale desktop head is not a lost session. The reservation was
+        // already consumed, so reserve again and commit at the durable tip.
+        Err(SessionError::Conflict(conflict)) => {
+            let reservation = service
+                .reserve_event(session, branch, EventKind::Message, None, &payload)
+                .await?;
+            service
+                .append(session, branch, &conflict.actual, &reservation)
+                .await?
+        }
+        other => other?,
+    };
     let event_id = match appended.head {
         HeadStamp::Event(event) => event,
         HeadStamp::Empty => return Err(SessionError::Corrupt),

@@ -50,6 +50,8 @@ pub struct LiveJob {
     pub label: String,
     /// Latest nested tool or progress line.
     pub step: String,
+    /// Recent progress lines for the detail window.
+    pub log: Vec<String>,
     /// Whether the child has returned its answer.
     pub done: bool,
 }
@@ -406,6 +408,8 @@ pub struct WorkspaceState {
     pub skills: Vec<SkillEntry>,
     /// Live `task` subagent runs for the inspector panel.
     pub live_jobs: Vec<LiveJob>,
+    /// Call id of the subagent detail window, when open.
+    pub subagent_window: Option<String>,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Draft answers aligned with [`Self::pending_ask`].
@@ -609,6 +613,10 @@ pub enum DesktopAction {
     QueuedMessageRemoved(usize),
     /// The next queued follow-up was taken to send.
     QueuedMessageTaken,
+    /// One queued follow-up moved to the front so an interrupt can send it.
+    QueuedMessagePromoted(usize),
+    /// Opens or closes the subagent detail window.
+    SubagentWindowChanged(Option<String>),
     /// The user sent a prompt; show a working status before the first token.
     TurnArmed,
     /// Incremental assistant text from the active model turn.
@@ -793,6 +801,26 @@ pub fn suggested_model_ids(ids: impl IntoIterator<Item = String>) -> Vec<String>
         .filter(|id| model_strength(id) > 0 && !compact_model(&id.to_ascii_lowercase()))
         .take(8)
         .collect()
+}
+
+/// Task cards belong to the open session's project. Leaving that project
+/// hides them instead of leaving another project's work on screen.
+#[must_use]
+pub fn task_surface_visible(state: &WorkspaceState) -> bool {
+    let Some(session_id) = state
+        .active
+        .as_ref()
+        .map(|conversation| conversation.session_id.as_str())
+    else {
+        return false;
+    };
+    let Some(project) = state.project_dir.as_deref() else {
+        return false;
+    };
+    state
+        .session_projects
+        .iter()
+        .any(|(id, bound)| id == session_id && same_project_path(bound, project))
 }
 
 /// Compare project paths the way the sidebar groups them.

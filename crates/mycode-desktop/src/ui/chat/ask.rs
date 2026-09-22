@@ -26,10 +26,10 @@ pub(crate) fn render_ask_panel(
         .absolute()
         .inset_0()
         .flex()
-        .items_start()
+        .items_center()
         .justify_center()
-        .pt(px(72.))
         .px_4()
+        .pb(px(72.))
         .child(
             div()
                 .id("ask-scrim")

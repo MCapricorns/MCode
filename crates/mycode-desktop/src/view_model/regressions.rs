@@ -290,10 +290,33 @@ fn reasoning_picks_route_through_the_reducer() {
 }
 
 #[test]
+fn task_cards_hide_when_the_open_chat_is_not_in_this_project() {
+    let mut state = WorkspaceState {
+        project_dir: Some(r"D:\work\alpha".to_owned()),
+        session_projects: vec![("ses-1".to_owned(), r"D:\work\beta".to_owned())],
+        active: Some(ActiveConversation {
+            session_id: "ses-1".to_owned(),
+            branch_id: "branch".to_owned(),
+            head: "empty".to_owned(),
+            entries: Vec::new(),
+            streaming: None,
+        }),
+        todo_rows: vec![("plan".to_owned(), "pending".to_owned())],
+        ..WorkspaceState::default()
+    };
+    assert!(!super::task_surface_visible(&state));
+
+    state.project_dir = Some(r"D:\work\beta".to_owned());
+    assert!(super::task_surface_visible(&state));
+}
+
+#[test]
 fn removing_a_recent_project_drops_it_from_the_list() {
-    let mut state = WorkspaceState::default();
-    state.recents = vec![r"D:\work\alpha".to_owned(), r"D:\work\beta".to_owned()];
-    state.project_dir = Some(r"D:\work\alpha".to_owned());
+    let mut state = WorkspaceState {
+        recents: vec![r"D:\work\alpha".to_owned(), r"D:\work\beta".to_owned()],
+        project_dir: Some(r"D:\work\alpha".to_owned()),
+        ..WorkspaceState::default()
+    };
     reduce(
         &mut state,
         DesktopAction::RecentRemoved(r"d:/work/alpha".to_owned()),

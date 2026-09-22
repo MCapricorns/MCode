@@ -93,6 +93,7 @@ pub(crate) fn render(
                 .child(
                     div()
                         .id("project-picker")
+                        .occlude()
                         .w(px(520.))
                         .h(px(480.))
                         .flex()
@@ -104,11 +105,12 @@ pub(crate) fn render(
                         .text_color(theme.foreground)
                         .shadow_lg()
                         .overflow_hidden()
+                        .on_click(|_, _, cx| {
+                            cx.stop_propagation();
+                        })
                         .child(picker_header(&theme, &path_label))
                         .child(picker_nav(cx, at_roots))
-                        .when(!at_roots, |panel| {
-                            panel.child(drive_strip(cx, &drives, current.as_deref(), &theme))
-                        })
+                        .child(drive_strip(cx, &drives, current.as_deref(), &theme))
                         .child(picker_list(cx, &entries, status.as_deref(), &theme))
                         .child(picker_footer(cx, at_roots, &theme)),
                 ),

@@ -289,6 +289,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_picker_enter(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         self.project_picker = Some(crate::ui::project_picker::browse(Some(path)));
         cx.notify();
     }

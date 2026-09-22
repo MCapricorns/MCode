@@ -21,8 +21,8 @@ mod updates_data;
 
 /// Window chrome bounds for the first window.
 const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
-    origin: gpui_kit::point(px(120.), px(80.)),
-    size: size(px(1280.), px(840.)),
+    origin: gpui_kit::point(px(80.), px(48.)),
+    size: size(px(1520.), px(960.)),
 };
 
 /// Poll cadence for streaming chat events from the core thread.
@@ -337,7 +337,28 @@ impl Workspace {
     }
 
     pub(crate) fn on_remove_queued(&mut self, index: usize, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         self.apply_action(DesktopAction::QueuedMessageRemoved(index), cx);
+    }
+
+    /// Stops the in-flight turn and sends one queued follow-up immediately.
+    pub(crate) fn on_open_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
+        let next = if call_id.is_empty() || self.vm.subagent_window.as_deref() == Some(call_id) {
+            None
+        } else {
+            Some(call_id.to_owned())
+        };
+        self.apply_action(DesktopAction::SubagentWindowChanged(next), cx);
+    }
+
+    pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
+        if self.vm.sending {
+            self.on_cancel_chat(cx);
+            return;
+        }
+        self.pump_queued_send(cx);
     }
 
     /// Aborts the in-flight turn; the bridge answers with a `cancelled`

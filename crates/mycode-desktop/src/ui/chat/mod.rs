@@ -10,7 +10,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, px, rems,
+    Window, div, px,
 };
 
 use crate::ui::skin;
@@ -95,8 +95,6 @@ pub(super) fn render_chat(
                         .w_full()
                         .flex()
                         .flex_col()
-                        .mx_auto()
-                        .max_w(rems(46.))
                         .gap_3()
                         .py_4()
                         .px_4()

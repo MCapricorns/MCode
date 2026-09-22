@@ -219,7 +219,7 @@ fn welcome_action(
     let fill = if emphasized {
         theme.primary
     } else {
-        theme.secondary
+        theme.secondary_active
     };
     let ink = if emphasized {
         theme.primary_foreground
