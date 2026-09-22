@@ -2,13 +2,9 @@
 # Release. Runs on `v*` tags.
 #
 # macOS ships Apple Silicon only; Intel Mac builds are dropped.
-# Assets produced per tag. A mcode-desktop-* alias is still uploaded so
-# installs that look up the old prefix can find the current package:
+# Assets produced per tag:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
-#
-# Each archive contains the current binary and a mcode-desktop copy so
-# the in-app updater can swap it in place.
 
 name: release
 
@@ -56,16 +52,12 @@ jobs:
           $stage = "mycode-desktop-$tag-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/mcode-desktop.exe"
           Copy-Item README.md "$stage/" -ErrorAction SilentlyContinue
           Copy-Item LICENSE "$stage/" -ErrorAction SilentlyContinue
           $zip = "mycode-desktop-$tag-${{ matrix.target }}.zip"
           Compress-Archive -Path $stage -DestinationPath $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
-          $legacy = "mcode-desktop-$tag-${{ matrix.target }}.zip"
-          Copy-Item $zip $legacy
-          "$hash  $legacy" | Out-File -Encoding ascii "$legacy.sha256"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -76,17 +68,12 @@ jobs:
           mkdir -p "$stage"
           chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/"
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$stage/mcode-desktop"
-          chmod +x "$stage/mcode-desktop"
           cp README.md "$stage/" 2>/dev/null || true
           cp LICENSE "$stage/" 2>/dev/null || true
           zip="mycode-desktop-$tag-${{ matrix.target }}.zip"
           zip -r "$zip" "$stage"
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
-          legacy="mcode-desktop-$tag-${{ matrix.target }}.zip"
-          cp "$zip" "$legacy"
-          printf '%s  %s\n' "$hash" "$legacy" > "$legacy.sha256"
 
       - name: Attach assets to the release
         uses: softprops/action-gh-release@v3

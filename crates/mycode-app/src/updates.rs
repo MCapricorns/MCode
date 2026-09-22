@@ -136,12 +136,7 @@ fn resolve_asset(tag: &str, notes_url: &str, assets: &[AssetJson]) -> Option<Upd
     }
     let asset = assets
         .iter()
-        .find(|asset| asset.name.starts_with("mycode-desktop-") && asset.name.ends_with(suffix))
-        .or_else(|| {
-            assets.iter().find(|asset| {
-                asset.name.starts_with("mcode-desktop-") && asset.name.ends_with(suffix)
-            })
-        })?;
+        .find(|asset| asset.name.starts_with("mycode-desktop-") && asset.name.ends_with(suffix))?;
     let version = tag.trim_start_matches('v').to_owned();
     Some(UpdateOffer {
         version,
@@ -277,8 +272,7 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
             continue;
         }
         let base = name.split('/').next_back().unwrap_or(&name);
-        let executable =
-            name.ends_with(".exe") || base == "mycode-desktop" || base == "mcode-desktop";
+        let executable = name.ends_with(".exe") || base == "mycode-desktop";
         if !executable {
             continue;
         }
@@ -467,43 +461,27 @@ mod tests {
     }
 
     #[test]
-    fn resolve_asset_accepts_legacy_mcode_prefix() {
-        let assets = vec![AssetJson {
-            name: format!("mcode-desktop-v0.2.0{}", asset_suffix()),
-            browser_download_url: "https://example.com/legacy".to_owned(),
-            size: 99,
-        }];
-        let offer = resolve_asset(
-            "v0.2.0",
-            "https://github.com/x/releases/tag/v0.2.0",
-            &assets,
-        )
-        .expect("legacy asset");
-        assert_eq!(offer.asset_url, "https://example.com/legacy");
-    }
-
-    #[test]
-    fn resolve_asset_prefers_mycode_prefix() {
-        let suffix = asset_suffix();
+    fn resolve_asset_ignores_non_matching_assets() {
         let assets = vec![
             AssetJson {
-                name: format!("mcode-desktop-v0.3.0{suffix}"),
-                browser_download_url: "https://example.com/legacy".to_owned(),
+                name: "other.zip".to_owned(),
+                browser_download_url: "https://example.com/other".to_owned(),
                 size: 1,
             },
             AssetJson {
-                name: format!("mycode-desktop-v0.3.0{suffix}"),
-                browser_download_url: "https://example.com/current".to_owned(),
-                size: 2,
+                name: "mcode-desktop-v0.2.0".to_owned(),
+                browser_download_url: "https://example.com/legacy".to_owned(),
+                size: 99,
             },
         ];
-        let offer = resolve_asset(
-            "v0.3.0",
-            "https://github.com/x/releases/tag/v0.3.0",
-            &assets,
-        )
-        .expect("current asset");
-        assert_eq!(offer.asset_url, "https://example.com/current");
+        assert!(
+            resolve_asset(
+                "v0.2.0",
+                "https://github.com/x/releases/tag/v0.2.0",
+                &assets,
+            )
+            .is_none()
+        );
     }
 
     #[test]
