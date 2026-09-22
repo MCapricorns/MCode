@@ -103,7 +103,7 @@ pub(super) fn render_about_section(
         settings_row(
             "thanks",
             "Thanks",
-            Some("People who built MYCode Harness."),
+            Some("People who built MYCode."),
             div()
                 .text_sm()
                 .opacity(0.8)
@@ -186,7 +186,7 @@ pub(super) fn render_about_section(
     settings_card(
         "about",
         "About",
-        Some("MYCode Harness updates itself from GitHub releases."),
+        Some("MYCode updates itself from GitHub releases."),
         theme,
         rows,
     )

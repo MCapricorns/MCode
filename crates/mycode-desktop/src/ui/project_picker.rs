@@ -100,8 +100,8 @@ pub(crate) fn render(
                         .flex_col()
                         .rounded(skin::radius_card())
                         .border_1()
-                        .border_color(skin::glass_border(&theme))
-                        .bg(skin::frost_card(&theme))
+                        .border_color(theme.border)
+                        .bg(theme.popover)
                         .text_color(theme.foreground)
                         .shadow_lg()
                         .overflow_hidden()
@@ -196,24 +196,27 @@ fn drive_strip(
             let label = drive_label(drive);
             div()
                 .id(format!("picker-drive-{index}"))
-                .px_2()
-                .py(px(4.))
-                .rounded(skin::radius_control())
-                .text_xs()
+                .px_3()
+                .h(px(28.))
+                .flex()
+                .items_center()
+                .rounded(px(8.))
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
                 .border_1()
                 .border_color(if selected {
-                    theme.yellow.opacity(0.55)
+                    theme.primary
                 } else {
-                    skin::glass_border(theme)
+                    theme.border
                 })
                 .bg(if selected {
-                    skin::frost_accent(theme)
+                    theme.accent
                 } else {
-                    skin::frost(theme)
+                    theme.secondary
                 })
                 .text_color(theme.foreground)
                 .cursor_pointer()
-                .hover(|style| style.bg(skin::frost_hover(theme)))
+                .hover(|style| style.bg(theme.secondary_hover))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     workspace.on_picker_enter(path.clone(), cx);
                 }))

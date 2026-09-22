@@ -20,6 +20,8 @@ pub const UI_STATE_FORMAT_VERSION: u32 = 1;
 pub const UI_STATE_KIND: &str = "mycode-ui-state";
 /// Maximum remembered recent projects.
 pub const MAX_RECENT_PROJECTS: usize = 16;
+/// Maximum folders in one workspace.
+pub const MAX_WORKSPACE_ROOTS: usize = 8;
 /// Maximum remembered session-to-project bindings.
 pub const MAX_SESSION_PROJECTS: usize = 256;
 /// Maximum length of one remembered session id.
@@ -42,9 +44,12 @@ pub struct UiState {
     /// Last selected model id.
     pub selected_model: Option<String>,
     /// Session-to-project bindings (session id, project path), most recent
-    /// first. Advisory: drives the project-grouped sidebar and restores tool
-    /// working directories after a restart.
+    /// first. Advisory: restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
+    /// Folders currently in the workspace, most recently added first.
+    /// The open chat still has one cwd; the other roots are extra tool roots.
+    #[serde(default)]
+    pub workspace_roots: Vec<String>,
 }
 
 impl Default for UiState {
@@ -56,6 +61,7 @@ impl Default for UiState {
             selected_provider: None,
             selected_model: None,
             session_projects: Vec::new(),
+            workspace_roots: Vec::new(),
         }
     }
 }
@@ -137,6 +143,14 @@ impl UiState {
         }
         for (session_id, project) in &self.session_projects {
             if !valid_session_id(session_id) || valid_project_path(project).is_none() {
+                return Err(invalid());
+            }
+        }
+        if self.workspace_roots.len() > MAX_WORKSPACE_ROOTS {
+            return Err(invalid());
+        }
+        for project in &self.workspace_roots {
+            if valid_project_path(project).is_none() {
                 return Err(invalid());
             }
         }

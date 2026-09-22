@@ -16,8 +16,9 @@ use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
 use crate::workspace::Workspace;
 
-/// The bottom composer: a single card with the textarea on top and a chip
-/// row (project, model, send) inside it — the opencode desktop shape.
+/// Bottom composer: a rounded card inset from the edges, with the model
+/// and thinking controls as quiet text buttons. Matches the OpenCode
+/// desktop prompt, not a full-bleed toolbar.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
     window: &mut Window,
@@ -27,7 +28,9 @@ pub(super) fn render_composer(
     if let Some(text) = workspace.take_composer_prefill() {
         composer.update(cx, |state, cx| state.set_value(text, window, cx));
     }
-    let model_label: SharedString = model_picker_label(workspace.vm()).into();
+    let model_label: SharedString = model_button_label(workspace.vm()).into();
+    let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
+    let show_thinking = selected_model_supports_reasoning(workspace.vm());
     let has_session = workspace.vm().active.is_some();
     let sending = workspace.vm().sending;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
@@ -58,22 +61,15 @@ pub(super) fn render_composer(
         .unwrap_or_else(|| "Set folder".to_owned())
         .into();
     let has_project = session_project.is_some();
-    let project_icon = if has_project {
-        IconName::FolderOpen
-    } else {
-        IconName::Folder
-    };
 
     div()
         .id("composer")
         .flex()
         .flex_col()
         .w_full()
-        .border_t_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::glass(theme))
         .px_4()
-        .py_2()
+        .pt_2()
+        .pb_4()
         .when_some(queue_panel, |this, queue| this.child(queue))
         .child(
             div()
@@ -81,35 +77,30 @@ pub(super) fn render_composer(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .p_2()
+                .px_3()
+                .pt_2()
+                .pb_2()
                 .w_full()
-                .rounded(skin::radius_card())
+                .rounded(px(16.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
-                .bg(skin::frost(theme))
+                .bg(theme.popover)
+                .shadow_md()
                 .child(
                     div()
                         .id("composer-input")
                         .flex()
                         .flex_row()
-                        .gap_2()
                         .w_full()
                         .min_w_0()
                         .overflow_hidden()
                         .text_sm()
                         .child(
-                            // The demo's amber `▸` prompt glyph.
-                            div()
-                                .pt(px(3.))
-                                .text_color(Desk::of(theme).amber)
-                                .child("▸"),
-                        )
-                        .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .overflow_hidden()
-                                .min_h(px(40.))
+                                .min_h(px(44.))
                                 .child(Textarea::new(&composer).appearance(false).bordered(false)),
                         ),
                 )
@@ -121,29 +112,39 @@ pub(super) fn render_composer(
                         .items_center()
                         .gap_1()
                         .pt_1()
-                        .child(composer_chip(
-                            "project",
-                            project_icon,
-                            project_chip_label,
-                            true,
-                            |workspace, _window, cx| {
-                                workspace.on_open_project_dialog(cx);
-                            },
-                            cx,
-                        ))
-                        .child(composer_chip(
+                        .when(!has_project, |this| {
+                            this.child(composer_text_button(
+                                "project",
+                                project_chip_label,
+                                false,
+                                |workspace, _window, cx| {
+                                    workspace.on_open_project_dialog(cx);
+                                },
+                                cx,
+                            ))
+                        })
+                        .child(composer_text_button(
                             "model",
-                            IconName::Bot,
                             model_label,
-                            // `provider · model · thinking` is the longest chip
-                            // label; clip it so it never displaces send.
-                            true,
+                            workspace.vm().model_menu_open,
                             |workspace, _window, cx| {
                                 let open = !workspace.vm().model_menu_open;
                                 workspace.on_toggle_model_menu(open, cx);
                             },
                             cx,
                         ))
+                        .when(show_thinking, |this| {
+                            this.child(composer_text_button(
+                                "thinking",
+                                thinking_label,
+                                workspace.vm().reasoning_menu_open,
+                                |workspace, _window, cx| {
+                                    let open = !workspace.vm().reasoning_menu_open;
+                                    workspace.on_toggle_reasoning_menu(open, cx);
+                                },
+                                cx,
+                            ))
+                        })
                         .child(div().flex_1().min_w_0())
                         .when(sending && has_draft, |this| {
                             this.child(
@@ -187,14 +188,11 @@ pub(super) fn render_composer(
         )
 }
 
-/// One composer chip: icon + label in a bordered pill that opens its menu.
-/// `truncate` lets long labels (the model chip) clip instead of displacing
-/// the send button.
-fn composer_chip(
+/// Quiet text button in the composer footer. OpenCode uses a label, not a chip.
+fn composer_text_button(
     id: &str,
-    icon: IconName,
     label: SharedString,
-    truncate: bool,
+    open: bool,
     on_click: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
@@ -204,28 +202,23 @@ fn composer_chip(
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
-        .when(truncate, |this| this.min_w_0())
-        .when(!truncate, |this| this.flex_shrink_0())
+        .min_w_0()
         .px_2()
-        .h(px(26.))
-        .rounded(skin::radius_control())
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::frost(theme))
+        .h(px(28.))
+        .rounded(px(8.))
         .text_xs()
         .cursor_pointer()
-        .text_color(theme.muted_foreground)
-        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .text_color(if open {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+        .when(open, |this| this.bg(theme.accent))
+        .hover(|this| this.bg(theme.secondary_hover).text_color(theme.foreground))
         .on_click(cx.listener(move |workspace, _, window, cx| {
             on_click(workspace, window, cx);
         }))
-        .child(Icon::new(icon).xsmall().flex_shrink_0())
-        .child(
-            div()
-                .when(truncate, |this| this.min_w_0().truncate())
-                .child(label),
-        )
+        .child(div().min_w_0().truncate().child(label))
 }
 
 /// Follow-ups waiting behind the in-flight turn; each row can be dismissed.
@@ -314,25 +307,23 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
         }))
 }
 
-/// Composer chip label for the thinking-effort submenu.
-fn model_picker_label(vm: &WorkspaceState) -> String {
-    let provider = vm
-        .selected_provider
-        .as_deref()
-        .map(|id| {
-            vm.catalog
-                .as_ref()
-                .map(|catalog| catalog.display_name(id))
-                .unwrap_or_else(|| id.to_owned())
-        })
-        .unwrap_or_else(|| "Model".to_owned());
-    let base = match vm.selected_model.as_deref() {
-        Some(model) => format!("{provider} \u{b7} {model}"),
-        None => provider,
-    };
-    if selected_model_supports_reasoning(vm) {
-        format!("{base} \u{b7} {}", selected_reasoning_level(vm))
-    } else {
-        base
+fn model_button_label(vm: &WorkspaceState) -> String {
+    vm.selected_model
+        .clone()
+        .unwrap_or_else(|| "Select model".to_owned())
+}
+
+fn thinking_button_label(vm: &WorkspaceState) -> String {
+    match selected_reasoning_level(vm) {
+        "default" => "Default".to_owned(),
+        "off" => "Off".to_owned(),
+        "on" => "On".to_owned(),
+        "minimal" => "Minimal".to_owned(),
+        "low" => "Low".to_owned(),
+        "medium" => "Medium".to_owned(),
+        "high" => "High".to_owned(),
+        "xhigh" => "Extra high".to_owned(),
+        "max" => "Max".to_owned(),
+        other => other.to_owned(),
     }
 }

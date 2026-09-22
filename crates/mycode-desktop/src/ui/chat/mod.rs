@@ -112,6 +112,9 @@ pub(super) fn render_chat(
         .when(workspace.vm().model_menu_open, |this| {
             this.child(menus::render_model_menu(workspace, cx))
         })
+        .when(workspace.vm().reasoning_menu_open, |this| {
+            this.child(menus::render_thinking_menu(workspace, cx))
+        })
         .when(
             workspace
                 .vm()
@@ -119,6 +122,11 @@ pub(super) fn render_chat(
                 .as_ref()
                 .is_some_and(|mention| !mention.items.is_empty()),
             |this| this.child(menus::render_mention_layer(workspace, cx)),
+        )
+        .when(
+            crate::view_model::task_surface_visible(workspace.vm())
+                && !workspace.vm().todo_rows.is_empty(),
+            |this| this.child(super::todos::render_todo_inline(workspace, cx)),
         )
         .child(composer::render_composer(workspace, _window, cx))
         .into_any_element()

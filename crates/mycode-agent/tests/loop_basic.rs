@@ -148,7 +148,7 @@ async fn tool_call_loop_executes_writes_back_and_stops() {
     let events = collector.await.expect("collector must finish");
     let started = position(
         &events,
-        |e| matches!(e, AgentEvent::ToolStarted { call_id, name } if call_id.as_str() == "c1" && name == "echo"),
+        |e| matches!(e, AgentEvent::ToolStarted { call_id, name, .. } if call_id.as_str() == "c1" && name == "echo"),
         "ToolStarted(c1)",
     );
     let completed = position(

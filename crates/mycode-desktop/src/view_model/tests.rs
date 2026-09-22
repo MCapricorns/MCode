@@ -505,6 +505,7 @@ fn task_progress_fills_the_subagent_panel() {
         DesktopAction::ToolStarted {
             call_id: "call-task".to_owned(),
             name: "task".to_owned(),
+            target: String::new(),
         },
     );
     reduce(
@@ -569,6 +570,7 @@ fn concurrent_task_progress_keeps_one_card_per_call() {
             DesktopAction::ToolStarted {
                 call_id: call_id.to_owned(),
                 name: "task".to_owned(),
+                target: String::new(),
             },
         );
         reduce(

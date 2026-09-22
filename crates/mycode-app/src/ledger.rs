@@ -385,13 +385,14 @@ impl HeadWriter {
         &self,
         provider_call_id: &str,
         name: &str,
+        target: &str,
     ) -> Result<(), SessionError> {
         let identity = SessionCallId::generate().ok_or(SessionError::Corrupt)?;
         self.calls
             .lock()
             .await
             .insert(provider_call_id.to_owned(), identity.clone());
-        let payload = serde_json::json!({ "name": name });
+        let payload = serde_json::json!({ "name": name, "target": target });
         let bytes = serde_json::to_vec(&payload).map_err(|_| SessionError::Corrupt)?;
         self.write_event(EventKind::ToolCall, Some(identity), &bytes)
             .await
@@ -524,7 +525,7 @@ mod tests {
             details: None,
         };
         writer
-            .open_call("call-1", "find")
+            .open_call("call-1", "find", "src")
             .await
             .expect("tool call commit");
         let result_id = writer

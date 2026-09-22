@@ -299,7 +299,7 @@ pub(super) fn render_tool_block(
                 ),
         );
     if let Some(result) = result {
-        let body = result_body(call.text.as_ref(), result, theme, &desk);
+        let body = result_body(tool_name(call.text.as_ref()), result, theme, &desk);
         card = card.child(
             div()
                 .border_t_1()
@@ -307,23 +307,12 @@ pub(super) fn render_tool_block(
                 .child(body),
         );
     }
-    desk_block(
-        call,
-        theme,
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .w_full()
-            .child(mono_chip(
-                "TOOL",
-                desk.amber,
-                desk.amber.opacity(0.3),
-                theme,
-            ))
-            .child(card),
-    )
-    .into_any_element()
+    desk_block(call, theme, card).into_any_element()
+}
+
+/// The first token of a tool label is the tool name. The rest is the target.
+fn tool_name(label: &str) -> &str {
+    label.split_whitespace().next().unwrap_or(label)
 }
 
 /// The tool result body: edit diffs and search hits render as a preview

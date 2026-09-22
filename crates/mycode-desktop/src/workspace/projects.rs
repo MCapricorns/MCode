@@ -223,6 +223,46 @@ impl Workspace {
         );
     }
 
+    /// Adds one folder to the workspace without moving a chat that already
+    /// has its own working directory. An unbound chat adopts the folder.
+    pub(crate) fn on_add_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
+        let project = project.trim();
+        if project.is_empty() {
+            return;
+        }
+        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
+        if self.active_can_adopt(project)
+            && let Some(session_id) = self
+                .vm
+                .active
+                .as_ref()
+                .map(|conversation| conversation.session_id.clone())
+        {
+            self.attach_project(&session_id, project, cx);
+            return;
+        }
+        self.persist_ui_state(cx);
+    }
+
+    /// Drops one linked folder. The open chat's working directory stays.
+    pub(crate) fn on_remove_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
+        if self
+            .vm
+            .project_dir
+            .as_deref()
+            .is_some_and(|current| crate::view_model::same_project_path(current, project))
+        {
+            self.push_toast(
+                "This chat is using that folder",
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+        self.apply_action(DesktopAction::WorkspaceRootRemoved(project.to_owned()), cx);
+        self.persist_ui_state(cx);
+    }
+
     /// Removes one directory from the remembered projects list.
     pub(crate) fn on_remove_recent(&mut self, project: &str, cx: &mut Context<Self>) {
         cx.stop_propagation();
@@ -272,39 +312,19 @@ impl Workspace {
             },
             cx,
         );
+        self.apply_action(DesktopAction::WorkspaceRootAdded(project.clone()), cx);
         let already = self
             .vm
             .project_dir
             .as_deref()
             .is_some_and(|current| crate::view_model::same_project_path(current, &project));
         if already {
+            self.persist_ui_state(cx);
             return;
         }
         self.apply_action(DesktopAction::ActiveProjectChanged(Some(project)), cx);
         self.refresh_skills(cx);
         self.persist_ui_state(cx);
-    }
-
-    /// Filters the sidebar to one project and shows only that folder's chat.
-    /// The previous session keeps its own folder and keeps running there.
-    pub(crate) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
-        let Some(project) = project else {
-            self.focused_project = None;
-            self.pending_open = None;
-            self.suppress_open = true;
-            self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
-            self.persist_ui_state(cx);
-            return;
-        };
-        if self.active_is_project(&project) {
-            self.focused_project = Some(project.clone());
-            self.apply_action(DesktopAction::ProjectOpened(project), cx);
-            self.refresh_skills(cx);
-            self.persist_ui_state(cx);
-            return;
-        }
-        self.focus_project_chat(&project, false, cx);
     }
 
     pub(crate) fn on_toggle_project_menu(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -367,7 +387,7 @@ impl Workspace {
             return;
         }
         self.project_picker = None;
-        self.open_isolated_project(&folder.to_string_lossy(), cx);
+        self.on_add_workspace_root(&folder.to_string_lossy(), cx);
     }
 
     pub(crate) fn on_picker_roots(&mut self, cx: &mut Context<Self>) {
@@ -387,7 +407,7 @@ impl Workspace {
             return;
         }
         self.project_picker = None;
-        self.open_isolated_project(&path.to_string_lossy(), cx);
+        self.on_add_workspace_root(&path.to_string_lossy(), cx);
     }
 
     /// Opens one of the remembered recent projects.
@@ -427,6 +447,7 @@ impl Workspace {
     fn focus_project_chat(&mut self, project: &str, create: bool, cx: &mut Context<Self>) {
         self.focused_project = Some(project.to_owned());
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
         if let Some(session_id) = crate::view_model::newest_session_in_project(
             &self.vm.sessions,
             &self.vm.session_projects,
@@ -507,6 +528,7 @@ impl Workspace {
             cx,
         );
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
         self.dispatch(
             BridgeCommand::SetProjectDir {
                 session_id: session_id.to_owned(),
@@ -533,6 +555,7 @@ impl Workspace {
             selected_provider: self.vm.selected_provider.clone(),
             selected_model: self.vm.selected_model.clone(),
             session_projects: self.vm.session_projects.clone(),
+            workspace_roots: self.vm.workspace_roots.clone(),
         };
         self.dispatch(BridgeCommand::SaveUiState { state }, cx);
     }

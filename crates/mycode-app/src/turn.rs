@@ -136,6 +136,34 @@ pub(crate) fn checkpoint_hook(
     }
 }
 
+/// Workspace folders other than the session cwd. Missing UI state is empty.
+pub(crate) fn workspace_extra_roots(
+    home: &mycode_config::HomeLayout,
+    cwd: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let Ok(state) = mycode_config::read_ui_state(home) else {
+        return Vec::new();
+    };
+    let cwd_text = cwd.display().to_string();
+    state
+        .workspace_roots
+        .into_iter()
+        .filter(|root| !same_dir(root, &cwd_text))
+        .map(std::path::PathBuf::from)
+        .take(mycode_config::MAX_WORKSPACE_ROOTS)
+        .collect()
+}
+
+fn same_dir(left: &str, right: &str) -> bool {
+    let left = left.trim().trim_end_matches(['/', '\\']);
+    let right = right.trim().trim_end_matches(['/', '\\']);
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_turn(
     state: &CoreState,
@@ -329,13 +357,27 @@ inputSchema. Never guess parameters.",
     }
     system_prompt.push_str(
         "\n\nFor current web facts, call `web_search`, then `fetch_content` on the \
-URLs you will cite. Snippets are not evidence.\n\
-Use `task` for a bounded subagent role. Independent `task` calls in the \
-same response run at the same time — emit every scout together instead \
-of waiting for the previous child. Keep small work in main.",
+URLs you will cite. Snippets are not evidence.",
     );
+    let extra_roots = workspace_extra_roots(home, &cwd);
+    if !extra_roots.is_empty() {
+        system_prompt.push_str("\n\nWorkspace folders besides the session cwd:\n");
+        for root in &extra_roots {
+            system_prompt.push_str(&format!("- {}\n", root.display()));
+        }
+        system_prompt.push_str(
+            "Relative paths stay in the session cwd. For the other folders, pass an \
+absolute path to `read`, `write`, `edit`, `find`, and `grep`. `shell` and \
+`exec` start in the session cwd.",
+        );
+    }
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&mycode_agent::build_system_prompt(&registry));
+    let role_catalog = mycode_config::discover_roles(home, Some(&cwd));
+    let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
+    if !directive.is_empty() {
+        system_prompt.push_str(&directive);
+    }
 
     let turn_started = std::time::Instant::now();
     let (agent_tx, mut agent_rx) = tokio::sync::broadcast::channel(256);
@@ -428,12 +470,16 @@ of waiting for the previous child. Keep small work in main.",
                 mycode_core::events::AgentEvent::MessageDelta(
                     mycode_core::events::MessageDelta::ToolCallDelta { .. },
                 ) => {}
-                mycode_core::events::AgentEvent::ToolStarted { call_id, name } => {
+                mycode_core::events::AgentEvent::ToolStarted {
+                    call_id,
+                    name,
+                    target,
+                } => {
                     let spelling = call_id.to_string();
                     // The ToolCall event must commit before its result; the
                     // ledger's ordering check rejects results for calls that
                     // were never opened.
-                    if let Err(error) = writer.open_call(&spelling, &name).await {
+                    if let Err(error) = writer.open_call(&spelling, &name, &target).await {
                         let _ = pump_events.send(BridgeEvent::ChatFailed {
                             session_id: pump_session_id.clone(),
                             message: render_error(error),
@@ -444,6 +490,7 @@ of waiting for the previous child. Keep small work in main.",
                         session_id: pump_session_id.clone(),
                         call_id: spelling,
                         name,
+                        target,
                     });
                 }
                 mycode_core::events::AgentEvent::ToolProgress { call_id, message } => {
@@ -619,7 +666,8 @@ of waiting for the previous child. Keep small work in main.",
     let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
         .with_cancel(cancel)
         .with_events(agent_tx)
-        .with_cwd(cwd);
+        .with_cwd(cwd)
+        .with_extra_roots(extra_roots);
     let prompt_message = Message::User(prompt);
     let outcome = agent.prompt(prompt_message, &env).await;
     let _ = outcome
@@ -816,9 +864,13 @@ mod tests {
             let mut tools = 0usize;
             loop {
                 match agent_rx.recv().await {
-                    Ok(mycode_core::events::AgentEvent::ToolStarted { call_id, name }) => {
+                    Ok(mycode_core::events::AgentEvent::ToolStarted {
+                        call_id,
+                        name,
+                        target,
+                    }) => {
                         pump_writer
-                            .open_call(&call_id.to_string(), &name)
+                            .open_call(&call_id.to_string(), &name, &target)
                             .await
                             .expect("tool call opened");
                         tools += 1;

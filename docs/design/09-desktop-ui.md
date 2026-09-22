@@ -4,7 +4,7 @@
 
 ## 1. 布局
 
-- 顶栏：`MYCode Harness`、项目名（文件夹名，不是 `ses1-…`）、可点击的 DAY/NIGHT。没有 TAPE 条。提示是右下角气泡，3 秒后消失。
+- 顶栏：`MYCode`、项目名（文件夹名，不是 `ses1-…`）、可点击的 Light/Dark。提示是右下角气泡，3 秒后消失。
 - Chat：248px 项目侧栏 + 中央时间线 + 右侧 inspector。Inspector 里的子代理是独立卡片（角色、简述、当前步骤、RUN/DONE），长标题和路径单行截断。同一条模型回复里的多个 `task` 同时启动，默认最多 4 个。
 - 欢迎页：字标、能力 chips（AGENTS / MCP / WEB / FILES）、打开项目 / 开始聊天、最近项目（hover 显示删除）。
 - 设置：General / Models / Agents / MCP / Web / Data / About。

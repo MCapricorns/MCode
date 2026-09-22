@@ -184,6 +184,12 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
+    /// Short target shown next to the tool name: a path, query, or command.
+    #[must_use]
+    pub fn target(&self) -> String {
+        tool_target(&self.name, &self.arguments)
+    }
+
     /// Creates a tool call with an opaque provider-assigned id.
     pub fn new(
         id: impl Into<String>,
@@ -195,6 +201,74 @@ impl ToolCall {
             name: name.into(),
             arguments,
         }
+    }
+}
+
+/// One-line target for a tool call, taken from the arguments the model sent.
+///
+/// The UI shows this beside the tool name so a `read` is a path, not a black box.
+#[must_use]
+pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    };
+    let joined = match name {
+        "read" | "write" | "edit" => text("path"),
+        "grep" | "find" => join_target(&text("pattern"), &text("path")),
+        "shell" => text("command"),
+        "exec" => {
+            let args = arguments
+                .get("args")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            join_target(&text("program"), &args)
+        }
+        "web_search" => text("query"),
+        "fetch_content" => arguments
+            .get("urls")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_owned(),
+        "search_tool" | "use_tool" => text("name"),
+        "task" => join_target(&text("agent"), &text("description")),
+        _ => text("path"),
+    };
+    let flat = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.chars().take(160).collect()
+}
+
+/// Display label: `read  src/main.rs`. The name stays the first token.
+#[must_use]
+pub fn tool_label(name: &str, target: &str) -> String {
+    let target = target.trim();
+    if target.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}  {target}")
+    }
+}
+
+fn join_target(left: &str, right: &str) -> String {
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => left.to_owned(),
+        (true, false) => right.to_owned(),
+        (false, false) => format!("{left}  {right}"),
     }
 }
 
@@ -492,5 +566,16 @@ mod tests {
             data: "Zm9v".into(),
             mime_type: "application/octet-stream".into(),
         });
+    }
+
+    #[test]
+    fn tool_target_keeps_the_path_beside_the_name() {
+        let call = ToolCall::new("c1", "read", json!({"path": "src/main.rs"}));
+        assert_eq!(call.target(), "src/main.rs");
+        assert_eq!(tool_label("read", &call.target()), "read  src/main.rs");
+        assert_eq!(
+            tool_target("grep", &json!({"pattern": "foo", "path": "src"})),
+            "foo src"
+        );
     }
 }

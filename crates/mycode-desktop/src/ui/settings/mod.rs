@@ -47,7 +47,6 @@ pub(super) fn render_settings_view(
         .map(|s| (s.dirty, s.saving, s.revision));
     let nav = render_settings_nav(workspace, section, cx).into_any_element();
     let theme = cx.theme();
-    let desk = crate::ui::desk::Desk::of(theme);
     div()
         .id("settings-view")
         .flex_1()
@@ -94,7 +93,6 @@ pub(super) fn render_settings_view(
                                         .font_weight(gpui_kit::FontWeight::BOLD)
                                         .child("Settings"),
                                 )
-                                .child(div().text_sm().text_color(desk.amber).child("//"))
                                 .child(
                                     div()
                                         .text_sm()
@@ -276,10 +274,7 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     ]
 }
 
-/// The settings secondary menu in the Desk look: a mono "SETTINGS" pane
-/// head, grouped rows (WORKSPACE / CONNECT / SYSTEM) with an index, icon,
-/// label and hint, live count badges, and an amber left rail on the
-/// selected row.
+/// Settings navigation: grouped rows with an icon, label, and count.
 fn render_settings_nav(
     workspace: &Workspace,
     section: SettingsSection,
@@ -289,26 +284,16 @@ fn render_settings_nav(
     let dirty = workspace.vm().settings.as_ref().is_some_and(|s| s.dirty);
     let theme = cx.theme();
     let desk = crate::ui::desk::Desk::of(theme);
-    let mut index = 0usize;
     let mut groups: Vec<AnyElement> = Vec::new();
     for (group, members) in SettingsSection::GROUPS {
         let mut rows: Vec<AnyElement> = Vec::new();
         for candidate in members.iter().copied() {
-            index += 1;
             let badge = badges
                 .iter()
                 .find(|(s, _)| *s == candidate)
                 .map(|(_, badge)| *badge)
                 .unwrap_or_default();
-            rows.push(nav_row(
-                candidate,
-                candidate == section,
-                index,
-                badge,
-                theme,
-                &desk,
-                cx,
-            ));
+            rows.push(nav_row(candidate, candidate == section, badge, theme, cx));
         }
         groups.push(
             div()
@@ -340,10 +325,7 @@ fn render_settings_nav(
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::glass_sidebar(theme))
         .child(crate::ui::sidebar::pane_head(
-            "SETTINGS",
-            Some(&format!("{index:02}")),
-            desk.faint,
-            theme,
+            "Settings", None, desk.faint, theme,
         ))
         .child(
             div()
@@ -391,10 +373,8 @@ fn render_settings_nav(
 fn nav_row(
     candidate: SettingsSection,
     selected: bool,
-    index: usize,
     badge: NavBadge,
     theme: &Theme,
-    desk: &crate::ui::desk::Desk,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let ink = if selected {
@@ -417,24 +397,17 @@ fn nav_row(
         .cursor_pointer()
         .when(selected, |this| {
             this.bg(crate::ui::skin::frost_accent(theme))
-                .border_color(desk.amber.opacity(0.7))
+                .border_color(theme.primary)
         })
         .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_show_settings_section(candidate, cx);
         }))
         .child(
-            div()
-                .w(px(16.))
-                .text_xs()
-                .text_color(if selected { desk.amber } else { desk.faint })
-                .child(format!("{index:02}")),
-        )
-        .child(
             Icon::new(candidate.icon())
                 .with_size(px(14.))
                 .text_color(if selected {
-                    desk.amber
+                    theme.primary
                 } else {
                     theme.muted_foreground
                 }),
@@ -457,7 +430,7 @@ fn nav_row(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(desk.faint)
+                        .text_color(theme.muted_foreground)
                         .overflow_hidden()
                         .child(candidate.hint()),
                 ),
@@ -473,7 +446,11 @@ fn nav_row(
                     .border_1()
                     .border_color(theme.border)
                     .text_xs()
-                    .text_color(if count > 0 { ink } else { desk.faint })
+                    .text_color(if count > 0 {
+                        ink
+                    } else {
+                        theme.muted_foreground
+                    })
                     .child(count.to_string()),
             )
         })

@@ -6,7 +6,8 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, px,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::widgets::{dropdown_field, settings_card, settings_row};
@@ -19,6 +20,12 @@ pub(super) fn render_general_section(
 ) -> AnyElement {
     let ua_input = workspace.settings_ua_input(window, cx);
     let dark = workspace.vm().dark_theme;
+    let palette = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.palette.clone())
+        .unwrap_or_else(|| "slate".to_owned());
     let effective_ua = workspace
         .vm()
         .settings
@@ -58,6 +65,12 @@ pub(super) fn render_general_section(
                     .into_any_element(),
             )
             .into_any_element(),
+    );
+    let palette_row = settings_row(
+        "palette",
+        "Palette",
+        Some("Solid panels over a page gradient. Pick a hue; light and dark stay separate."),
+        palette_choices(&palette, dark, cx).into_any_element(),
     );
     let ua_field = div()
         .flex()
@@ -116,7 +129,7 @@ pub(super) fn render_general_section(
             "Appearance",
             Some("Theme applies immediately and is saved to settings right away."),
             theme,
-            vec![theme_row, ua_field],
+            vec![theme_row, palette_row, ua_field],
         ))
         .child(settings_card(
             "shell",
@@ -172,4 +185,41 @@ pub(super) fn render_general_section(
             ],
         ))
         .into_any_element()
+}
+
+fn palette_choices(selected: &str, dark: bool, cx: &mut Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap_1()
+        .children(crate::ui::desk::PALETTES.into_iter().map(|id| {
+            let on = selected == id;
+            let swatch = crate::ui::desk::palette_swatch(id, dark);
+            div()
+                .id(format!("palette-{id}"))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .h(px(28.))
+                .px_2()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if on { theme.primary } else { theme.border })
+                .bg(if on { theme.accent } else { theme.secondary })
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.secondary_hover))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_select_palette(id, cx);
+                }))
+                .child(div().size(px(10.)).rounded_full().bg(swatch))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .child(crate::ui::desk::palette_label(id)),
+                )
+        }))
 }

@@ -245,32 +245,49 @@ fn agent_route_picker(
                     .rounded(px(3.))
                     .border_1()
                     .border_color(theme.border)
-                    .child(div().flex().flex_row().flex_wrap().gap_1().children(
-                        thinking.iter().map(|level| {
-                            let picked = level.clone();
-                            let role = role.clone();
-                            let on = level == thinking_current;
-                            div()
-                                .id(format!("agent-think-{role}-{level}"))
-                                .px_2()
-                                .h(px(24.))
-                                .flex()
-                                .items_center()
-                                .rounded(px(3.))
-                                .text_xs()
-                                .cursor_pointer()
-                                .border_1()
-                                .border_color(if on { theme.primary } else { theme.border })
-                                .on_click(cx.listener(move |workspace, _, _, cx| {
-                                    workspace.on_set_subagent_thinking(
-                                        &role,
-                                        Some(picked.clone()),
-                                        cx,
-                                    );
-                                }))
-                                .child(level.clone())
-                        }),
-                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .px_2()
+                            .pt_1()
+                            .child("Thinking"),
+                    )
+                    .children(thinking.iter().map(|level| {
+                        let picked = level.clone();
+                        let role = role.clone();
+                        let on = level == thinking_current;
+                        div()
+                            .id(format!("agent-think-{role}-{level}"))
+                            .h(px(28.))
+                            .px_2()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .rounded(px(6.))
+                            .text_sm()
+                            .cursor_pointer()
+                            .when(on, |row| row.bg(theme.accent))
+                            .hover(|row| row.bg(theme.secondary_hover))
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_set_subagent_thinking(&role, Some(picked.clone()), cx);
+                            }))
+                            .child(level.clone())
+                            .when(on, |row| {
+                                row.child(
+                                    div().text_xs().text_color(theme.primary).child("\u{2713}"),
+                                )
+                            })
+                    }))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .px_2()
+                            .pt_2()
+                            .child("Model"),
+                    )
                     .child(agent_model_row(&role, "inherit", None, cx))
                     .children(providers.iter().flat_map(|(provider, models)| {
                         let mut rows = vec![

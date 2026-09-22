@@ -36,6 +36,9 @@ pub struct TurnEnv<'a> {
     pub events: broadcast::Sender<AgentEvent>,
     /// Working directory tools resolve relative paths against.
     pub cwd: PathBuf,
+    /// Additional workspace folders. Absolute tool paths under one of
+    /// these roots are prepared against that root instead of `cwd`.
+    pub extra_roots: Vec<PathBuf>,
 }
 
 impl<'a> TurnEnv<'a> {
@@ -53,6 +56,7 @@ impl<'a> TurnEnv<'a> {
             cancel: CancellationToken::new(),
             events: broadcast::channel(256).0,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            extra_roots: Vec::new(),
         }
     }
 
@@ -71,6 +75,12 @@ impl<'a> TurnEnv<'a> {
     /// Set the tool working directory (builder style).
     pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = cwd.into();
+        self
+    }
+
+    /// Allow absolute tool paths under these extra workspace folders.
+    pub fn with_extra_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.extra_roots = roots;
         self
     }
 }

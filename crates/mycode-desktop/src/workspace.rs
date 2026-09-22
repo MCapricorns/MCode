@@ -48,7 +48,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
     options.window_min_size = Some(size(px(960.), px(560.)));
     if let Some(titlebar) = options.titlebar.as_mut() {
-        titlebar.title = Some("MYCode Harness".into());
+        titlebar.title = Some("MYCode".into());
     }
     cx.open_window(options, |window, cx| {
         // Paint the Desk palette before first layout: `init` leaves the stock
@@ -115,6 +115,14 @@ pub struct Workspace {
     /// Keeps the conversation column glued to the newest entry while a turn
     /// streams; without it new content grows below the fold.
     conversation_scroll: gpui_kit::ScrollHandle,
+    /// Latest git status for the open folder.
+    git: crate::git_status::GitSnapshot,
+    git_rx: Option<std::sync::mpsc::Receiver<crate::git_status::GitSnapshot>>,
+    /// Path whose diff is shown in the changes panel.
+    git_diff_path: Option<String>,
+    git_diff: String,
+    git_diff_rx: Option<std::sync::mpsc::Receiver<(String, String)>>,
+    git_seen: Option<String>,
 }
 
 impl Workspace {
@@ -127,7 +135,7 @@ impl Workspace {
     ) -> Entity<Self> {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Message MYCode Harness…")
+                .placeholder("Message MYCode")
                 .auto_grow(1, 10)
                 .submit_on_enter(true)
         });
@@ -162,6 +170,12 @@ impl Workspace {
             project_picker: None,
             runtime_ticks: 0,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
+            git: crate::git_status::GitSnapshot::empty("No folder"),
+            git_rx: None,
+            git_diff_path: None,
+            git_diff: String::new(),
+            git_diff_rx: None,
+            git_seen: None,
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -212,6 +226,82 @@ impl Workspace {
         self.runtime_ticks += 1;
         if self.runtime_ticks.is_multiple_of(UPDATE_RECHECK_TICKS) && self.vm.auto_update {
             self.on_check_update(false, cx);
+        }
+        self.poll_git(cx);
+        let current = self.vm.project_dir.clone();
+        if current != self.git_seen || self.runtime_ticks.is_multiple_of(40) {
+            self.git_seen = current;
+            self.request_git_status();
+        }
+    }
+
+    pub(crate) fn git(&self) -> &crate::git_status::GitSnapshot {
+        &self.git
+    }
+
+    pub(crate) fn git_diff_path(&self) -> Option<&str> {
+        self.git_diff_path.as_deref()
+    }
+
+    pub(crate) fn git_diff(&self) -> &str {
+        &self.git_diff
+    }
+
+    pub(crate) fn on_select_git_file(&mut self, path: &str) {
+        if self.git_diff_path.as_deref() == Some(path) {
+            self.git_diff_path = None;
+            self.git_diff.clear();
+            return;
+        }
+        let Some(root) = self.vm.project_dir.clone() else {
+            return;
+        };
+        let path = path.to_owned();
+        self.git_diff_path = Some(path.clone());
+        self.git_diff = "Loading diff…".to_owned();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let diff = crate::git_status::read_diff(std::path::Path::new(&root), &path);
+            let _ = tx.send((path, diff));
+        });
+        self.git_diff_rx = Some(rx);
+    }
+
+    fn request_git_status(&mut self) {
+        if self.git_rx.is_some() {
+            return;
+        }
+        let Some(root) = self.vm.project_dir.clone() else {
+            self.git = crate::git_status::GitSnapshot::empty("No folder");
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::git_status::read_status(std::path::Path::new(&root)));
+        });
+        self.git_rx = Some(rx);
+    }
+
+    fn poll_git(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+        if let Some(rx) = &self.git_rx
+            && let Ok(snapshot) = rx.try_recv()
+        {
+            self.git = snapshot;
+            self.git_rx = None;
+            changed = true;
+        }
+        if let Some(rx) = &self.git_diff_rx
+            && let Ok((path, diff)) = rx.try_recv()
+        {
+            if self.git_diff_path.as_deref() == Some(path.as_str()) {
+                self.git_diff = diff;
+            }
+            self.git_diff_rx = None;
+            changed = true;
+        }
+        if changed {
+            cx.notify();
         }
     }
 
@@ -352,9 +442,13 @@ impl Workspace {
             ThemeMode::Light
         };
         Theme::change(mode, Some(window), cx);
-        // The Desk palette rides on top of the resolved light/dark theme so
-        // the day/night toggle keeps working: repaint + push to base layer.
-        crate::ui::desk::apply(Theme::global_mut(cx));
+        let palette = self
+            .vm
+            .settings
+            .as_ref()
+            .map(|settings| settings.palette.clone())
+            .unwrap_or_else(|| "slate".to_owned());
+        crate::ui::desk::apply_palette(Theme::global_mut(cx), &palette);
         Theme::sync_base(cx);
         self.apply_action(DesktopAction::SettingsThemeSelected(dark), cx);
         self.on_save_settings(cx);
@@ -430,6 +524,35 @@ impl Workspace {
 
     pub(crate) fn on_toggle_model_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ModelMenuToggled(open), cx);
+    }
+
+    /// Shows one provider's models in the open picker without saving.
+    pub(crate) fn on_browse_model_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ModelMenuBrowse(provider_id.to_owned()), cx);
+    }
+
+    pub(crate) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ReasoningMenuToggled(open), cx);
+    }
+
+    /// Applies and persists a palette. Light and dark stay independent.
+    pub(crate) fn on_select_palette(&mut self, palette: &str, cx: &mut Context<Self>) {
+        let palette = crate::ui::desk::normalize_palette(palette);
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.palette == palette)
+        {
+            return;
+        }
+        crate::ui::desk::apply_palette(Theme::global_mut(cx), palette);
+        Theme::sync_base(cx);
+        self.apply_action(
+            DesktopAction::SettingsPaletteSelected(palette.to_owned()),
+            cx,
+        );
+        self.on_save_settings(cx);
     }
 
     pub(crate) fn on_toggle_shell_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {

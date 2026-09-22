@@ -188,10 +188,10 @@ pub(crate) fn recover_task_worktrees(home: &HomeLayout) {
 
 /// Parent-prompt section listing enabled roles and the routing contract.
 ///
-/// Not injected on every turn; the standing prompt stays short and the
-/// `task` tool carries the call contract.
+/// Injected on every parent turn, the same way pi-subagents appends its
+/// directive in `before_agent_start`. The `task` tool still carries the
+/// call schema; this section is what makes the model route without being asked.
 #[must_use]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
     let enabled: Vec<&SubagentRole> = catalog
         .roles
@@ -335,7 +335,17 @@ impl BridgeTaskHost {
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
         );
-        let registry = Arc::new(child_registry(&self.home, &allowed));
+        let mcp_tools = crate::mcp_tools::connect_mcp_tools(&self.home, &self.settings).await;
+        let registry = Arc::new({
+            let registry = child_registry(&self.home, &allowed);
+            if let Some(catalog) = crate::mcp_tools::McpCatalog::from_tools(mcp_tools) {
+                registry.register(Arc::new(crate::mcp_tools::SearchTool::new(Arc::clone(
+                    &catalog,
+                ))));
+                registry.register(Arc::new(crate::mcp_tools::UseTool::new(catalog)));
+            }
+            registry
+        });
         let run_dir_for_hooks = run_dir.clone();
         let run_home = self.home.clone();
         // Subagent writes snapshot into a side checkpoint store so the
@@ -357,8 +367,9 @@ impl BridgeTaskHost {
         let forwarder = tokio::spawn(async move {
             while let Ok(event) = event_rx.recv().await {
                 match event {
-                    mycode_core::events::AgentEvent::ToolStarted { name, .. } => {
-                        let _ = progress_sink.progress(format!("task|{role_name}|tool|{name}"));
+                    mycode_core::events::AgentEvent::ToolStarted { name, target, .. } => {
+                        let label = mycode_core::tool_label(&name, &target);
+                        let _ = progress_sink.progress(format!("task|{role_name}|tool|{label}"));
                     }
                     mycode_core::events::AgentEvent::ToolProgress { message, .. } => {
                         let _ = progress_sink.progress(format!("task|{role_name}|step|{message}"));
@@ -370,11 +381,29 @@ impl BridgeTaskHost {
 
         let path = run_dir.display().to_string();
         let _ = progress.progress(format!("task|{}|path|{path}", role.name));
+        let extra_roots = if lease.is_some() {
+            Vec::new()
+        } else {
+            crate::turn::workspace_extra_roots(&self.home, &self.cwd)
+        };
         let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
         system.push_str("\n\n# Role: ");
         system.push_str(&role.name);
         system.push_str("\n\n");
         system.push_str(&role.prompt);
+        if !extra_roots.is_empty() {
+            system.push_str("\n\nOther workspace folders (absolute paths only):\n");
+            for root in &extra_roots {
+                system.push_str(&format!("- {}\n", root.display()));
+            }
+        }
+        append_child_skills(&mut system, &run_dir, &extra_roots);
+        if registry.get("search_tool").is_some() {
+            system.push_str(
+                "\n\nMCP tools are connected. Call `search_tool` with the tool name, then \
+`use_tool` with arguments that match the returned inputSchema. Never guess parameters.",
+            );
+        }
         system.push_str("\n\n");
         system.push_str(&mycode_agent::build_system_prompt(&registry));
         let mut config = AgentConfig::new().with_system_prompt(system);
@@ -391,7 +420,8 @@ impl BridgeTaskHost {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
                 .with_cancel(child_cancel.clone())
                 .with_events(event_tx)
-                .with_cwd(run_dir);
+                .with_cwd(run_dir)
+                .with_extra_roots(extra_roots);
             let outcome = tokio::time::timeout(SUBAGENT_TIMEOUT, agent.prompt(prompt, &env)).await;
             forwarder.abort();
             match outcome {
@@ -460,6 +490,25 @@ fn thinking_for(role: &SubagentRole, settings: &SubagentSettings) -> RoleThinkin
         .and_then(|entry| entry.thinking.as_deref())
         .and_then(RoleThinking::parse)
         .unwrap_or(role.thinking)
+}
+
+fn append_child_skills(system: &mut String, cwd: &Path, extras: &[PathBuf]) {
+    let user_home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    let mut skills = mycode_config::discover_skills(cwd, user_home.as_deref());
+    for extra in extras {
+        for skill in mycode_config::discover_skills(extra, None) {
+            if !skills.iter().any(|existing| existing.path == skill.path) {
+                skills.push(skill);
+            }
+        }
+    }
+    skills.truncate(32);
+    if let Some(catalog) = mycode_config::render_skill_catalog(&skills) {
+        system.push_str("\n\n");
+        system.push_str(&catalog);
+    }
 }
 
 fn child_registry(home: &HomeLayout, allowed: &[String]) -> ToolRegistry {

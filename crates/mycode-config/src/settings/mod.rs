@@ -74,18 +74,29 @@ impl Default for UsageSettings {
     }
 }
 
+/// Palette ids the desktop can paint. Slate is the default.
+pub const VALID_PALETTES: [&str; 5] = ["slate", "ocean", "forest", "dusk", "sand"];
+
+fn default_palette() -> String {
+    "slate".to_owned()
+}
+
 /// Appearance settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceSettings {
     /// `light` or `dark`.
     pub theme: String,
+    /// `slate`, `ocean`, `forest`, `dusk`, or `sand`.
+    #[serde(default = "default_palette")]
+    pub palette: String,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_owned(),
+            palette: default_palette(),
         }
     }
 }
@@ -134,9 +145,7 @@ impl Default for AppSettings {
             },
             usage: UsageSettings { enabled: true },
             mcp_servers: Vec::new(),
-            appearance: AppearanceSettings {
-                theme: "dark".to_owned(),
-            },
+            appearance: AppearanceSettings::default(),
             reasoning_effort: None,
             subagents: SubagentSettings::default(),
             tools: ToolsSettings::default(),
@@ -167,6 +176,15 @@ impl AppSettings {
         }
     }
 
+    /// Returns the effective palette. Unknown values read as slate.
+    #[must_use]
+    pub fn effective_palette(&self) -> &'static str {
+        VALID_PALETTES
+            .into_iter()
+            .find(|id| *id == self.appearance.palette)
+            .unwrap_or("slate")
+    }
+
     /// Validates the complete document.
     ///
     /// Family-specific bounds, grammar, and cross-field rules live in the
@@ -193,6 +211,11 @@ impl AppSettings {
         self.validate_mcp()?;
         if self.appearance.theme != "light" && self.appearance.theme != "dark" {
             return Err(invalid("appearance.theme: must be light or dark"));
+        }
+        if !VALID_PALETTES.contains(&self.appearance.palette.as_str()) {
+            return Err(invalid(
+                "appearance.palette: must be slate, ocean, forest, dusk, or sand",
+            ));
         }
         self.validate_subagent_roles()?;
         self.validate_tools_shell()?;
@@ -488,6 +511,11 @@ mod tests {
         assert!(settings.validate().is_err(), "theme vocabulary");
 
         settings.appearance.theme = "light".to_owned();
+        assert!(settings.validate().is_ok());
+
+        settings.appearance.palette = "honey".to_owned();
+        assert!(settings.validate().is_err(), "palette vocabulary");
+        settings.appearance.palette = "ocean".to_owned();
         assert!(settings.validate().is_ok());
     }
 

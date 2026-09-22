@@ -22,6 +22,7 @@
 pub mod builtin;
 pub mod ctx;
 pub mod registry;
+pub mod roots;
 pub mod stream;
 pub mod tool;
 
@@ -41,5 +42,6 @@ pub use builtin::{
 };
 pub use ctx::ToolCtx;
 pub use registry::ToolRegistry;
+pub use roots::anchor_tool_path;
 pub use stream::{ToolProgress, ToolStream, ToolStreamItem, ToolStreamReceiver};
 pub use tool::{Concurrency, Tool, ToolDyn, ToolError, ToolResult};

@@ -6,6 +6,7 @@
 //! holds every UI state transition, and the GPUI layer in [`ui`] turns that
 //! state into elements and sends commands back. No session, provider, tool,
 //! file path, or credential is handled here.
+mod git_status;
 pub mod ui;
 pub mod view_model;
 pub mod workspace;

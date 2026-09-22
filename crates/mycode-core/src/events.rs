@@ -23,7 +23,12 @@ pub enum AgentEvent {
     /// A complete message was appended to the Agent history.
     MessageAdded(Message),
     /// A tool call started executing.
-    ToolStarted { call_id: CallId, name: String },
+    ToolStarted {
+        call_id: CallId,
+        name: String,
+        /// Path, query, or command the call is acting on. Empty when unknown.
+        target: String,
+    },
     /// Progress update from a running tool.
     ToolProgress { call_id: CallId, message: String },
     /// A tool call finished.
@@ -88,6 +93,7 @@ mod tests {
             AgentEvent::ToolStarted {
                 call_id: CallId::from("call_1"),
                 name: "read".into(),
+                target: "src/main.rs".into(),
             },
             AgentEvent::ToolProgress {
                 call_id: CallId::from("call_1"),

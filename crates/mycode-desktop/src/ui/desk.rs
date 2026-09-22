@@ -1,8 +1,9 @@
-//! Day and night palettes: warm paper and ink, one honey accent.
+//! Day and night palettes. Surfaces are solid. The page background is a
+//! two-stop gradient so the chat column shows the falloff; rails and dialogs
+//! stay opaque so text never sits on a washed-out fill.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
-//! Signal lamps stay muted and are not washed across every surface.
 
 use gpui_kit::Hsla;
 use gpui_kit::component::theme::{Theme, ThemeMode};
@@ -17,213 +18,335 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
     color
 }
 
-/// Applies the Desk palette over the resolved theme colors. Called after
-/// every [`Theme::change`] so the day/night choice in settings keeps working.
-pub fn apply(theme: &mut Theme) {
-    theme.radius = gpui_kit::px(8.);
-    theme.radius_lg = gpui_kit::px(12.);
-    theme.shadow = true;
-    if theme.mode == ThemeMode::Dark {
-        apply_night(theme);
-    } else {
-        apply_day(theme);
+/// Palette ids the settings page offers, in display order.
+pub const PALETTES: [&str; 5] = ["slate", "ocean", "forest", "dusk", "sand"];
+
+/// Canonical palette id. Unknown values fall back to slate.
+#[must_use]
+pub fn normalize_palette(palette: &str) -> &'static str {
+    PALETTES
+        .into_iter()
+        .find(|id| *id == palette)
+        .unwrap_or("slate")
+}
+
+/// Short label for a palette id.
+#[must_use]
+pub fn palette_label(palette: &str) -> &'static str {
+    match normalize_palette(palette) {
+        "ocean" => "Ocean",
+        "forest" => "Forest",
+        "dusk" => "Dusk",
+        "sand" => "Sand",
+        _ => "Slate",
     }
+}
+
+/// Accent swatch for the settings picker.
+#[must_use]
+pub fn palette_swatch(palette: &str, dark: bool) -> Hsla {
+    hex(spec_for(normalize_palette(palette), dark).accent)
+}
+
+struct Spec {
+    bg: u32,
+    wash: u32,
+    surface: u32,
+    card: u32,
+    hover: u32,
+    ink: u32,
+    dim: u32,
+    line: u32,
+    accent: u32,
+    accent_ink: u32,
+    tint: u32,
+    green: u32,
+    red: u32,
+    info: u32,
+}
+
+fn spec_for(palette: &str, dark: bool) -> Spec {
+    match (palette, dark) {
+        ("ocean", true) => Spec {
+            bg: 0x0E1A20,
+            wash: 0x12343C,
+            surface: 0x15242C,
+            card: 0x1C3038,
+            hover: 0x254048,
+            ink: 0xE6F3F4,
+            dim: 0x9BB8BE,
+            line: 0x2C4A52,
+            accent: 0x3EC6C0,
+            accent_ink: 0x06201E,
+            tint: 0x1A3C40,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x8FB4C4,
+        },
+        ("ocean", false) => Spec {
+            bg: 0xF2F7F7,
+            wash: 0xE3F1F2,
+            surface: 0xFFFFFF,
+            card: 0xF6FBFB,
+            hover: 0xE4F2F2,
+            ink: 0x123038,
+            dim: 0x4E6A72,
+            line: 0xD0E2E4,
+            accent: 0x0E7490,
+            accent_ink: 0xFFFFFF,
+            tint: 0xE3F4F6,
+            green: 0x2F7D52,
+            red: 0xC4543E,
+            info: 0x3D6E86,
+        },
+        ("forest", true) => Spec {
+            bg: 0x121814,
+            wash: 0x1A2A1E,
+            surface: 0x1A221C,
+            card: 0x222C24,
+            hover: 0x2C3A30,
+            ink: 0xE7F0E8,
+            dim: 0xA3B8A8,
+            line: 0x334238,
+            accent: 0x6FBF8A,
+            accent_ink: 0x0E1A12,
+            tint: 0x24382A,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x8FB4C4,
+        },
+        ("forest", false) => Spec {
+            bg: 0xF4F7F4,
+            wash: 0xE6F0E8,
+            surface: 0xFFFFFF,
+            card: 0xF7FBF7,
+            hover: 0xE7F1E9,
+            ink: 0x1A2A1E,
+            dim: 0x4E6A56,
+            line: 0xD4E2D6,
+            accent: 0x2F7D52,
+            accent_ink: 0xFFFFFF,
+            tint: 0xE5F3EA,
+            green: 0x2F7D52,
+            red: 0xC4543E,
+            info: 0x3D6E86,
+        },
+        ("dusk", true) => Spec {
+            bg: 0x16141C,
+            wash: 0x261C34,
+            surface: 0x1E1A26,
+            card: 0x282232,
+            hover: 0x342C42,
+            ink: 0xEDE8F4,
+            dim: 0xB4A8C4,
+            line: 0x3C344C,
+            accent: 0xC4B5FD,
+            accent_ink: 0x1A1424,
+            tint: 0x322848,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x8FB4C4,
+        },
+        ("dusk", false) => Spec {
+            bg: 0xF6F4F8,
+            wash: 0xEEE6F6,
+            surface: 0xFFFFFF,
+            card: 0xFBF9FC,
+            hover: 0xF0EAF6,
+            ink: 0x241C30,
+            dim: 0x665C78,
+            line: 0xE0D6EA,
+            accent: 0x6D28D9,
+            accent_ink: 0xFFFFFF,
+            tint: 0xF0E8FA,
+            green: 0x2F7D52,
+            red: 0xC4543E,
+            info: 0x3D6E86,
+        },
+        ("sand", true) => Spec {
+            bg: 0x1A1714,
+            wash: 0x2A2218,
+            surface: 0x221E1A,
+            card: 0x2C2722,
+            hover: 0x3A332C,
+            ink: 0xF3EDE4,
+            dim: 0xC4B8AA,
+            line: 0x443C34,
+            accent: 0xE0B15A,
+            accent_ink: 0x1C1408,
+            tint: 0x3A3020,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x8FB4C4,
+        },
+        ("sand", false) => Spec {
+            bg: 0xF7F4EF,
+            wash: 0xEFE4D4,
+            surface: 0xFFFCF8,
+            card: 0xFFF9F3,
+            hover: 0xF3EADF,
+            ink: 0x2A2218,
+            dim: 0x6A5E52,
+            line: 0xE4D8C8,
+            accent: 0xA15C28,
+            accent_ink: 0xFFFCF8,
+            tint: 0xF6E8D8,
+            green: 0x2F7D52,
+            red: 0xC4543E,
+            info: 0x3D6E86,
+        },
+        (_, true) => Spec {
+            bg: 0x171A20,
+            wash: 0x1E2A3A,
+            surface: 0x22262E,
+            card: 0x2A303A,
+            hover: 0x343B48,
+            ink: 0xE8EAF0,
+            dim: 0xA7B0BE,
+            line: 0x3A4250,
+            accent: 0x7AA2F7,
+            accent_ink: 0x10141C,
+            tint: 0x2A3550,
+            green: 0x8FBF9F,
+            red: 0xE08B7A,
+            info: 0x8FB4C4,
+        },
+        (_, false) => Spec {
+            bg: 0xF3F5F8,
+            wash: 0xE4EAF3,
+            surface: 0xFFFFFF,
+            card: 0xF7F8FA,
+            hover: 0xE8EDF4,
+            ink: 0x1C2430,
+            dim: 0x5C6778,
+            line: 0xD5DCE6,
+            accent: 0x3D6FBF,
+            accent_ink: 0xFFFFFF,
+            tint: 0xE7F0FB,
+            green: 0x2F7D52,
+            red: 0xC4543E,
+            info: 0x3D6E86,
+        },
+    }
+}
+
+/// Applies the default slate palette. Used before settings have loaded.
+pub fn apply(theme: &mut Theme) {
+    apply_palette(theme, "slate");
+}
+
+/// Applies one named palette over the resolved light or dark mode.
+pub fn apply_palette(theme: &mut Theme, palette: &str) {
+    let spec = spec_for(normalize_palette(palette), theme.mode == ThemeMode::Dark);
+    paint(theme, &spec);
     sync_controls(theme);
 }
 
-fn apply_night(theme: &mut Theme) {
-    let bg = hex(0x110F0D);
-    let panel = hex(0x1A1714);
-    let panel_2 = hex(0x24201C);
-    let line = hex(0x3C342C);
-    let ink = hex(0xF6F1EA);
-    let ink_dim = hex(0xC4B8AA);
-    let ink_faint = hex(0x8A7D70);
-    let honey = hex(0xE0B15A);
-    let honey_deep = hex(0xC48A3A);
-    let honey_ink = hex(0x1A140C);
-    let sage = hex(0x8FBF9F);
-    let coral = hex(0xE08B7A);
-    let dust = hex(0x8FB4C4);
-    let lilac = hex(0xC6B4D4);
+fn paint(theme: &mut Theme, spec: &Spec) {
+    let bg = hex(spec.bg);
+    let wash = hex(spec.wash);
+    let surface = hex(spec.surface);
+    let card = hex(spec.card);
+    let hover = hex(spec.hover);
+    let ink = hex(spec.ink);
+    let dim = hex(spec.dim);
+    let line = hex(spec.line);
+    let accent = hex(spec.accent);
+    let accent_ink = hex(spec.accent_ink);
+    let tint = hex(spec.tint);
+    let green = hex(spec.green);
+    let red = hex(spec.red);
+    let info = hex(spec.info);
+
+    theme.radius = gpui_kit::px(8.);
+    theme.radius_lg = gpui_kit::px(12.);
+    theme.shadow = true;
 
     theme.background = bg;
     theme.foreground = ink;
-    theme.muted = panel_2;
-    theme.muted_foreground = ink_dim;
+    theme.muted = card;
+    theme.muted_foreground = dim;
     theme.border = line;
-    theme.secondary = panel_2;
+    theme.secondary = card;
     theme.secondary_foreground = ink;
-    theme.secondary_hover = hex(0x2C2722);
-    theme.secondary_active = hex(0x342E28);
-    theme.accent = hex_a(0xE0B15A, 0.16);
-    theme.accent_foreground = honey;
-    theme.caret = honey;
-    theme.selection = hex_a(0xE0B15A, 0.28);
-    theme.primary = honey;
-    theme.primary_foreground = honey_ink;
-    theme.primary_hover = hex(0xE8C27A);
-    theme.primary_active = honey_deep;
-    theme.link = honey;
-    theme.link_hover = hex(0xE8C27A);
-    theme.link_active = honey_deep;
-    theme.info = dust;
-    theme.info_foreground = honey_ink;
-    theme.success = sage;
-    theme.success_foreground = honey_ink;
-    theme.warning = honey;
-    theme.warning_foreground = honey_ink;
-    theme.danger = coral;
-    theme.danger_foreground = honey_ink;
+    theme.secondary_hover = hover;
+    theme.secondary_active = hover;
+    theme.accent = tint;
+    theme.accent_foreground = accent;
+    theme.caret = accent;
+    theme.selection = tint;
+    theme.primary = accent;
+    theme.primary_foreground = accent_ink;
+    theme.primary_hover = accent;
+    theme.primary_active = accent;
+    theme.link = accent;
+    theme.link_hover = accent;
+    theme.link_active = accent;
+    theme.info = info;
+    theme.info_foreground = accent_ink;
+    theme.success = green;
+    theme.success_foreground = accent_ink;
+    theme.warning = accent;
+    theme.warning_foreground = accent_ink;
+    theme.danger = red;
+    theme.danger_foreground = accent_ink;
     theme.input = line;
-    theme.ring = honey;
+    theme.ring = accent;
 
-    theme.sidebar = panel;
-    theme.sidebar_foreground = ink_dim;
+    theme.sidebar = surface;
+    theme.sidebar_foreground = dim;
     theme.sidebar_border = line;
-    theme.sidebar_accent = panel_2;
+    theme.sidebar_accent = tint;
     theme.sidebar_accent_foreground = ink;
-    theme.sidebar_primary = honey;
-    theme.sidebar_primary_foreground = honey_ink;
+    theme.sidebar_primary = accent;
+    theme.sidebar_primary_foreground = accent_ink;
 
-    theme.popover = panel_2;
+    theme.popover = card;
     theme.popover_foreground = ink;
-    theme.title_bar = panel;
+    theme.title_bar = surface;
     theme.title_bar_border = line;
-    theme.status_bar = panel;
+    // Gradient end. The painted title bar uses `title_bar`, not this field.
+    theme.status_bar = wash;
     theme.status_bar_border = line;
-    theme.tab_bar = panel;
-    theme.tab_active = panel_2;
+    theme.tab_bar = surface;
+    theme.tab_active = card;
     theme.tab_active_foreground = ink;
-    theme.tab_foreground = ink_dim;
-    theme.colors.list = panel;
-    theme.colors.list_hover = panel_2;
-    theme.colors.list_even = panel;
-    theme.colors.list_head = panel;
-    theme.table = panel;
-    theme.table_hover = panel_2;
-    theme.table_even = panel;
-    theme.table_head = panel;
-    theme.table_head_foreground = ink_faint;
+    theme.tab_foreground = dim;
+    theme.colors.list = surface;
+    theme.colors.list_hover = hover;
+    theme.colors.list_even = surface;
+    theme.colors.list_head = surface;
+    theme.table = surface;
+    theme.table_hover = hover;
+    theme.table_even = surface;
+    theme.table_head = surface;
+    theme.table_head_foreground = dim;
     theme.scrollbar = bg;
-    theme.scrollbar_thumb = hex(0x3C342C);
-    theme.scrollbar_thumb_hover = hex(0x52483E);
+    theme.scrollbar_thumb = line;
+    theme.scrollbar_thumb_hover = dim;
     theme.window_border = line;
-    theme.overlay = hex_a(0x110F0D, 0.55);
+    theme.overlay = if theme.mode == ThemeMode::Dark {
+        hex_a(0x000000, 0.45)
+    } else {
+        hex_a(0x1C2430, 0.18)
+    };
 
-    theme.green = sage;
-    theme.green_light = hex(0xA8D4B6);
-    theme.red = coral;
-    theme.red_light = hex(0xE8A89C);
-    theme.blue = dust;
-    theme.blue_light = hex(0xB3CDD8);
-    theme.yellow = honey;
-    theme.yellow_light = hex(0xE8C27A);
-    theme.magenta = lilac;
-    theme.magenta_light = hex(0xD8CCE2);
-    theme.cyan = dust;
-    theme.cyan_light = hex(0xB3CDD8);
+    theme.green = green;
+    theme.green_light = green;
+    theme.red = red;
+    theme.red_light = red;
+    theme.blue = info;
+    theme.blue_light = info;
+    theme.yellow = accent;
+    theme.yellow_light = accent;
+    theme.magenta = accent;
+    theme.magenta_light = accent;
+    theme.cyan = info;
+    theme.cyan_light = info;
 }
 
-fn apply_day(theme: &mut Theme) {
-    let bg = hex(0xF6F1E8);
-    let panel = hex(0xFFFCF8);
-    let panel_2 = hex(0xF3ECE3);
-    let line = hex(0xE4D9CC);
-    let line_soft = hex(0xEFE6DA);
-    let ink = hex(0x1C1712);
-    let ink_dim = hex(0x6A5E52);
-    let ink_faint = hex(0x9C8E7E);
-    let honey = hex(0xA15C28);
-    let honey_deep = hex(0x7C4318);
-    let cream = hex(0xFFF8F0);
-    let sage = hex(0x2F7D52);
-    let coral = hex(0xC4543E);
-    let dust = hex(0x3D6E86);
-    let lilac = hex(0x6E5688);
-
-    theme.background = bg;
-    theme.foreground = ink;
-    theme.muted = panel_2;
-    theme.muted_foreground = ink_dim;
-    theme.border = line;
-    theme.secondary = panel;
-    theme.secondary_foreground = ink;
-    theme.secondary_hover = line_soft;
-    theme.secondary_active = line;
-    theme.accent = hex_a(0xA15C28, 0.12);
-    theme.accent_foreground = honey;
-    theme.caret = honey;
-    theme.selection = hex_a(0xA15C28, 0.18);
-    theme.primary = honey;
-    theme.primary_foreground = cream;
-    theme.primary_hover = hex(0xB56A32);
-    theme.primary_active = honey_deep;
-    theme.link = honey;
-    theme.link_hover = honey_deep;
-    theme.link_active = honey_deep;
-    theme.info = dust;
-    theme.info_foreground = cream;
-    theme.success = sage;
-    theme.success_foreground = cream;
-    theme.warning = honey;
-    theme.warning_foreground = cream;
-    theme.danger = coral;
-    theme.danger_foreground = cream;
-    theme.input = line;
-    theme.ring = honey;
-
-    theme.sidebar = panel;
-    theme.sidebar_foreground = ink_dim;
-    theme.sidebar_border = line;
-    theme.sidebar_accent = panel_2;
-    theme.sidebar_accent_foreground = ink;
-    theme.sidebar_primary = honey;
-    theme.sidebar_primary_foreground = cream;
-
-    theme.popover = panel;
-    theme.popover_foreground = ink;
-    theme.title_bar = panel;
-    theme.title_bar_border = line;
-    theme.status_bar = panel;
-    theme.status_bar_border = line;
-    theme.tab_bar = panel;
-    theme.tab_active = panel_2;
-    theme.tab_active_foreground = ink;
-    theme.tab_foreground = ink_dim;
-    theme.colors.list = panel;
-    theme.colors.list_hover = panel_2;
-    theme.colors.list_even = panel;
-    theme.colors.list_head = panel_2;
-    theme.table = panel;
-    theme.table_hover = panel_2;
-    theme.table_even = panel;
-    theme.table_head = panel_2;
-    theme.table_head_foreground = ink_faint;
-    theme.scrollbar = bg;
-    theme.scrollbar_thumb = hex(0xD9CDBE);
-    theme.scrollbar_thumb_hover = hex(0xC4B5A2);
-    theme.window_border = line;
-    theme.overlay = hex_a(0x1C1712, 0.16);
-
-    theme.green = sage;
-    theme.green_light = sage;
-    theme.red = coral;
-    theme.red_light = coral;
-    theme.blue = dust;
-    theme.blue_light = dust;
-    theme.yellow = honey;
-    theme.yellow_light = hex(0xC4844A);
-    theme.magenta = lilac;
-    theme.magenta_light = lilac;
-    theme.cyan = dust;
-    theme.cyan_light = dust;
-}
-
-/// Copies the desk fills into the token slots kit buttons actually read.
-///
-/// `Theme::change` resets `tokens.button_primary` to the stock light-theme
-/// near-black. Painting only `theme.primary` leaves that black button behind.
+/// `Theme::change` resets button tokens to the stock theme. Copy the
+/// palette into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
     theme.button_primary = theme.primary;
     theme.button_primary_hover = theme.primary_hover;
@@ -251,7 +374,8 @@ fn sync_controls(theme: &mut Theme) {
     theme.tokens.secondary_foreground = theme.foreground.into();
 }
 
-/// Semantic Desk tokens for the signal colors and the faint ink level.
+/// Semantic signal colors. `amber` follows the active palette accent so a
+/// selected row is not always honey.
 pub struct Desk {
     pub amber: Hsla,
     pub green: Hsla,
@@ -265,28 +389,15 @@ pub struct Desk {
 
 impl Desk {
     pub fn of(theme: &Theme) -> Self {
-        if theme.mode == ThemeMode::Dark {
-            Self {
-                amber: hex(0xE0B15A),
-                green: hex(0x8FBF9F),
-                red: hex(0xE08B7A),
-                cyan: hex(0x8FB4C4),
-                violet: hex(0xC6B4D4),
-                faint: hex(0x8A7D70),
-                screen: hex(0x161310),
-                screen_dim: hex(0xC4B8AA),
-            }
-        } else {
-            Self {
-                amber: hex(0xA15C28),
-                green: hex(0x2F7D52),
-                red: hex(0xC4543E),
-                cyan: hex(0x3D6E86),
-                violet: hex(0x6E5688),
-                faint: hex(0x9C8E7E),
-                screen: hex(0xFFFCF8),
-                screen_dim: hex(0x6A5E52),
-            }
+        Self {
+            amber: theme.primary,
+            green: theme.green,
+            red: theme.red,
+            cyan: theme.cyan,
+            violet: theme.magenta,
+            faint: theme.muted_foreground,
+            screen: theme.background,
+            screen_dim: theme.muted_foreground,
         }
     }
 }

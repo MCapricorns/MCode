@@ -25,7 +25,14 @@ enum ModelMenuRow {
     Model {
         provider: String,
         id: String,
+        detail: Option<String>,
         selected: bool,
+    },
+    /// Switches the open list to that provider. Does not save a selection.
+    Provider {
+        id: String,
+        name: String,
+        current: bool,
     },
 }
 
@@ -43,8 +50,6 @@ pub(super) fn render_model_menu(
     let theme = cx.theme();
     let selected_provider = workspace.vm().selected_provider.clone();
     let selected_model = workspace.vm().selected_model.clone();
-    let thinking_levels = crate::view_model::selected_reasoning_levels(workspace.vm());
-    let thinking_selected = selected_reasoning_level(workspace.vm());
     let grouped: Vec<(String, String, Vec<String>)> = workspace
         .vm()
         .settings
@@ -106,42 +111,61 @@ pub(super) fn render_model_menu(
             .collect()
     };
 
+    let browse = workspace
+        .vm()
+        .model_menu_browse
+        .clone()
+        .or_else(|| selected_provider.clone());
     let mut rows = Vec::new();
     if grouped.is_empty() {
         rows.push(ModelMenuRow::Hint(
-            "No enabled providers — add one in Settings \u{2192} Models",
+            "No enabled providers. Add one in Settings, Models.",
         ));
     }
     if !suggested.is_empty() {
         rows.push(ModelMenuRow::Header {
-            label: "SUGGESTED".to_owned(),
+            label: "Suggested".to_owned(),
             divider: false,
         });
-        rows.extend(suggested.iter().map(|(provider, id)| ModelMenuRow::Model {
-            provider: provider.clone(),
-            selected: selected_provider.as_deref() == Some(provider.as_str())
-                && selected_model.as_deref() == Some(id.as_str()),
-            id: id.clone(),
+        rows.extend(suggested.iter().take(8).map(|(provider, id)| {
+            let detail = grouped
+                .iter()
+                .find(|(group_id, _, _)| group_id == provider)
+                .map(|(_, name, _)| name.clone());
+            ModelMenuRow::Model {
+                provider: provider.clone(),
+                selected: selected_provider.as_deref() == Some(provider.as_str())
+                    && selected_model.as_deref() == Some(id.as_str()),
+                id: id.clone(),
+                detail,
+            }
         }));
     }
-    for (provider, name, models) in &grouped {
+    if let Some((provider, name, models)) = grouped
+        .iter()
+        .find(|(id, _, _)| browse.as_deref() == Some(id.as_str()))
+    {
         rows.push(ModelMenuRow::Header {
             label: name.clone(),
-            divider: true,
+            divider: !suggested.is_empty(),
         });
-        let shown: Vec<&String> = models
-            .iter()
-            .filter(|id| {
-                !suggested
-                    .iter()
-                    .any(|(sug_provider, sug_id)| sug_provider == provider && sug_id == *id)
-            })
-            .collect();
-        rows.extend(shown.into_iter().map(|id| ModelMenuRow::Model {
+        rows.extend(models.iter().map(|id| ModelMenuRow::Model {
             provider: provider.clone(),
             selected: selected_provider.as_deref() == Some(provider.as_str())
                 && selected_model.as_deref() == Some(id.as_str()),
             id: id.clone(),
+            detail: None,
+        }));
+    }
+    if grouped.len() > 1 {
+        rows.push(ModelMenuRow::Header {
+            label: "Providers".to_owned(),
+            divider: true,
+        });
+        rows.extend(grouped.iter().map(|(id, name, _)| ModelMenuRow::Provider {
+            id: id.clone(),
+            name: name.clone(),
+            current: browse.as_deref() == Some(id.as_str()),
         }));
     }
 
@@ -153,83 +177,59 @@ pub(super) fn render_model_menu(
         .pb_1()
         .child(
             popover_panel("model-menu", theme)
-                .w_full()
-                .max_h(px(420.))
+                .w(px(320.))
+                .max_h(px(360.))
                 .overflow_y_scroll()
-                .p_2()
+                .p_1()
                 .flex()
                 .flex_col()
-                .when(!thinking_levels.is_empty(), |this| {
-                    this.child(thinking_strip(
-                        &thinking_levels,
-                        thinking_selected,
-                        &weak,
-                        theme,
-                    ))
-                })
                 .children(rows.iter().map(|row| model_menu_row(row, &weak, theme))),
         )
         .into_any_element()
 }
 
-/// Thinking levels inside the model panel, so effort is not a second dropdown.
-fn thinking_strip(
-    levels: &[String],
-    selected: &str,
-    weak: &gpui_kit::WeakEntity<Workspace>,
-    theme: &Theme,
-) -> impl IntoElement {
+/// Thinking effort as its own short list, opened from the composer button.
+pub(super) fn render_thinking_menu(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let levels = crate::view_model::selected_reasoning_levels(workspace.vm());
+    let selected = selected_reasoning_level(workspace.vm()).to_owned();
+    let weak = cx.weak_entity();
     div()
-        .id("model-thinking-strip")
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .gap_1()
-        .pb_2()
+        .id("thinking-menu-layer")
+        .w_full()
+        .px_4()
+        .pb_1()
         .child(
-            div()
-                .text_xs()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .opacity(0.6)
-                .pr_1()
-                .child("THINKING"),
-        )
-        .children(levels.iter().map(|level| {
-            let picked = level.clone();
-            let weak = weak.clone();
-            let on = level == selected;
-            div()
-                .id(format!("thinking-chip-{level}"))
-                .px_2()
-                .h(px(24.))
+            popover_panel("thinking-menu", theme)
+                .w(px(220.))
+                .p_1()
                 .flex()
-                .items_center()
-                .rounded(skin::radius_control())
-                .text_xs()
-                .cursor_pointer()
-                .border_1()
-                .border_color(if on {
-                    theme.yellow.opacity(0.55)
-                } else {
-                    skin::glass_border(theme)
-                })
-                .bg(if on {
-                    skin::frost_accent(theme)
-                } else {
-                    skin::frost(theme)
-                })
-                .hover(|this| this.bg(skin::frost_hover(theme)))
-                .on_click(move |_, _, cx| {
-                    let picked = picked.clone();
-                    let _ = weak.update(cx, |workspace, cx| {
-                        workspace.on_select_reasoning(&picked, cx);
-                    });
-                })
-                .child(reasoning_row_label(level))
-        }))
+                .flex_col()
+                .children(levels.iter().map(|level| {
+                    let picked = level.clone();
+                    let weak = weak.clone();
+                    let on = level == &selected;
+                    menu_row(
+                        format!("thinking-row-{level}"),
+                        reasoning_row_label(level),
+                        on,
+                        move |_, _, cx| {
+                            let picked = picked.clone();
+                            let _ = weak.update(cx, |workspace, cx| {
+                                workspace.on_select_reasoning(&picked, cx);
+                            });
+                        },
+                        theme,
+                    )
+                })),
+        )
+        .into_any_element()
 }
 
-/// Renders one visible row of the virtualized model menu.
+/// Renders one visible row of the model menu.
 fn model_menu_row(
     row: &ModelMenuRow,
     weak: &gpui_kit::WeakEntity<Workspace>,
@@ -266,18 +266,39 @@ fn model_menu_row(
         ModelMenuRow::Model {
             provider,
             id,
+            detail,
             selected,
         } => {
             let model_id = id.clone();
             let provider_id = provider.clone();
             let weak = weak.clone();
+            let label = match detail {
+                Some(name) => format!("{id}  {name}"),
+                None => id.clone(),
+            };
             menu_row(
                 format!("model-{provider}-{id}"),
-                id.clone(),
+                label,
                 *selected,
                 move |_, _, cx| {
                     let _ = weak.update(cx, |workspace, cx| {
                         workspace.on_select_model_on(&provider_id, &model_id, cx);
+                    });
+                },
+                theme,
+            )
+            .into_any_element()
+        }
+        ModelMenuRow::Provider { id, name, current } => {
+            let provider_id = id.clone();
+            let weak = weak.clone();
+            menu_row(
+                format!("model-provider-{id}"),
+                name.clone(),
+                *current,
+                move |_, _, cx| {
+                    let _ = weak.update(cx, |workspace, cx| {
+                        workspace.on_browse_model_provider(&provider_id, cx);
                     });
                 },
                 theme,

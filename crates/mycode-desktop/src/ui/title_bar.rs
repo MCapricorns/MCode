@@ -1,4 +1,4 @@
-//! Painted title bar for MYCode Harness.
+//! Painted title bar.
 //!
 //! On Windows the first `window_control_area` hitbox that contains the
 //! pointer wins, and a parent `Drag` region is inserted before its children.
@@ -15,7 +15,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, WindowControlArea, div, px,
 };
 
-use super::{desk, skin};
+use super::skin;
 use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
@@ -112,12 +112,14 @@ fn drag_region(
                 }
             }))
         })
+        .child(app_mark(&theme))
         .child(
             div()
                 .flex_shrink_0()
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::BOLD)
-                .child("MYCode Harness"),
+                .text_color(theme.foreground)
+                .child("MYCode"),
         )
         .child(
             div()
@@ -127,6 +129,21 @@ fn drag_region(
                 .text_color(theme.muted_foreground)
                 .child(subtitle),
         )
+}
+
+fn app_mark(theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
+    div()
+        .flex_shrink_0()
+        .size(px(18.))
+        .rounded(px(4.))
+        .bg(theme.primary)
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .font_weight(gpui_kit::FontWeight::BOLD)
+        .text_color(theme.primary_foreground)
+        .child("M")
 }
 
 struct TitleDrag {
@@ -146,7 +163,6 @@ fn title_controls(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let desk = desk::Desk::of(&theme);
     div()
         .id("title-controls")
         .flex()
@@ -167,13 +183,12 @@ fn title_controls(
                     })),
             )
         })
-        .child(theme_toggle(dark, &desk, &theme, cx))
+        .child(theme_toggle(dark, &theme, cx))
         .child(window_controls(window, cx))
 }
 
 fn theme_toggle(
     dark: bool,
-    desk: &desk::Desk,
     theme: &gpui_kit::component::theme::Theme,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
@@ -182,20 +197,16 @@ fn theme_toggle(
         .flex()
         .flex_row()
         .items_center()
-        .h(px(22.))
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .rounded(px(6.))
-        .overflow_hidden()
+        .h(px(24.))
+        .rounded(px(8.))
         .text_xs()
-        .child(theme_seg("DAY", !dark, desk, theme, cx))
-        .child(theme_seg("NIGHT", dark, desk, theme, cx))
+        .child(theme_seg("Light", !dark, theme, cx))
+        .child(theme_seg("Dark", dark, theme, cx))
 }
 
 fn theme_seg(
     label: &'static str,
     on: bool,
-    desk: &desk::Desk,
     theme: &gpui_kit::component::theme::Theme,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
@@ -205,10 +216,14 @@ fn theme_seg(
         .h_full()
         .flex()
         .items_center()
+        .rounded(px(8.))
         .cursor_pointer()
-        .when(on, |this| {
-            this.bg(desk.amber).text_color(theme.primary_foreground)
+        .text_color(if on {
+            theme.foreground
+        } else {
+            theme.muted_foreground
         })
+        .when(on, |this| this.bg(theme.accent))
         .when(!on, |this| this.text_color(theme.muted_foreground))
         .child(label)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -216,7 +231,7 @@ fn theme_seg(
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             cx.stop_propagation();
-            workspace.on_select_theme(label == "NIGHT", window, cx);
+            workspace.on_select_theme(label == "Dark", window, cx);
         }))
 }
 

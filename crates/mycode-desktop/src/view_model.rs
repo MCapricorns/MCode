@@ -180,6 +180,8 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
     /// Appearance theme: `light` or `dark`.
     pub theme: String,
+    /// Appearance palette: slate, ocean, forest, dusk, or sand.
+    pub palette: String,
     /// Requested reasoning effort from the selected model's catalog options;
     /// `None` keeps the provider default.
     pub reasoning: Option<String>,
@@ -215,6 +217,7 @@ impl SettingsState {
             web_backends: merge_web_backends(&settings.web.backends),
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.appearance.theme.clone(),
+            palette: settings.effective_palette().to_owned(),
             reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
@@ -241,6 +244,7 @@ impl SettingsState {
             mcp_servers: self.mcp_servers.clone(),
             appearance: mycode_config::AppearanceSettings {
                 theme: self.theme.clone(),
+                palette: self.palette.clone(),
             },
             reasoning_effort: self.reasoning.clone(),
             subagents: self.subagents.clone(),
@@ -370,11 +374,11 @@ impl SettingsSection {
     /// Nav groups in display order with their member sections.
     pub const GROUPS: &'static [(&'static str, &'static [SettingsSection])] = &[
         (
-            "WORKSPACE",
+            "Workspace",
             &[Self::General, Self::Models, Self::Agents, Self::Skills],
         ),
-        ("CONNECT", &[Self::Mcp, Self::Web]),
-        ("SYSTEM", &[Self::Data, Self::About]),
+        ("Connect", &[Self::Mcp, Self::Web]),
+        ("System", &[Self::Data, Self::About]),
     ];
 }
 
@@ -476,8 +480,10 @@ pub struct WorkspaceState {
     /// Recent project directories, most recent first.
     pub recents: Vec<String>,
     /// Session-to-project bindings (session id, project path), most recent
-    /// first; drives the project-grouped sidebar.
+    /// first. Restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
+    /// Folders in the open workspace, most recently added first.
+    pub workspace_roots: Vec<String>,
     /// Whether update checks run automatically.
     pub auto_update: bool,
     /// Self-update progress.
@@ -492,6 +498,9 @@ pub struct WorkspaceState {
     pub selected_model: Option<String>,
     /// Whether the model picker dropdown is open.
     pub model_menu_open: bool,
+    /// Provider whose models the open picker is showing. Does not change
+    /// the session until a model row is picked.
+    pub model_menu_browse: Option<String>,
     /// Whether the thinking-effort submenu is open.
     pub reasoning_menu_open: bool,
     /// Open Agents-page dropdown: (role name, field) where field is
@@ -544,6 +553,8 @@ pub enum DesktopAction {
     SettingsLoaded(SettingsState),
     /// The user picked the light or dark theme; persists with settings.
     SettingsThemeSelected(bool),
+    /// The user picked a color palette; persists with settings.
+    SettingsPaletteSelected(String),
     /// The user dismissed the composer mention menu without picking a row.
     MentionDismissed,
     /// The settings editor changed the User-Agent.
@@ -589,7 +600,11 @@ pub enum DesktopAction {
     /// A server's tools probe failed; the row shows the reason inline.
     McpProbeFailed { server_id: String, message: String },
     /// A tool call started on the open conversation.
-    ToolStarted { call_id: String, name: String },
+    ToolStarted {
+        call_id: String,
+        name: String,
+        target: String,
+    },
     /// Incremental tool or subagent progress for the live status line.
     ToolProgress {
         call_id: String,
@@ -700,7 +715,13 @@ pub enum DesktopAction {
         selected_model: Option<String>,
         /// Session-to-project bindings.
         session_projects: Vec<(String, String)>,
+        /// Workspace folder roots.
+        workspace_roots: Vec<String>,
     },
+    /// A folder was added to the workspace.
+    WorkspaceRootAdded(String),
+    /// A folder was removed from the workspace.
+    WorkspaceRootRemoved(String),
     /// A project directory was bound to the open session.
     ProjectOpened(String),
     /// A session was bound to a project in the durable map.
@@ -721,6 +742,8 @@ pub enum DesktopAction {
     ModelSelected(String),
     /// The model picker dropdown opened or closed.
     ModelMenuToggled(bool),
+    /// The open model picker is showing another provider's models.
+    ModelMenuBrowse(String),
     /// The thinking-effort submenu opened or closed.
     ReasoningMenuToggled(bool),
     /// The composer's thinking-effort pick; persists through settings.

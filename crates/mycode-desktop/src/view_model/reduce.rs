@@ -167,8 +167,13 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ChatDelta(delta) => {
             append_streaming(state, false, delta);
         }
-        DesktopAction::ToolStarted { call_id, name } => {
-            set_streaming_status(state, &format!("Running {name}"));
+        DesktopAction::ToolStarted {
+            call_id,
+            name,
+            target,
+        } => {
+            let label = tool_call_label(&name, &target);
+            set_streaming_status(state, &format!("Running {label}"));
             if name == "task" {
                 upsert_live_job(state, &call_id, "", "starting", false);
             }
@@ -176,7 +181,7 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 conversation.entries.push(ConversationEntry {
                     event_id: format!("call-{call_id}"),
                     kind: EntryKind::ToolCall,
-                    text: name.into(),
+                    text: label.into(),
                     call_id: Some(call_id),
                     thinking: String::new(),
                 });
@@ -339,6 +344,13 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.dirty = true;
             }
             state.dark_theme = dark;
+        }
+        DesktopAction::SettingsPaletteSelected(palette) => {
+            let palette = crate::ui::desk::normalize_palette(&palette).to_owned();
+            if let Some(settings) = state.settings.as_mut() {
+                settings.palette = palette;
+                settings.dirty = true;
+            }
         }
         DesktopAction::MentionDismissed => state.mention = None,
         DesktopAction::SettingsUserAgentChanged(user_agent) => {
@@ -520,16 +532,45 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             selected_provider,
             selected_model,
             session_projects,
+            workspace_roots,
         } => {
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;
+            state.workspace_roots = workspace_roots;
+            if state.workspace_roots.is_empty()
+                && let Some(project) = state.project_dir.clone()
+            {
+                state.workspace_roots.push(project);
+            }
             state.auto_update = auto_update;
             if selected_provider.is_some() {
                 state.selected_provider = selected_provider;
                 state.selected_model = selected_model;
             }
             ensure_model_selection(state);
+        }
+        DesktopAction::WorkspaceRootAdded(project) => {
+            if !project.trim().is_empty() {
+                state
+                    .workspace_roots
+                    .retain(|existing| !super::same_project_path(existing, &project));
+                state.workspace_roots.insert(0, project.clone());
+                state
+                    .workspace_roots
+                    .truncate(mycode_config::MAX_WORKSPACE_ROOTS);
+                state.recents.retain(|existing| existing != &project);
+                state.recents.insert(0, project.clone());
+                state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
+                if state.project_dir.is_none() {
+                    state.project_dir = Some(project);
+                }
+            }
+        }
+        DesktopAction::WorkspaceRootRemoved(project) => {
+            state
+                .workspace_roots
+                .retain(|existing| !super::same_project_path(existing, &project));
         }
         DesktopAction::ProjectOpened(project) => {
             state.project_dir = Some(project.clone());
@@ -644,7 +685,17 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.model_menu_open = open;
             if open {
                 state.reasoning_menu_open = false;
+                if state.model_menu_browse.is_none() {
+                    state.model_menu_browse = state.selected_provider.clone();
+                }
+            } else {
+                state.model_menu_browse = None;
             }
+        }
+        DesktopAction::ModelMenuBrowse(provider) => {
+            state.model_menu_open = true;
+            state.reasoning_menu_open = false;
+            state.model_menu_browse = Some(provider);
         }
         DesktopAction::ReasoningMenuToggled(open) => {
             state.reasoning_menu_open = open;
@@ -762,6 +813,15 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.shell_kind_menu_open = false;
     state.mention = None;
     was_open
+}
+
+fn tool_call_label(name: &str, target: &str) -> String {
+    let target = target.trim();
+    if target.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}  {target}")
+    }
 }
 
 fn rebuild_session_usage(state: &mut WorkspaceState) {

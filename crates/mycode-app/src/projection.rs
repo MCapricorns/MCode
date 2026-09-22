@@ -32,10 +32,11 @@ pub(crate) fn project_replayed_entry(event: &SessionEvent, payload: &[u8]) -> Co
                 .as_str()
                 .or_else(|| value["toolCall"]["name"].as_str())
                 .unwrap_or("tool");
+            let target = value["target"].as_str().unwrap_or("");
             ConversationEntry {
                 event_id: event.event_id.as_str().to_owned(),
                 kind: EntryKind::ToolCall,
-                text: name.into(),
+                text: mycode_core::tool_label(name, target).into(),
                 call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
                 thinking: String::new(),
             }

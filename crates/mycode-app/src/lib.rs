@@ -327,6 +327,8 @@ pub enum BridgeEvent {
         call_id: String,
         /// Tool name.
         name: String,
+        /// Path, query, or command. Empty when the call has no target.
+        target: String,
     },
     /// Incremental tool progress (including nested subagent steps).
     ToolProgress {

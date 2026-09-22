@@ -168,6 +168,7 @@ pub(crate) fn fail_truncated_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
         AgentEvent::ToolStarted {
             call_id: call_id.clone(),
             name: call.name.clone(),
+            target: call.target(),
         },
     );
     completed_error(
@@ -194,6 +195,7 @@ pub(crate) fn fail_cancelled_call(env: &TurnEnv<'_>, call: &ToolCall) -> ToolRes
         AgentEvent::ToolStarted {
             call_id: call_id.clone(),
             name: call.name.clone(),
+            target: call.target(),
         },
     );
     completed_error(
@@ -239,6 +241,7 @@ pub(crate) async fn dispatch_tool_call(
         AgentEvent::ToolStarted {
             call_id: call_id.clone(),
             name: call.name.clone(),
+            target: call.target(),
         },
     );
 
@@ -347,6 +350,32 @@ struct BoundPrepared {
     file: Option<std::sync::Arc<PreparedFile>>,
 }
 
+fn anchored_search(env: &TurnEnv<'_>, raw: Option<&str>) -> (std::path::PathBuf, Option<String>) {
+    let Some(raw) = raw else {
+        return (env.cwd.clone(), None);
+    };
+    let (root, relative) = mycode_tools::anchor_tool_path(&env.cwd, &env.extra_roots, raw);
+    if root == env.cwd {
+        return (env.cwd.clone(), Some(raw.to_owned()));
+    }
+    if relative.is_empty() {
+        (root, None)
+    } else {
+        (root, Some(relative))
+    }
+}
+
+fn anchored_file(env: &TurnEnv<'_>, raw: &str) -> (std::path::PathBuf, String) {
+    let (root, relative) = mycode_tools::anchor_tool_path(&env.cwd, &env.extra_roots, raw);
+    if root == env.cwd {
+        (env.cwd.clone(), raw.to_owned())
+    } else if relative.is_empty() {
+        (root, ".".to_owned())
+    } else {
+        (root, relative)
+    }
+}
+
 async fn bind_prepared(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
@@ -358,10 +387,10 @@ async fn bind_prepared(
             .get("path")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
-        let prepared =
-            prepare_search_async_with_access(env.cwd.clone(), path, token.clone(), access)
-                .await
-                .map_err(|error| error.to_string())?;
+        let (cwd, path) = anchored_search(env, path.as_deref());
+        let prepared = prepare_search_async_with_access(cwd, path, token.clone(), access)
+            .await
+            .map_err(|error| error.to_string())?;
         return Ok(BoundPrepared {
             search: Some(std::sync::Arc::new(prepared)),
             file: None,
@@ -372,7 +401,8 @@ async fn bind_prepared(
             .get("path")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| "file tool is missing a path argument".to_owned())?;
-        let prepared = prepare_file_async(env.cwd.clone(), path.to_owned(), token.clone(), access)
+        let (cwd, path) = anchored_file(env, path);
+        let prepared = prepare_file_async(cwd, path, token.clone(), access)
             .await
             .map_err(|error| error.to_string())?;
         return Ok(BoundPrepared {

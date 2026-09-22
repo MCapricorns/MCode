@@ -132,11 +132,16 @@ impl Workspace {
                 session_id,
                 call_id,
                 name,
+                target,
             } => {
                 if !matches_active(&session_id) {
                     return;
                 }
-                DesktopAction::ToolStarted { call_id, name }
+                DesktopAction::ToolStarted {
+                    call_id,
+                    name,
+                    target,
+                }
             }
             BridgeEvent::ToolProgress {
                 session_id,
@@ -268,9 +273,9 @@ impl Workspace {
                 };
                 if cx.theme().mode != mode {
                     Theme::change(mode, None, cx);
-                    crate::ui::desk::apply(Theme::global_mut(cx));
-                    Theme::sync_base(cx);
                 }
+                crate::ui::desk::apply_palette(Theme::global_mut(cx), &state.palette);
+                Theme::sync_base(cx);
                 self.ua_sync_pending = true;
                 self.apply_action(DesktopAction::SettingsLoaded(state), cx);
                 self.apply_runtime_shell();
@@ -388,6 +393,7 @@ impl Workspace {
                         selected_provider: ui_state.selected_provider,
                         selected_model: ui_state.selected_model,
                         session_projects: ui_state.session_projects,
+                        workspace_roots: ui_state.workspace_roots,
                     },
                     cx,
                 );

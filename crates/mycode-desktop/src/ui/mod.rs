@@ -58,7 +58,7 @@ pub fn render_root(
 ) -> impl IntoElement {
     let layout = DeskLayout::of(window);
     let theme = cx.theme().clone();
-    let mono = theme.mono_font_family.clone();
+    let ui_font = theme.font_family.clone();
     let bg = skin::ambient(&theme);
     let fg = theme.foreground;
     let focus_handle = workspace.focus_handle().clone();
@@ -85,7 +85,7 @@ pub fn render_root(
                 workspace.on_escape(cx);
             }
         }))
-        .font_family(mono)
+        .font_family(ui_font)
         .child(title_bar::render_title_bar(workspace, window, cx))
         .child(
             div()
@@ -116,12 +116,6 @@ pub fn render_root(
         .when(workspace.vm().project_menu_open, |this| {
             this.child(sidebar::render_project_menu_layer(workspace, cx))
         })
-        .when(
-            workspace.vm().view == MainView::Chat
-                && crate::view_model::task_surface_visible(workspace.vm())
-                && !workspace.vm().todo_rows.is_empty(),
-            |this| this.child(todos::render_todo_float(workspace, layout, cx)),
-        )
         .when(
             workspace.vm().subagent_window.is_some()
                 && crate::view_model::task_surface_visible(workspace.vm()),
