@@ -1,11 +1,10 @@
 # Native tools-contract matrix for read/write/find/grep and process/shell.
 #
-# Windows x86_64 is the sole blocking native delivery target in this phase.
-# Product target — native PASS only on this GitHub-hosted runner:
+# Blocking product runners:
 #   windows-latest  -> x86_64-pc-windows-msvc
+#   macos-latest    -> aarch64-apple-darwin
 #
-# Linux/macOS are deferred backlog and do not run on pushes/PRs.
-# Cross-compilation is supplementary evidence, never native PASS.
+# Linux is not a product target. Intel macOS builds are not published.
 # Android and BSD are not product targets.
 #
 # Privileged FS fixtures stay #[ignore]. This workflow does not set
@@ -39,6 +38,8 @@ jobs:
         include:
           - os: windows-latest
             host: x86_64-pc-windows-msvc
+          - os: macos-latest
+            host: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
