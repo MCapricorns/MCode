@@ -21,18 +21,19 @@ fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
     }
 }
 
-/// Ambient wash behind the window: a whisper of honey, same hue both ends.
+/// Ambient wash behind the window. The two ends stay in the honey hue, far
+/// enough apart that a translucent card still shows the falloff.
 pub(super) fn ambient(theme: &Theme) -> Background {
     let dark = is_dark(theme);
     let start = mix(
         theme.background,
         theme.yellow,
-        if dark { 0.07 } else { 0.10 },
+        if dark { 0.32 } else { 0.38 },
     );
     let end = mix(
         theme.background,
-        theme.secondary,
-        if dark { 0.40 } else { 0.55 },
+        theme.yellow,
+        if dark { 0.06 } else { 0.08 },
     );
     linear_gradient(
         168.,
@@ -41,16 +42,16 @@ pub(super) fn ambient(theme: &Theme) -> Background {
     )
 }
 
-/// Chrome wash (composer strip, tape). The ambient gradient shows through.
+/// Chrome wash (composer strip, title bar). The ambient gradient shows through.
 pub(super) fn glass(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
     let base = mix(
         theme.background,
         theme.yellow,
-        if dark { 0.08 } else { 0.06 },
+        if dark { 0.10 } else { 0.08 },
     );
     Hsla {
-        a: if dark { 0.58 } else { 0.64 },
+        a: if dark { 0.36 } else { 0.42 },
         ..base
     }
 }
@@ -58,9 +59,9 @@ pub(super) fn glass(theme: &Theme) -> Hsla {
 /// Sidebar / inspector veil, a little denser than the page wash.
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
-    let base = mix(theme.sidebar, theme.yellow, if dark { 0.08 } else { 0.05 });
+    let base = mix(theme.sidebar, theme.yellow, if dark { 0.10 } else { 0.07 });
     Hsla {
-        a: if dark { 0.62 } else { 0.70 },
+        a: if dark { 0.40 } else { 0.46 },
         ..base
     }
 }
@@ -75,23 +76,31 @@ pub(super) fn frost(theme: &Theme) -> Hsla {
         if dark { 0.40 } else { 0.50 },
     );
     Hsla {
-        a: if dark { 0.46 } else { 0.55 },
+        a: if dark { 0.34 } else { 0.40 },
         ..base
     }
 }
 
-/// Denser glass for dialogs and form cards, still not a solid panel.
+/// Glass for dialogs and form cards. Light enough that the honey wash
+/// reads through the card instead of looking like a solid panel.
 pub(super) fn frost_card(theme: &Theme) -> Hsla {
     let dark = is_dark(theme);
     let base = mix(
         theme.background,
         theme.secondary,
-        if dark { 0.62 } else { 0.78 },
+        if dark { 0.45 } else { 0.55 },
     );
     Hsla {
-        a: if dark { 0.78 } else { 0.82 },
+        a: if dark { 0.46 } else { 0.50 },
         ..base
     }
+}
+
+/// Toast fill. Denser than a page card so one line of ink stays readable
+/// over the composer, still glassy.
+pub(super) fn toast_fill(theme: &Theme) -> Hsla {
+    let base = frost_card(theme);
+    Hsla { a: 0.82, ..base }
 }
 
 /// Hover veil. Denser than [`frost`] so it reads on both the page and a card.
@@ -103,7 +112,7 @@ pub(super) fn frost_hover(theme: &Theme) -> Hsla {
         if dark { 0.10 } else { 0.08 },
     );
     Hsla {
-        a: if dark { 0.58 } else { 0.68 },
+        a: if dark { 0.50 } else { 0.56 },
         ..base
     }
 }
@@ -194,10 +203,10 @@ pub(super) fn glass_border(theme: &Theme) -> Hsla {
     }
 }
 
-/// Near-opaque popover fill.
+/// Menu fill. Denser than page glass so a menu stays readable.
 pub(super) fn popover(theme: &Theme) -> Hsla {
     let base = mix(theme.popover, theme.yellow, 0.04);
-    Hsla { a: 0.97, ..base }
+    Hsla { a: 0.92, ..base }
 }
 
 /// Scrim drawn over the app behind an open menu layer.

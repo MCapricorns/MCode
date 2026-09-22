@@ -475,7 +475,7 @@ fn render_preset_form(
                             .rounded_md()
                             .border_1()
                             .border_color(theme.border)
-                            .bg(theme.background)
+                            .bg(skin::popover(theme))
                             .child(
                                 gpui_kit::uniform_list(
                                     "preset-model-rows",

@@ -1,5 +1,5 @@
-//! The workspace window view: title bar, tape strip, sessions sidebar, chat
-//! column, right inspector, and the full-page settings view.
+//! The workspace window view: title bar, sessions sidebar, chat column,
+//! right inspector, and the full-page settings view.
 use std::collections::HashMap;
 
 use gpui_kit::component::Root;
@@ -7,7 +7,7 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Bounds, Context, Entity, Pixels, Window, WindowBounds};
 use gpui_kit::{px, size};
-use mycode_app::{HeadStamp, SessionEventId, SessionId};
+use mycode_app::{HeadStamp, SessionEventId};
 use mycode_config::HomeLayout;
 
 use crate::ui::{BackendForm, McpForm, ProviderForm};
@@ -48,7 +48,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
     options.window_min_size = Some(size(px(960.), px(560.)));
     if let Some(titlebar) = options.titlebar.as_mut() {
-        titlebar.title = Some("MYCode".into());
+        titlebar.title = Some("MYCode Harness".into());
     }
     cx.open_window(options, |window, cx| {
         // Paint the Desk palette before first layout: `init` leaves the stock
@@ -58,6 +58,19 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
         cx.new(|cx| Root::new(workspace, window, cx))
     })
     .expect("open the MYCode window");
+}
+
+/// One bottom-right notice. It leaves the screen on its own timer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToastKind {
+    Info,
+    Error,
+}
+
+pub(crate) struct Toast {
+    pub(crate) id: u64,
+    pub(crate) text: String,
+    pub(crate) kind: ToastKind,
 }
 
 /// The main workspace view.
@@ -80,11 +93,22 @@ pub struct Workspace {
     preset_search_input: Option<Entity<InputState>>,
     ask_input: Option<Entity<InputState>>,
     pending_project: Option<String>,
+    /// Folder the user last chose. Opens for other folders are ignored.
+    focused_project: Option<String>,
+    /// Session id of the conversation open currently in flight.
+    pending_open: Option<String>,
+    /// Drop conversation replies until the next explicit open. Set when the
+    /// user leaves a folder's chat without asking for another one.
+    suppress_open: bool,
     /// Draft restored by 撤回修改, applied on the next render (needs a window).
     pending_composer_prefill: Option<String>,
     /// Last `@` fragment already searched, to dedupe bridge dispatches.
     mention_query: Option<String>,
     pending_catalog_refresh: bool,
+    /// The in-flight check was started from About, so its result may toast.
+    manual_update_check: bool,
+    toasts: Vec<Toast>,
+    next_toast_id: u64,
     /// In-app folder browser. `None` while the native dialog is not used.
     pub(crate) project_picker: Option<crate::ui::project_picker::ProjectPicker>,
     runtime_ticks: u64,
@@ -103,7 +127,7 @@ impl Workspace {
     ) -> Entity<Self> {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Message MYCode…")
+                .placeholder("Message MYCode Harness…")
                 .auto_grow(1, 10)
                 .submit_on_enter(true)
         });
@@ -126,9 +150,15 @@ impl Workspace {
             preset_search_input: None,
             ask_input: None,
             pending_project: None,
+            focused_project: None,
+            pending_open: None,
+            suppress_open: false,
             pending_composer_prefill: None,
             mention_query: None,
             pending_catalog_refresh: false,
+            manual_update_check: false,
+            toasts: Vec::new(),
+            next_toast_id: 0,
             project_picker: None,
             runtime_ticks: 0,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
@@ -181,7 +211,7 @@ impl Workspace {
     fn on_runtime_tick(&mut self, cx: &mut Context<Self>) {
         self.runtime_ticks += 1;
         if self.runtime_ticks.is_multiple_of(UPDATE_RECHECK_TICKS) && self.vm.auto_update {
-            self.on_check_update(cx);
+            self.on_check_update(false, cx);
         }
     }
 
@@ -217,7 +247,13 @@ impl Workspace {
                 | DesktopAction::ChatDone { .. }
                 | DesktopAction::UsageRecorded { .. }
         );
+        let previous_error = self.vm.error.clone();
         reduce(&mut self.vm, action);
+        if self.vm.error.is_some() && self.vm.error != previous_error {
+            if let Some(message) = self.vm.error.take() {
+                self.push_toast(message, ToastKind::Error, cx);
+            }
+        }
         // Transcript-growing actions keep the conversation scrolled to the
         // newest content, the way chat clients behave while streaming.
         if self.vm.view == MainView::Chat && grew {
@@ -287,10 +323,14 @@ impl Workspace {
     }
 
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        self.follow_session_project(session_id, cx);
-        if let Some(session_id) = SessionId::parse(session_id) {
-            self.dispatch(BridgeCommand::OpenSession(session_id), cx);
+        let project = crate::view_model::project_of_session(&self.vm.session_projects, session_id)
+            .map(str::to_owned);
+        self.focused_project = project.clone();
+        if project.is_none() {
+            self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
         }
+        self.follow_session_project(session_id, cx);
+        self.request_open_session(session_id, cx);
     }
 
     /// Applies and persists the light/dark theme choice: the appearance
@@ -449,14 +489,51 @@ impl Workspace {
         self.apply_action(DesktopAction::TranscriptRevealMore, cx);
     }
 
-    pub(crate) fn on_dismiss_error(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(DesktopAction::DismissError, cx);
-    }
-
     // ---- accessors for the render layer ----
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
         &self.vm
+    }
+
+    pub(crate) fn toasts(&self) -> &[Toast] {
+        &self.toasts
+    }
+
+    /// Shows a notice for three seconds. A full stack drops the oldest.
+    pub(crate) fn push_toast(
+        &mut self,
+        text: impl Into<String>,
+        kind: ToastKind,
+        cx: &mut Context<Self>,
+    ) {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return;
+        }
+        let id = self.next_toast_id;
+        self.next_toast_id = self.next_toast_id.wrapping_add(1);
+        self.toasts.push(Toast { id, text, kind });
+        const MAX_TOASTS: usize = 4;
+        if self.toasts.len() > MAX_TOASTS {
+            let drop_count = self.toasts.len() - MAX_TOASTS;
+            self.toasts.drain(0..drop_count);
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.toasts.retain(|toast| toast.id != id);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn take_manual_update_check(&mut self) -> bool {
+        let manual = self.manual_update_check;
+        self.manual_update_check = false;
+        manual
     }
 
     pub(crate) fn focus_handle(&self) -> &gpui_kit::FocusHandle {

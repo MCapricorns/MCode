@@ -3,7 +3,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div};
 
 use super::widgets::{settings_card, settings_row};
@@ -25,6 +25,7 @@ pub(super) fn render_about_section(
         }
     };
     let auto_update = vm.auto_update;
+    let checking = matches!(vm.update, UpdateState::Checking);
     let status: (String, Option<AnyElement>) = match &vm.update {
         UpdateState::Idle => ("Update checks run at startup.".to_owned(), None),
         UpdateState::Checking => ("Checking for updates\u{2026}".to_owned(), None),
@@ -90,6 +91,26 @@ pub(super) fn render_about_section(
                 .into_any_element(),
         ),
         settings_row(
+            "author",
+            "Author",
+            None,
+            div()
+                .text_sm()
+                .opacity(0.8)
+                .child("MaMy")
+                .into_any_element(),
+        ),
+        settings_row(
+            "thanks",
+            "Thanks",
+            Some("People who built MYCode Harness."),
+            div()
+                .text_sm()
+                .opacity(0.8)
+                .child("MaMy, YangChengxxyy, iKunCai")
+                .into_any_element(),
+        ),
+        settings_row(
             "auto-update",
             "Automatic checks",
             Some("Check GitHub for a newer release once a day."),
@@ -105,9 +126,26 @@ pub(super) fn render_about_section(
             "Status",
             None,
             div()
-                .text_xs()
-                .opacity(0.7)
-                .child(status.0)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(div().text_xs().opacity(0.7).child(status.0))
+                .child(
+                    Button::new("check-update")
+                        .icon(IconName::RefreshCw)
+                        .label(if checking {
+                            "Checking\u{2026}"
+                        } else {
+                            "Check for updates"
+                        })
+                        .small()
+                        .ghost()
+                        .disabled(checking)
+                        .on_click(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_check_update(true, cx);
+                        })),
+                )
                 .into_any_element(),
         ),
         status
@@ -148,7 +186,7 @@ pub(super) fn render_about_section(
     settings_card(
         "about",
         "About",
-        Some("The app updates itself from GitHub releases."),
+        Some("MYCode Harness updates itself from GitHub releases."),
         theme,
         rows,
     )

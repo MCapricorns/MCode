@@ -55,6 +55,23 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.error = None;
             state.transcript_extra = 0;
         }
+        DesktopAction::ConversationParked => {
+            state.active = None;
+            for session in &mut state.sessions {
+                session.active = false;
+            }
+            state.sending = false;
+            state.queued.clear();
+            state.live_jobs.clear();
+            state.subagent_window = None;
+            state.todo_rows.clear();
+            state.pending_ask = None;
+            state.transcript_extra = 0;
+            state.composer_draft.clear();
+            state.mention = None;
+            state.resources.clear();
+            state.live_turn = None;
+        }
         DesktopAction::ConversationOpened(conversation) => {
             let switched = state
                 .active
@@ -524,15 +541,25 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             session_id,
             project,
         } => {
-            state
+            // A session keeps the first folder it was bound to. Opening
+            // another folder starts a different session instead of moving
+            // this conversation's tool directory.
+            let locked = state
                 .session_projects
-                .retain(|(existing, _)| existing != &session_id);
-            state
-                .session_projects
-                .insert(0, (session_id, project.clone()));
-            state
-                .session_projects
-                .truncate(mycode_config::MAX_SESSION_PROJECTS);
+                .iter()
+                .find(|(existing, _)| existing == &session_id)
+                .is_some_and(|(_, existing)| !super::same_project_path(existing, &project));
+            if !locked {
+                state
+                    .session_projects
+                    .retain(|(existing, _)| existing != &session_id);
+                state
+                    .session_projects
+                    .insert(0, (session_id, project.clone()));
+                state
+                    .session_projects
+                    .truncate(mycode_config::MAX_SESSION_PROJECTS);
+            }
         }
         DesktopAction::ActiveProjectChanged(project) => {
             state.project_dir = project;

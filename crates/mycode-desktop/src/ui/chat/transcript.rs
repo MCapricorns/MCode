@@ -183,7 +183,7 @@ fn thinking_box(id: SharedString, text: &str, theme: &Theme) -> impl IntoElement
     div()
         .id(id)
         .w_full()
-        .max_w(px(720.))
+        .min_w_0()
         .border_1()
         .border_color(skin::glass_border(theme))
         .rounded(skin::radius_card())
@@ -225,7 +225,7 @@ fn agent_text(id: SharedString, text: SharedString, theme: &Theme) -> impl IntoE
     let style = TextViewStyle::default().paragraph_gap(rems(0.35));
     div()
         .w_full()
-        .max_w(px(720.))
+        .min_w_0()
         .rounded(skin::radius_card())
         .px_3()
         .py_2()
@@ -278,10 +278,8 @@ pub(super) fn render_tool_block(
             skin::glass_border(theme)
         })
         .bg(skin::frost(theme))
-        // A pending call is one label. Stretching it across the column
-        // leaves an empty bar; a finished call keeps the reading width.
-        .when(waiting, |this| this.self_start())
-        .when(!waiting, |this| this.w_full().max_w(px(720.)))
+        .w_full()
+        .min_w_0()
         .child(
             div()
                 .flex()
@@ -354,9 +352,12 @@ fn result_body(
         search_preview(tool, &lines, theme, desk).into_any_element()
     } else if failed || text.len() > 300 || lines.len() > 6 {
         div()
+            .w_full()
+            .min_w_0()
             .px_2()
             .py_1()
             .text_xs()
+            .whitespace_normal()
             .font_family(theme.mono_font_family.clone())
             .bg(desk.screen.opacity(0.45))
             .text_color(if failed { desk.red } else { desk.screen_dim })
@@ -481,7 +482,7 @@ pub(super) fn render_user_entry(
                 .flex_row()
                 .gap_2()
                 .w_full()
-                .max_w(px(720.))
+                .min_w_0()
                 .rounded(skin::radius_card())
                 .border_1()
                 .border_color(skin::glass_border(theme))

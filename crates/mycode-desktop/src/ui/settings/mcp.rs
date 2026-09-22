@@ -14,6 +14,7 @@ use gpui_kit::{
 
 use super::widgets::{dropdown_field, labeled_field, settings_card};
 use crate::ui::desk::Desk;
+use crate::ui::skin;
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
@@ -214,7 +215,7 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                 .rounded(px(3.))
                 .border_1()
                 .border_color(theme.border)
-                .bg(theme.background)
+                .bg(skin::frost(theme))
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .child(tool.clone())

@@ -49,7 +49,7 @@ pub(super) fn render_welcome(
                 .gap_1()
                 .text_xl()
                 .font_weight(gpui_kit::FontWeight::BOLD)
-                .child("MYCODE"),
+                .child("MYCode Harness"),
         )
         .child(
             div()

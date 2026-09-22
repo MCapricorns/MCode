@@ -18,7 +18,10 @@ impl Workspace {
 
     // ---- updates ----
 
-    pub(crate) fn on_check_update(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_check_update(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if manual {
+            self.manual_update_check = true;
+        }
         self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::Checking), cx);
         self.dispatch(BridgeCommand::CheckUpdate, cx);
     }

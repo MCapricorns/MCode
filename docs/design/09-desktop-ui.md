@@ -4,7 +4,7 @@
 
 ## 1. 布局
 
-- 顶栏：`MYCODE//UI`、项目名（文件夹名，不是 `ses1-…`）、DAY/NIGHT。
+- 顶栏：`MYCode Harness`、项目名（文件夹名，不是 `ses1-…`）、可点击的 DAY/NIGHT。没有 TAPE 条。提示是右下角气泡，3 秒后消失。
 - Chat：248px 项目侧栏 + 中央时间线 + 右侧 inspector。
 - 欢迎页：字标、能力 chips（AGENTS / MCP / WEB / FILES）、打开项目 / 开始聊天、最近项目（hover 显示删除）。
 - 设置：General / Models / Agents / MCP / Web / Data / About。
@@ -17,7 +17,7 @@
 
 ## 3. 项目选择
 
-应用内 GPUI 文件夹浏览器绑定真实路径到当前会话（无会话则先创建），不再调系统目录框。`ui.json` 记 `session_projects` 与 `recent_projects`。侧栏按项目文件夹名分组。新聊天继承当前项目。
+应用内 GPUI 文件夹浏览器绑定真实路径，不再调系统目录框。`ui.json` 记 `session_projects` 与 `recent_projects`。侧栏按项目文件夹名分组。一个会话只属于一个文件夹：切换项目，或把另一个文件夹拖进窗口，不会改写正在干活的会话，而是打开那个文件夹自己的会话。新聊天继承当前项目。
 
 未绑定项目时工具 cwd 是 `~/.mycode/scratch`，不会在 home 里生成以会话 id 命名的项目文件夹。
 

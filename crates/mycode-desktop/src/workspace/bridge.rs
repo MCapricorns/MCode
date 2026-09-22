@@ -176,6 +176,11 @@ impl Workspace {
                 let version = offer.version.clone();
                 let notes_url = offer.notes_url.clone();
                 self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
+                self.push_toast(
+                    format!("v{version} is available"),
+                    crate::workspace::ToastKind::Info,
+                    cx,
+                );
                 DesktopAction::UpdateStateChanged(UpdateState::Available { version, notes_url })
             }
         };
@@ -188,16 +193,37 @@ impl Workspace {
                 self.apply_action(DesktopAction::SessionsLoaded(sessions), cx);
             }
             BridgeReply::Created(Ok(summary)) => {
-                let session_id = SessionId::parse(&summary.session_id).expect("core session id");
+                let session_id = summary.session_id.clone();
                 self.apply_action(DesktopAction::SessionCreated(summary), cx);
-                self.dispatch(BridgeCommand::OpenSession(session_id), cx);
+                self.request_open_session(&session_id, cx);
                 if let Some(project) = self.pending_project.take() {
-                    self.bind_project(&project, cx);
+                    self.attach_project(&session_id, &project, cx);
                 }
                 self.dispatch(BridgeCommand::ListSessions, cx);
             }
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
+                if self.suppress_open {
+                    return;
+                }
+                if self
+                    .pending_open
+                    .as_ref()
+                    .is_some_and(|pending| pending != &session_id)
+                {
+                    return;
+                }
+                if let Some(focus) = self.focused_project.clone() {
+                    let belongs = crate::view_model::project_of_session(
+                        &self.vm.session_projects,
+                        &session_id,
+                    )
+                    .is_some_and(|bound| crate::view_model::same_project_path(bound, &focus));
+                    if !belongs {
+                        return;
+                    }
+                }
+                self.pending_open = None;
                 self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
                 self.follow_session_project(&session_id, cx);
                 self.dispatch(BridgeCommand::ListResources { session_id }, cx);
@@ -334,6 +360,7 @@ impl Workspace {
                 self.apply_action(DesktopAction::Failed(message), cx);
             }
             BridgeReply::Catalog(Ok(info)) => {
+                let refreshed = self.pending_catalog_refresh;
                 self.pending_catalog_refresh = false;
                 self.apply_action(
                     DesktopAction::CatalogLoaded {
@@ -342,6 +369,9 @@ impl Workspace {
                     },
                     cx,
                 );
+                if refreshed {
+                    self.push_toast("Models refreshed", crate::workspace::ToastKind::Info, cx);
+                }
             }
             BridgeReply::Catalog(Err(message)) => {
                 if self.pending_catalog_refresh {
@@ -375,8 +405,12 @@ impl Workspace {
             }
             BridgeReply::UpdateChecked(Ok(None)) => {
                 self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::UpToDate), cx);
+                if self.take_manual_update_check() {
+                    self.push_toast("You're up to date", crate::workspace::ToastKind::Info, cx);
+                }
             }
             BridgeReply::UpdateChecked(Ok(Some(offer))) => {
+                let version = offer.version.clone();
                 self.apply_action(
                     DesktopAction::UpdateStateChanged(UpdateState::Available {
                         version: offer.version,
@@ -384,21 +418,42 @@ impl Workspace {
                     }),
                     cx,
                 );
+                if self.take_manual_update_check() {
+                    self.push_toast(
+                        format!("v{version} is available"),
+                        crate::workspace::ToastKind::Info,
+                        cx,
+                    );
+                }
             }
             BridgeReply::UpdateChecked(Err(message)) => {
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message)),
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message.clone())),
                     cx,
                 );
+                if self.take_manual_update_check() {
+                    self.push_toast(message, crate::workspace::ToastKind::Error, cx);
+                }
             }
             BridgeReply::UpdateDownloaded(Ok(prepared)) => {
+                let version = self
+                    .vm
+                    .last_offer
+                    .as_ref()
+                    .map(|offer| offer.version.clone());
                 self.apply_action(DesktopAction::UpdateStaged(prepared), cx);
+                let message = match version {
+                    Some(version) => format!("v{version} is ready to install"),
+                    None => "Update is ready to install".to_owned(),
+                };
+                self.push_toast(message, crate::workspace::ToastKind::Info, cx);
             }
             BridgeReply::UpdateDownloaded(Err(message)) => {
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message)),
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message.clone())),
                     cx,
                 );
+                self.push_toast(message, crate::workspace::ToastKind::Error, cx);
             }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))

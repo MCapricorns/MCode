@@ -244,6 +244,15 @@ impl Workspace {
         self.dispatch(BridgeCommand::CreateSession, cx);
     }
 
+    /// Opens one session and ignores any conversation reply that is not it.
+    pub(super) fn request_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        self.suppress_open = false;
+        self.pending_open = Some(session_id.to_owned());
+        if let Some(session_id) = SessionId::parse(session_id) {
+            self.dispatch(BridgeCommand::OpenSession(session_id), cx);
+        }
+    }
+
     /// Makes the sidebar and tool directory follow one session's project.
     /// Other chats keep their own bindings, so several projects can stay open.
     pub(super) fn follow_session_project(&mut self, session_id: &str, cx: &mut Context<Self>) {
@@ -276,15 +285,26 @@ impl Workspace {
         self.persist_ui_state(cx);
     }
 
-    /// Filters the sidebar to one project. Chats stay on the project they
-    /// were opened in; switching must not drag every session into This Project.
+    /// Filters the sidebar to one project and shows only that folder's chat.
+    /// The previous session keeps its own folder and keeps running there.
     pub(crate) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ProjectMenuToggled(false), cx);
-        self.apply_action(DesktopAction::ActiveProjectChanged(project.clone()), cx);
-        if project.is_some() {
+        let Some(project) = project else {
+            self.focused_project = None;
+            self.pending_open = None;
+            self.suppress_open = true;
+            self.apply_action(DesktopAction::ActiveProjectChanged(None), cx);
+            self.persist_ui_state(cx);
+            return;
+        };
+        if self.active_is_project(&project) {
+            self.focused_project = Some(project.clone());
+            self.apply_action(DesktopAction::ProjectOpened(project), cx);
             self.refresh_skills(cx);
+            self.persist_ui_state(cx);
+            return;
         }
-        self.persist_ui_state(cx);
+        self.focus_project_chat(&project, false, cx);
     }
 
     pub(crate) fn on_toggle_project_menu(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -347,7 +367,7 @@ impl Workspace {
             return;
         }
         self.project_picker = None;
-        self.bind_project(&folder.to_string_lossy(), cx);
+        self.open_isolated_project(&folder.to_string_lossy(), cx);
     }
 
     pub(crate) fn on_picker_roots(&mut self, cx: &mut Context<Self>) {
@@ -367,30 +387,121 @@ impl Workspace {
             return;
         }
         self.project_picker = None;
-        self.bind_project(&path.to_string_lossy(), cx);
+        self.open_isolated_project(&path.to_string_lossy(), cx);
     }
 
     /// Opens one of the remembered recent projects.
     pub(crate) fn on_open_recent(&mut self, project: &str, cx: &mut Context<Self>) {
-        self.bind_project(project, cx);
+        self.open_isolated_project(project, cx);
     }
 
-    /// Binds the project to the active session, creating one when needed.
-    pub(super) fn bind_project(&mut self, project: &str, cx: &mut Context<Self>) {
-        if self.vm.active.is_none() {
-            self.pending_project = Some(project.to_owned());
-            self.dispatch(BridgeCommand::CreateSession, cx);
+    /// Enters `project` without moving any other session onto it.
+    ///
+    /// The open chat is left alone when it already belongs here. An empty
+    /// chat that has no folder yet can adopt this one. A chat that already
+    /// has work, or that belongs to another folder, stays bound where it is;
+    /// this folder gets its own session.
+    fn open_isolated_project(&mut self, project: &str, cx: &mut Context<Self>) {
+        if self.active_is_project(project) {
+            self.focused_project = Some(project.to_owned());
+            self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+            self.refresh_skills(cx);
+            self.persist_ui_state(cx);
             return;
         }
-        let session_id = self
+        if self.active_can_adopt(project) {
+            let session_id = self
+                .vm
+                .active
+                .as_ref()
+                .map(|conversation| conversation.session_id.clone())
+                .expect("active session");
+            self.attach_project(&session_id, project, cx);
+            return;
+        }
+        self.focus_project_chat(project, true, cx);
+    }
+
+    /// Shows `project` and either opens its newest chat or, when `create`
+    /// is set and it has none, starts a fresh chat bound only to it.
+    fn focus_project_chat(&mut self, project: &str, create: bool, cx: &mut Context<Self>) {
+        self.focused_project = Some(project.to_owned());
+        self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        if let Some(session_id) = crate::view_model::newest_session_in_project(
+            &self.vm.sessions,
+            &self.vm.session_projects,
+            project,
+        ) {
+            let session_id = session_id.to_owned();
+            if !self.active_is_project(project) {
+                self.park_conversation(cx);
+            }
+            self.request_open_session(&session_id, cx);
+        } else if create {
+            self.park_conversation(cx);
+            self.pending_project = Some(project.to_owned());
+            self.dispatch(BridgeCommand::CreateSession, cx);
+        } else if !self.active_is_project(project) {
+            self.park_conversation(cx);
+        }
+        self.refresh_skills(cx);
+        self.persist_ui_state(cx);
+    }
+
+    fn active_is_project(&self, project: &str) -> bool {
+        let Some(session_id) = self
             .vm
             .active
             .as_ref()
-            .map(|conversation| conversation.session_id.clone())
-            .expect("active session");
+            .map(|conversation| conversation.session_id.as_str())
+        else {
+            return false;
+        };
+        crate::view_model::project_of_session(&self.vm.session_projects, session_id)
+            .is_some_and(|bound| crate::view_model::same_project_path(bound, project))
+    }
+
+    /// An empty, idle chat with no folder can take the folder being opened.
+    fn active_can_adopt(&self, project: &str) -> bool {
+        if self.vm.sending {
+            return false;
+        }
+        let Some(conversation) = self.vm.active.as_ref() else {
+            return false;
+        };
+        if !conversation.entries.is_empty() {
+            return false;
+        }
+        match crate::view_model::project_of_session(
+            &self.vm.session_projects,
+            &conversation.session_id,
+        ) {
+            Some(bound) => crate::view_model::same_project_path(bound, project),
+            None => true,
+        }
+    }
+
+    /// Hides the open chat. The session and any turn already running stay
+    /// on the folder they were bound to.
+    fn park_conversation(&mut self, cx: &mut Context<Self>) {
+        self.pending_open = None;
+        self.suppress_open = true;
+        self.mention_query = None;
+        self.pending_composer_prefill = Some(String::new());
+        self.apply_action(DesktopAction::ConversationParked, cx);
+    }
+
+    /// Binds one new or still-unbound session to `project`.
+    pub(super) fn attach_project(
+        &mut self,
+        session_id: &str,
+        project: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.focused_project = Some(project.to_owned());
         self.apply_action(
             DesktopAction::SessionProjectBound {
-                session_id: session_id.clone(),
+                session_id: session_id.to_owned(),
                 project: project.to_owned(),
             },
             cx,
@@ -398,14 +509,14 @@ impl Workspace {
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
         self.dispatch(
             BridgeCommand::SetProjectDir {
-                session_id: session_id.clone(),
+                session_id: session_id.to_owned(),
                 path: Some(project.to_owned()),
             },
             cx,
         );
         self.dispatch(
             BridgeCommand::ListResources {
-                session_id: session_id.clone(),
+                session_id: session_id.to_owned(),
             },
             cx,
         );

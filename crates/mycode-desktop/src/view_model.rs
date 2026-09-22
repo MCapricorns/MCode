@@ -526,6 +526,9 @@ pub enum DesktopAction {
     ConversationOpened(ActiveConversation),
     /// The open session's data was deleted; drop the conversation.
     SessionDeleted,
+    /// The open conversation belongs to another folder. Hide it without
+    /// deleting the session or stopping its turn.
+    ConversationParked,
     /// The composer text changed.
     ComposerChanged(String),
     /// The composer sent; the entry was durably committed.
@@ -871,6 +874,31 @@ fn normalize_project_key(path: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+/// The folder bound to one session, if it has one.
+#[must_use]
+pub fn project_of_session<'a>(
+    bindings: &'a [(String, String)],
+    session_id: &str,
+) -> Option<&'a str> {
+    bindings
+        .iter()
+        .find(|(id, _)| id == session_id)
+        .map(|(_, project)| project.as_str())
+}
+
+/// Newest session already bound to `project`. `sessions` is newest-first.
+#[must_use]
+pub fn newest_session_in_project<'a>(
+    sessions: &'a [SessionSummary],
+    bindings: &[(String, String)],
+    project: &str,
+) -> Option<&'a str> {
+    sessions.iter().find_map(|session| {
+        let bound = project_of_session(bindings, &session.session_id)?;
+        same_project_path(bound, project).then_some(session.session_id.as_str())
+    })
 }
 
 /// Groups sessions for the project-centric sidebar.
