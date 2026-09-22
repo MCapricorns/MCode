@@ -69,15 +69,9 @@ pub(crate) fn run_core(
             fetched_at: 0,
             etag: None,
         });
-        // `CoreState::new` reads the durable UI state and starts the session
-        // actor (a blocking startup handshake); build it off the core thread.
-        let state_home = home.clone();
-        let Ok(state) =
-            tokio::task::spawn_blocking(move || CoreState::new(state_home, cached)).await
-        else {
-            eprintln!("mycode-app: core state failed to initialize");
-            return;
-        };
+        // `SessionService::new` spawns the actor on this runtime. Calling it
+        // from `spawn_blocking` has no reactor and cannot start the worker.
+        let state = CoreState::new(home.clone(), cached);
         let state = Arc::new(state);
         spawn_catalog_refresh(state.clone(), events.clone());
         spawn_update_check(state.clone(), events.clone());

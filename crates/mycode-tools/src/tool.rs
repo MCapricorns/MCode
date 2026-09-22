@@ -218,9 +218,58 @@ pub trait ToolDyn: Send + Sync {
 }
 
 /// Generate the JSON Schema of `A`'s arguments (schemars single source).
+///
+/// Providers reject a root schema that is `true` or carries a draft
+/// `$schema` URL, so the advertised parameters are always an object schema.
 pub(crate) fn args_schema<A: JsonSchema>() -> Value {
-    serde_json::to_value(schemars::schema_for!(A))
-        .expect("schemars schemas always serialize to JSON")
+    let mut value = serde_json::to_value(schemars::schema_for!(A))
+        .expect("schemars schemas always serialize to JSON");
+    normalize_tool_schema(&mut value);
+    value
+}
+
+fn normalize_tool_schema(value: &mut Value) {
+    if value.as_bool() == Some(true) {
+        *value = serde_json::json!({"type": "object", "additionalProperties": true});
+        return;
+    }
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    object.remove("$schema");
+    object.remove("$id");
+    if let Some(reference) = object
+        .get("$ref")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let name = reference.rsplit('/').next().unwrap_or("");
+        if let Some(target) = object
+            .get("$defs")
+            .and_then(Value::as_object)
+            .and_then(|defs| defs.get(name))
+            .cloned()
+        {
+            let defs = object.get("$defs").cloned();
+            *value = target;
+            if let Some(object) = value.as_object_mut() {
+                object.remove("$schema");
+                if let Some(defs) = defs {
+                    object.entry("$defs".to_owned()).or_insert(defs);
+                }
+            }
+        }
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.remove("$schema");
+        if !object.contains_key("type")
+            && !object.contains_key("oneOf")
+            && !object.contains_key("anyOf")
+            && !object.contains_key("$ref")
+        {
+            object.insert("type".to_owned(), Value::String("object".to_owned()));
+        }
+    }
 }
 
 /// Validate raw `args` against the schemars-generated schema of `A`.

@@ -2,8 +2,8 @@
 # Release. Runs on `v*` tags.
 #
 # macOS ships Apple Silicon only; Intel Mac builds are dropped.
-# Assets produced per tag (plus a mcode-desktop-* alias for v0.2.0
-# clients, which still look up that prefix):
+# Assets produced per tag. A mcode-desktop-* alias is still uploaded so
+# installs that look up the old prefix can find the current package:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
 #

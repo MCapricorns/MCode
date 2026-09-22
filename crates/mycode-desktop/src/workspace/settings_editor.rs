@@ -620,7 +620,7 @@ impl Workspace {
             return;
         }
         if let Some(detected) =
-            mycode_tools::detect_default_shell().filter(|detected| detected.kind.as_str() == kind)
+            mycode_tools::ShellKind::parse(kind).and_then(mycode_tools::detect_shell_kind)
         {
             self.set_shell_preference(kind, &detected.program.to_string_lossy(), "user", cx);
         } else if !current.program.is_empty()

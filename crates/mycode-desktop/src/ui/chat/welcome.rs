@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use crate::ui::skin::mono_chip;
-use crate::ui::{desk::Desk, hover_delete_button, lamp, project_label, short_id, skin};
+use crate::ui::{desk::Desk, element_id, hover_delete_button, lamp, project_label, skin};
 use crate::workspace::Workspace;
 
 pub(super) fn render_welcome(
@@ -149,7 +149,7 @@ pub(super) fn render_welcome(
                     .children(recents.iter().take(5).map(|project| {
                         let project = project.clone();
                         div()
-                            .id(format!("recent-{}", short_id(&project)))
+                            .id(format!("recent-{}", element_id(&project)))
                             .group("recent-row")
                             .flex()
                             .flex_row()
@@ -192,7 +192,7 @@ pub(super) fn render_welcome(
                                     .child(project.clone()),
                             )
                             .child(hover_delete_button(
-                                format!("recent-remove-{}", short_id(&project)),
+                                format!("recent-remove-{}", element_id(&project)),
                                 IconName::X,
                                 "recent-row",
                                 {

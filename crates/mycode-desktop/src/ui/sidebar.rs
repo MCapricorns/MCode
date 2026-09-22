@@ -11,7 +11,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::{project_label, short_id, skin};
+use super::{element_id, project_label, skin};
 use crate::view_model::{MainView, SessionSummary, group_sessions, same_project_path};
 use crate::workspace::Workspace;
 
@@ -180,7 +180,7 @@ pub(super) fn render_sidebar(
                 })
                 .children(others.iter().map(|(project, rows)| {
                     div()
-                        .id(format!("other-group-{}", short_id(project)))
+                        .id(format!("other-group-{}", element_id(project)))
                         .child(switch_group_header(project, cx))
                         .children(
                             rows.iter()
@@ -275,7 +275,7 @@ fn switch_group_header(project: &str, cx: &Context<Workspace>) -> impl IntoEleme
     let theme = cx.theme();
     let project = project.to_owned();
     div()
-        .id(format!("group-header-{}", short_id(&project)))
+        .id(format!("group-header-{}", element_id(&project)))
         .flex()
         .flex_row()
         .items_center()
@@ -494,7 +494,7 @@ fn project_menu_row(
     let desk = super::desk::Desk::of(theme);
     let path = path.to_owned();
     div()
-        .id(format!("project-recent-{}", short_id(path.as_str())))
+        .id(format!("project-recent-{}", element_id(path.as_str())))
         .flex()
         .flex_row()
         .items_center()
@@ -549,7 +549,7 @@ fn project_menu_row(
                 ),
         )
         .child(super::hover_delete_button(
-            format!("project-remove-{}", short_id(path.as_str())),
+            format!("project-remove-{}", element_id(path.as_str())),
             IconName::X,
             "project-row",
             {

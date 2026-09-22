@@ -260,6 +260,8 @@ fn openai_codex_preset() -> CatalogProvider {
         doc: Some("https://developers.openai.com/codex".to_owned()),
         auth: AUTH_DEVICE_CODE.to_owned(),
         models: [
+            ("o3-pro", "o3-pro"),
+            ("o3", "o3"),
             ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
             ("gpt-5.5", "GPT-5.5"),
             ("gpt-5.6-luna", "GPT-5.6 Luna"),

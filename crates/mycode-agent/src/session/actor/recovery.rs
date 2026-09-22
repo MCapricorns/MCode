@@ -1,8 +1,8 @@
 //! Recovery: manifest planning, torn-tail discard, and chunked replay
 //! verification for one session load.
 //!
-//! [`SessionActor::recovery_plan`] reads the strict manifest and lays out
-//! per-branch byte/count/head expectations; [`SessionActor::recover_tails`]
+//! [`SessionCore::recovery_plan`] reads the strict manifest and lays out
+//! per-branch byte/count/head expectations; [`SessionCore::recover_tails`]
 //! truncates torn log tails and removes orphan staged payloads; the verify
 //! loop re-decodes every committed record within the per-pull byte budget
 //! and rebuilds the in-memory ledger, carrying the open tool-call set into
@@ -19,9 +19,9 @@ use super::super::fs;
 use super::super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
 use super::super::ledger::{BranchLedger, EventMeta};
 use super::super::store::{self, MAX_MANIFEST_BYTES, SessionPaths};
-use super::{BranchPlan, LoadState, OpFail, PlanError, SessionActor, VERIFY_BUDGET_BYTES};
+use super::{BranchPlan, LoadState, OpFail, PlanError, SessionCore, VERIFY_BUDGET_BYTES};
 
-impl SessionActor {
+impl SessionCore {
     /// Reads the manifest and builds the per-branch recovery plan.
     pub(super) fn recovery_plan(&self, session: &SessionId) -> Result<Vec<BranchPlan>, PlanError> {
         let paths = SessionPaths::new(&self.home, session);

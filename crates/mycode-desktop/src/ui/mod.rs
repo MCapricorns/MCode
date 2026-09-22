@@ -81,6 +81,12 @@ pub fn render_root(
         // no input holds focus: bubbled key events reach this node from any
         // focused descendant, and from itself via the startup focus.
         .track_focus(&focus_handle)
+        .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
+        .on_drop(
+            cx.listener(|workspace, paths: &gpui_kit::ExternalPaths, _, cx| {
+                workspace.on_drop_project(paths.paths(), cx);
+            }),
+        )
         .on_key_down(cx.listener(|workspace, event: &KeyDownEvent, _, cx| {
             if event.keystroke.key == "escape" {
                 workspace.on_escape(cx);
@@ -481,12 +487,25 @@ pub(super) fn hover_delete_button(
         .cursor_pointer()
         .text_color(theme.muted_foreground)
         .hover(|this| this.bg(theme.secondary))
-        .on_click(on_click)
+        .on_click(move |event, window, cx| {
+            cx.stop_propagation();
+            on_click(event, window, cx);
+        })
         .child(Icon::new(icon).xsmall())
 }
 
 pub(super) fn short_id(id: &str) -> String {
     id.chars().take(12).collect()
+}
+
+/// Stable element id for a full path. Prefix truncation collides on siblings.
+pub(super) fn element_id(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 pub(super) fn ellipsis(text: &str, max_chars: usize) -> String {

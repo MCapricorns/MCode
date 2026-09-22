@@ -26,6 +26,7 @@ pub(crate) struct DynamicMcpTool {
     /// backstop.
     validator: Option<jsonschema::Validator>,
     client: Arc<tokio::sync::Mutex<crate::mcp_client::McpClient>>,
+    snippet: String,
 }
 
 impl DynamicMcpTool {
@@ -35,11 +36,15 @@ impl DynamicMcpTool {
         client: Arc<tokio::sync::Mutex<crate::mcp_client::McpClient>>,
     ) -> Self {
         let validator = jsonschema::validator_for(&tool.input_schema).ok();
+        let snippet = format!(
+            "MCP tool on server '{server_id}'. Call it when the task matches; do not wait to be asked."
+        );
         Self {
             server_id,
             tool,
             validator,
             client,
+            snippet,
         }
     }
 }
@@ -57,6 +62,10 @@ impl ToolDyn for DynamicMcpTool {
             }),
             params_schema: self.tool.input_schema.clone(),
         }
+    }
+
+    fn prompt_snippet_dyn(&self) -> Option<&str> {
+        Some(self.snippet.as_str())
     }
 
     async fn execute_dyn(

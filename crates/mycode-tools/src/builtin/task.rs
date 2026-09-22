@@ -185,6 +185,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn task_argument_schema_is_an_object() {
+        let schema = crate::tool::args_schema::<TaskArgs>();
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("$schema").is_none());
+        assert!(schema["properties"].get("agent").is_some());
+        assert!(schema["properties"].get("prompt").is_some());
+    }
+
     #[tokio::test]
     async fn runs_host_and_returns_answer() {
         let tool = TaskTool::new(Arc::new(EchoHost));

@@ -1,5 +1,9 @@
 //! In-app folder browser. Project selection stays inside GPUI and still binds
 //! a real directory path through the existing session flow.
+//!
+//! The first screen is the drive list, so a session that starts on `C:` can
+//! still switch to another drive. Colors follow the welcome "Just start
+//! chatting" control: secondary fill, foreground ink, hairline border.
 
 use std::path::{Path, PathBuf};
 
@@ -17,11 +21,12 @@ use crate::workspace::Workspace;
 
 const MAX_ENTRIES: usize = 400;
 
-/// One browsable directory row.
+/// One browsable directory or file row.
 #[derive(Clone, Debug)]
 pub(crate) struct PickerEntry {
     pub name: String,
     pub path: PathBuf,
+    pub is_dir: bool,
 }
 
 /// Ephemeral folder-browser state. Listing happens when the user navigates,
@@ -34,7 +39,13 @@ pub(crate) struct ProjectPicker {
 }
 
 impl ProjectPicker {
+    /// Opens at the drive / filesystem-root list.
     pub(crate) fn open() -> Self {
+        browse(None)
+    }
+
+    /// Opens the user profile, matching the Home control.
+    pub(crate) fn home() -> Self {
         browse(Some(starting_directory()))
     }
 }
@@ -43,7 +54,7 @@ pub(crate) fn render(
     workspace: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    let theme = cx.theme();
+    let theme = cx.theme().clone();
     let picker = workspace
         .project_picker
         .clone()
@@ -54,6 +65,8 @@ pub(crate) fn render(
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "This computer".to_owned());
+    let drives = filesystem_roots();
+    let current = picker.current.clone();
     let entries = picker.entries;
     let status = picker.status;
     div()
@@ -65,7 +78,7 @@ pub(crate) fn render(
                 .id("project-picker-scrim")
                 .absolute()
                 .size_full()
-                .bg(skin::scrim(theme))
+                .bg(skin::scrim(&theme))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_picker_cancel(cx);
                 })),
@@ -80,21 +93,24 @@ pub(crate) fn render(
                 .child(
                     div()
                         .id("project-picker")
-                        .w(px(480.))
-                        .h(px(460.))
+                        .w(px(520.))
+                        .h(px(480.))
                         .flex()
                         .flex_col()
-                        .rounded(px(12.))
+                        .rounded(px(8.))
                         .border_1()
-                        .border_color(skin::glass_border(theme))
-                        .bg(skin::popover(theme))
+                        .border_color(theme.border)
+                        .bg(theme.sidebar)
                         .text_color(theme.foreground)
                         .shadow_lg()
                         .overflow_hidden()
-                        .child(picker_header(theme, &path_label))
+                        .child(picker_header(&theme, &path_label))
                         .child(picker_nav(cx, at_roots))
-                        .child(picker_list(cx, &entries, status.as_deref()))
-                        .child(picker_footer(cx, at_roots)),
+                        .when(!at_roots, |panel| {
+                            panel.child(drive_strip(cx, &drives, current.as_deref(), &theme))
+                        })
+                        .child(picker_list(cx, &entries, status.as_deref(), &theme))
+                        .child(picker_footer(cx, at_roots, &theme)),
                 ),
         )
         .into_any_element()
@@ -136,21 +152,21 @@ fn picker_nav(cx: &mut Context<Workspace>, at_roots: bool) -> impl IntoElement {
         .flex_row()
         .gap_2()
         .child(
-            nav_button("picker-up", "Up", !at_roots, theme).on_click(cx.listener(
+            desk_button("picker-up", "Up", !at_roots, theme).on_click(cx.listener(
                 |workspace, _, _, cx| {
                     workspace.on_picker_up(cx);
                 },
             )),
         )
         .child(
-            nav_button("picker-home", "Home", true, theme).on_click(cx.listener(
+            desk_button("picker-home", "Home", true, theme).on_click(cx.listener(
                 |workspace, _, _, cx| {
                     workspace.on_picker_home(cx);
                 },
             )),
         )
         .child(
-            nav_button("picker-roots", "This computer", !at_roots, theme).on_click(cx.listener(
+            desk_button("picker-roots", "This computer", !at_roots, theme).on_click(cx.listener(
                 |workspace, _, _, cx| {
                     workspace.on_picker_roots(cx);
                 },
@@ -158,12 +174,53 @@ fn picker_nav(cx: &mut Context<Workspace>, at_roots: bool) -> impl IntoElement {
         )
 }
 
+fn drive_strip(
+    cx: &mut Context<Workspace>,
+    drives: &[PathBuf],
+    current: Option<&Path>,
+    theme: &gpui_kit::component::theme::Theme,
+) -> impl IntoElement {
+    div()
+        .id("project-picker-drives")
+        .px_3()
+        .pb_1()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap_1()
+        .children(drives.iter().enumerate().map(|(index, drive)| {
+            let path = drive.clone();
+            let selected = drive_selected(current, drive);
+            let label = drive_label(drive);
+            div()
+                .id(format!("picker-drive-{index}"))
+                .px_2()
+                .py(px(4.))
+                .rounded(px(8.))
+                .text_xs()
+                .border_1()
+                .border_color(if selected { theme.ring } else { theme.border })
+                .bg(if selected {
+                    theme.secondary_active
+                } else {
+                    theme.secondary
+                })
+                .text_color(theme.foreground)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.secondary_hover))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_picker_enter(path.clone(), cx);
+                }))
+                .child(label)
+        }))
+}
+
 fn picker_list(
     cx: &mut Context<Workspace>,
     entries: &[PickerEntry],
     status: Option<&str>,
+    theme: &gpui_kit::component::theme::Theme,
 ) -> impl IntoElement {
-    let theme = cx.theme();
     div()
         .id("project-picker-list")
         .flex_1()
@@ -177,6 +234,7 @@ fn picker_list(
         .children(entries.iter().enumerate().map(|(index, entry)| {
             let path = entry.path.clone();
             let name = entry.name.clone();
+            let is_dir = entry.is_dir;
             div()
                 .id(format!("picker-row-{index}"))
                 .flex()
@@ -186,17 +244,32 @@ fn picker_list(
                 .px_2()
                 .py(px(6.))
                 .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.secondary_hover))
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    workspace.on_picker_enter(path.clone(), cx);
-                }))
+                .when(is_dir, |row| {
+                    row.cursor_pointer()
+                        .hover(|style| style.bg(theme.secondary_hover))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_picker_enter(path.clone(), cx);
+                        }))
+                })
                 .child(
-                    Icon::new(IconName::FolderOpen)
-                        .with_size(px(15.))
-                        .text_color(theme.yellow),
+                    Icon::new(if is_dir {
+                        IconName::FolderOpen
+                    } else {
+                        IconName::File
+                    })
+                    .with_size(px(15.))
+                    .text_color(theme.muted_foreground),
                 )
-                .child(name)
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if is_dir {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(name),
+                )
         }))
         .when(entries.is_empty(), |list| {
             list.child(
@@ -205,11 +278,7 @@ fn picker_list(
                     .py_3()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child(
-                        status
-                            .unwrap_or("This folder has no subfolders.")
-                            .to_owned(),
-                    ),
+                    .child(status.unwrap_or("This folder is empty.").to_owned()),
             )
         })
         .when(status.is_some() && !entries.is_empty(), |list| {
@@ -224,36 +293,53 @@ fn picker_list(
         })
 }
 
-fn picker_footer(cx: &mut Context<Workspace>, at_roots: bool) -> impl IntoElement {
-    let theme = cx.theme();
+fn picker_footer(
+    cx: &mut Context<Workspace>,
+    at_roots: bool,
+    theme: &gpui_kit::component::theme::Theme,
+) -> impl IntoElement {
     div()
         .px_3()
         .py_3()
         .flex()
         .flex_row()
-        .justify_end()
+        .items_center()
+        .justify_between()
         .gap_2()
         .border_t_1()
         .border_color(theme.border)
         .child(
-            footer_button("picker-cancel", "Cancel", false, theme).on_click(cx.listener(
-                |workspace, _, _, cx| {
-                    workspace.on_picker_cancel(cx);
-                },
-            )),
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Drop a folder on the window to open it."),
         )
         .child(
-            footer_button("picker-use", "Use this folder", true, theme)
-                .when(!at_roots, |button| {
-                    button.on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_picker_confirm(cx);
-                    }))
-                })
-                .when(at_roots, |button| button.opacity(0.45)),
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(
+                    desk_button("picker-cancel", "Cancel", true, theme).on_click(cx.listener(
+                        |workspace, _, _, cx| {
+                            workspace.on_picker_cancel(cx);
+                        },
+                    )),
+                )
+                .child(
+                    desk_button("picker-use", "Use this folder", !at_roots, theme).on_click(
+                        cx.listener(move |workspace, _, _, cx| {
+                            if !at_roots {
+                                workspace.on_picker_confirm(cx);
+                            }
+                        }),
+                    ),
+                ),
         )
 }
 
-fn nav_button(
+/// Same fill, ink, and border as the welcome "Just start chatting" action.
+fn desk_button(
     id: &'static str,
     label: &'static str,
     enabled: bool,
@@ -261,10 +347,10 @@ fn nav_button(
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
-        .px_2()
-        .py(px(4.))
-        .rounded(px(6.))
-        .text_xs()
+        .px_3()
+        .py(px(6.))
+        .rounded(px(8.))
+        .text_sm()
         .border_1()
         .border_color(theme.border)
         .bg(theme.secondary)
@@ -275,40 +361,6 @@ fn nav_button(
         })
         .cursor_pointer()
         .hover(|style| style.bg(theme.secondary_hover))
-        .child(label)
-}
-
-fn footer_button(
-    id: &'static str,
-    label: &'static str,
-    emphasized: bool,
-    theme: &gpui_kit::component::theme::Theme,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let fill = if emphasized {
-        theme.primary
-    } else {
-        theme.secondary
-    };
-    let ink = if emphasized {
-        theme.primary_foreground
-    } else {
-        theme.foreground
-    };
-    div()
-        .id(id)
-        .px_3()
-        .py(px(6.))
-        .rounded(px(8.))
-        .text_sm()
-        .border_1()
-        .border_color(if emphasized {
-            theme.primary
-        } else {
-            theme.border
-        })
-        .bg(fill)
-        .text_color(ink)
-        .cursor_pointer()
         .child(label)
 }
 
@@ -328,18 +380,19 @@ pub(crate) fn browse(path: Option<PathBuf>) -> ProjectPicker {
             entries: filesystem_roots()
                 .into_iter()
                 .map(|root| PickerEntry {
-                    name: root.display().to_string(),
+                    name: drive_label(&root),
                     path: root,
+                    is_dir: true,
                 })
                 .collect(),
             status: None,
         };
     };
-    match list_directories(&path) {
+    match list_entries(&path) {
         Ok((entries, truncated)) => ProjectPicker {
             current: Some(path),
             entries,
-            status: truncated.then(|| format!("Showing the first {MAX_ENTRIES} folders.")),
+            status: truncated.then(|| format!("Showing the first {MAX_ENTRIES} entries.")),
         },
         Err(status) => ProjectPicker {
             current: Some(path),
@@ -361,9 +414,10 @@ fn starting_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn list_directories(path: &Path) -> Result<(Vec<PickerEntry>, bool), String> {
+fn list_entries(path: &Path) -> Result<(Vec<PickerEntry>, bool), String> {
     let read = std::fs::read_dir(path).map_err(|error| error.to_string())?;
-    let mut entries = Vec::new();
+    let mut folders = Vec::new();
+    let mut files = Vec::new();
     for item in read {
         let Ok(item) = item else {
             continue;
@@ -371,28 +425,62 @@ fn list_directories(path: &Path) -> Result<(Vec<PickerEntry>, bool), String> {
         let Ok(file_type) = item.file_type() else {
             continue;
         };
-        if !file_type.is_dir() {
-            continue;
-        }
         let name = item.file_name().to_string_lossy().into_owned();
         if name == "." || name == ".." {
             continue;
         }
-        entries.push(PickerEntry {
+        let entry = PickerEntry {
             name,
             path: item.path(),
-        });
-        if entries.len() >= MAX_ENTRIES {
+            is_dir: file_type.is_dir(),
+        };
+        if entry.is_dir {
+            folders.push(entry);
+        } else {
+            files.push(entry);
+        }
+        if folders.len() + files.len() >= MAX_ENTRIES {
             break;
         }
     }
-    let truncated = entries.len() >= MAX_ENTRIES;
-    entries.sort_by(|left, right| {
+    let truncated = folders.len() + files.len() >= MAX_ENTRIES;
+    let by_name = |left: &PickerEntry, right: &PickerEntry| {
         left.name
             .to_ascii_lowercase()
             .cmp(&right.name.to_ascii_lowercase())
-    });
-    Ok((entries, truncated))
+    };
+    folders.sort_by(by_name);
+    files.sort_by(by_name);
+    folders.append(&mut files);
+    Ok((folders, truncated))
+}
+
+fn drive_label(path: &Path) -> String {
+    let text = path.display().to_string();
+    #[cfg(windows)]
+    {
+        let bytes = text.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' {
+            return text[..2].to_owned();
+        }
+    }
+    text
+}
+
+fn drive_selected(current: Option<&Path>, drive: &Path) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    let current = current
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let drive = drive
+        .to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    !drive.is_empty() && current.starts_with(&drive)
 }
 
 fn filesystem_roots() -> Vec<PathBuf> {
@@ -435,5 +523,33 @@ mod tests {
                 Some(Path::new(r"C:\"))
             );
         }
+    }
+
+    #[test]
+    fn drive_labels_are_letters_and_match_their_tree() {
+        #[cfg(windows)]
+        {
+            assert_eq!(drive_label(Path::new(r"C:\")), "C:");
+            assert!(drive_selected(
+                Some(Path::new(r"C:\Users\me")),
+                Path::new(r"C:\")
+            ));
+            assert!(!drive_selected(
+                Some(Path::new(r"C:\Users\me")),
+                Path::new(r"D:\")
+            ));
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(drive_label(Path::new("/")), "/");
+        }
+    }
+
+    #[test]
+    fn open_starts_at_filesystem_roots() {
+        let picker = ProjectPicker::open();
+        assert!(picker.current.is_none());
+        assert!(!picker.entries.is_empty());
+        assert!(picker.entries.iter().all(|entry| entry.is_dir));
     }
 }

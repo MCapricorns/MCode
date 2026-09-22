@@ -109,28 +109,14 @@ impl<A: PackTaskActor> TaskActorClient<A> {
     pub(crate) fn start(actor: A) -> Self {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let live = Arc::new(Mutex::new(HashMap::new()));
-        // The actor's invoke/pull bodies are synchronous storage work
-        // (advisory locks, staged writes, fsync, rename). Spawning the
-        // worker on the caller's runtime would run that I/O on the shared
-        // core executor and stall every other task, so it gets a dedicated
-        // thread with its own single-threaded runtime. The abort handle is
-        // handed back so `shutdown` keeps its cancellation semantics.
+        // The worker is a task on the caller runtime. Blocking storage stays
+        // in `spawn_blocking` inside the actor, so this loop never owns a
+        // private thread or calls `block_on`.
         let worker_sender = sender.clone();
         let worker_live = Arc::clone(&live);
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("mycode-agent-actor".to_owned())
-            .spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("session actor runtime");
-                let task = runtime.spawn(run_worker(actor, receiver, worker_sender, worker_live));
-                let _ = ready_tx.send(task.abort_handle());
-                let _ = runtime.block_on(task);
-            })
-            .expect("session actor thread");
-        let worker = ready_rx.recv().expect("session actor worker handle");
+        let worker = tokio::runtime::Handle::current()
+            .spawn(run_worker(actor, receiver, worker_sender, worker_live))
+            .abort_handle();
         Self {
             sender,
             worker,

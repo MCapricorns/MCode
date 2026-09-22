@@ -501,6 +501,18 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ActiveProjectChanged(project) => {
             state.project_dir = project;
         }
+        DesktopAction::RecentRemoved(project) => {
+            state
+                .recents
+                .retain(|existing| !super::same_project_path(existing, &project));
+            if state
+                .project_dir
+                .as_ref()
+                .is_some_and(|current| super::same_project_path(current, &project))
+            {
+                state.project_dir = None;
+            }
+        }
         DesktopAction::ProviderSelected(provider) => {
             state.selected_provider = Some(provider.clone());
             state.selected_model = state
@@ -601,9 +613,8 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ActivePresetChanged(preset) => {
             state.active_preset = preset.clone();
             state.preset_model_menu_open = false;
-            // Opening a provider pre-checks its whole model list (capped by
-            // the settings limit) so every advertised model starts selected
-            // instead of a single default.
+            // Opening a provider pre-checks its model list, strongest first,
+            // so a long catalog does not bury o3 / gpt-5 under the cap.
             state.preset_models = preset
                 .as_ref()
                 .and_then(|id| {
@@ -613,10 +624,8 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                         .and_then(|catalog| catalog.provider(id))
                 })
                 .map(|provider| {
-                    provider
-                        .models
-                        .iter()
-                        .map(|model| model.id.clone())
+                    super::rank_model_ids(provider.models.iter().map(|model| model.id.clone()))
+                        .into_iter()
                         .take(mycode_config::MAX_MODELS_PER_PROVIDER)
                         .collect()
                 })

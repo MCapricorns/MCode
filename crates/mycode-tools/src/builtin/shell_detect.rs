@@ -92,6 +92,24 @@ pub fn detect_default_shell() -> Option<DetectedShell> {
     }
 }
 
+/// Resolves one shell kind, including a WindowsApps execution alias when no
+/// regular `pwsh.exe` image is visible.
+#[must_use]
+pub fn detect_shell_kind(kind: ShellKind) -> Option<DetectedShell> {
+    #[cfg(windows)]
+    {
+        let candidates = windows_shell_candidates(&WindowsShellEnv::from_process())
+            .into_iter()
+            .filter(|(candidate, _)| *candidate == kind)
+            .collect();
+        pick_windows_shell(candidates)
+    }
+    #[cfg(not(windows))]
+    {
+        detect_posix_shell().filter(|shell| shell.kind == kind)
+    }
+}
+
 /// Replaces the process-wide shell preference used by execute.
 pub fn set_runtime_shell(shell: Option<DetectedShell>) {
     *RUNTIME_SHELL
@@ -155,10 +173,60 @@ impl WindowsShellEnv {
 #[cfg(windows)]
 #[must_use]
 pub(crate) fn detect_windows_shell_with(env: &WindowsShellEnv) -> Option<DetectedShell> {
-    windows_shell_candidates(env)
+    pick_windows_shell(windows_shell_candidates(env))
+}
+
+/// Prefers a regular executable, then a Store execution alias for PowerShell.
+#[cfg(windows)]
+fn pick_windows_shell(candidates: Vec<(ShellKind, PathBuf)>) -> Option<DetectedShell> {
+    if let Some((kind, program)) = candidates
+        .iter()
+        .find(|(_, program)| image_is_regular_executable(program))
+    {
+        return Some(DetectedShell {
+            kind: *kind,
+            program: program.clone(),
+        });
+    }
+    candidates
         .into_iter()
-        .find(|(_, program)| powershell_image_looks_pinnable(program))
+        .find(|(kind, program)| {
+            matches!(kind, ShellKind::Pwsh | ShellKind::PowerShell)
+                && is_store_execution_alias(program)
+        })
         .map(|(kind, program)| DetectedShell { kind, program })
+}
+
+/// A regular file large enough that it is not a 0-byte Store execution alias.
+#[cfg(windows)]
+fn image_is_regular_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 64)
+}
+
+/// A 0-byte `pwsh.exe` / `powershell.exe` under `WindowsApps`.
+///
+/// The Store publishes these as execution aliases. They are not PE images,
+/// but launching them starts the real package, so they are usable when the
+/// package directory itself is not readable.
+#[cfg(windows)]
+fn is_store_execution_alias(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if !name.eq_ignore_ascii_case("pwsh.exe") && !name.eq_ignore_ascii_case("powershell.exe") {
+        return false;
+    }
+    let in_windows_apps = path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    });
+    if !in_windows_apps {
+        return false;
+    }
+    std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_dir() && meta.len() <= 64)
 }
 
 /// Candidate programs in discovery order. Existence is not required.
@@ -203,12 +271,20 @@ fn windows_shell_candidates(env: &WindowsShellEnv) -> Vec<(ShellKind, PathBuf)> 
     }
 
     if let Some(local_app_data) = env.local_app_data.as_ref() {
+        let local_app_data = Path::new(local_app_data);
         candidates.push((
             ShellKind::Pwsh,
-            Path::new(local_app_data)
+            local_app_data
                 .join("Microsoft")
                 .join("WinGet")
                 .join("Links")
+                .join("pwsh.exe"),
+        ));
+        candidates.push((
+            ShellKind::Pwsh,
+            local_app_data
+                .join("Microsoft")
+                .join("WindowsApps")
                 .join("pwsh.exe"),
         ));
     }
@@ -285,13 +361,6 @@ fn path_named_files(path_var: Option<&OsStr>, file_name: &str) -> Vec<PathBuf> {
 
 fn is_absolute_path_entry(entry: &Path) -> bool {
     !entry.as_os_str().is_empty() && lexical_normalize(entry).is_absolute()
-}
-
-/// A regular file large enough that it is not a 0-byte Store execution alias.
-#[cfg(windows)]
-#[must_use]
-pub(crate) fn powershell_image_looks_pinnable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 64)
 }
 
 /// Finds `pwsh.exe` inside versioned `Microsoft.PowerShell_*` package
@@ -454,6 +523,50 @@ mod tests {
             ..WindowsShellEnv::default()
         })
         .expect("real PE after a Store alias");
+        assert_eq!(detected.program, real);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_apps_execution_alias_is_used_when_no_pe_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let alias = root
+            .path()
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("pwsh.exe");
+        std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        std::fs::write(&alias, []).unwrap();
+
+        let detected = detect_windows_shell_with(&WindowsShellEnv {
+            local_app_data: Some(root.path().as_os_str().to_os_string()),
+            ..WindowsShellEnv::default()
+        })
+        .expect("store alias");
+        assert_eq!(detected.kind, ShellKind::Pwsh);
+        assert_eq!(detected.program, alias);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn regular_pwsh_beats_a_windows_apps_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let alias = root
+            .path()
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("pwsh.exe");
+        let real = root.path().join("PowerShell").join("7").join("pwsh.exe");
+        std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+        std::fs::write(&alias, []).unwrap();
+        write_pinnable(&real);
+
+        let detected = detect_windows_shell_with(&WindowsShellEnv {
+            program_files: Some(root.path().as_os_str().to_os_string()),
+            local_app_data: Some(root.path().as_os_str().to_os_string()),
+            ..WindowsShellEnv::default()
+        })
+        .expect("real pwsh");
         assert_eq!(detected.program, real);
     }
 

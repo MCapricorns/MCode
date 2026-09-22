@@ -24,9 +24,9 @@ use super::super::store::{
     self, MANIFEST_FORMAT_VERSION, MANIFEST_KIND, MAX_MANIFEST_BYTES, MAX_SESSION_TOTAL_BYTES,
     ManifestBranchFile, ManifestFile, ParentageFile, SessionPaths,
 };
-use super::{OpFail, SessionActor};
+use super::{OpFail, SessionCore};
 
-impl SessionActor {
+impl SessionCore {
     pub(super) fn action_create(
         &mut self,
         session: &SessionId,

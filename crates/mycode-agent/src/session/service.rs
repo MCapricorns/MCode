@@ -53,6 +53,9 @@ impl Drop for ServiceInner {
 
 impl SessionService {
     /// Starts the service over one owned home without creating any object.
+    ///
+    /// Must run on a Tokio runtime: the session actor is a task on that
+    /// runtime, and its storage work uses `spawn_blocking`.
     #[must_use]
     pub fn new(home: &HomeLayout) -> Self {
         let fence = Arc::new(GenerationFence::new(

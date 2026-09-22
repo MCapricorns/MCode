@@ -14,7 +14,7 @@ mod actions;
 mod recovery;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mycode_config::HomeLayout;
 
@@ -43,18 +43,47 @@ pub(crate) enum SessionTaskError {
     Storage,
 }
 
-/// The serialized session owner loop.
-pub(crate) struct SessionActor {
+/// Durable session state. Methods run on the blocking pool.
+pub(crate) struct SessionCore {
     home: HomeLayout,
     fence: Arc<GenerationFence>,
     admission: AdmissionLedger,
     sessions: HashMap<SessionId, SessionLedger>,
 }
 
+/// Serialized session owner. Storage work is `spawn_blocking` so the caller
+/// runtime is not stalled and no private thread or `block_on` is required.
+pub(crate) struct SessionActor {
+    core: Arc<Mutex<SessionCore>>,
+}
+
+impl SessionActor {
+    pub(crate) fn new(home: HomeLayout, fence: Arc<GenerationFence>) -> Self {
+        Self {
+            core: Arc::new(Mutex::new(SessionCore::new(home, fence))),
+        }
+    }
+}
+
 /// One admitted session operation.
+///
+/// The stage lives behind a mutex shared with in-flight blocking pulls, so a
+/// cancelled await still observes a completed commit on the next pull.
 pub(crate) struct SessionOperation {
+    inner: Arc<Mutex<SessionOpInner>>,
+}
+
+struct SessionOpInner {
     admission: Option<TaskOperationAdmission>,
     stage: Stage,
+}
+
+impl SessionOperation {
+    fn new(admission: Option<TaskOperationAdmission>, stage: Stage) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SessionOpInner { admission, stage })),
+        }
+    }
 }
 
 enum Stage {
@@ -149,8 +178,8 @@ enum OpFail {
     Domain(SessionError),
 }
 
-impl SessionActor {
-    pub(crate) fn new(home: HomeLayout, fence: Arc<GenerationFence>) -> Self {
+impl SessionCore {
+    fn new(home: HomeLayout, fence: Arc<GenerationFence>) -> Self {
         Self {
             home,
             fence,
@@ -173,10 +202,7 @@ impl SessionActor {
             admission: Option<TaskOperationAdmission>,
             error: SessionError,
         ) -> Result<SessionOperation, SessionTaskError> {
-            Ok(SessionOperation {
-                admission,
-                stage: Stage::Failed(error),
-            })
+            Ok(SessionOperation::new(admission, Stage::Failed(error)))
         }
         let admission = Some(self.mint_admission()?);
         let stage = match request {
@@ -322,7 +348,7 @@ impl SessionActor {
                 },
             ),
         };
-        Ok(SessionOperation { admission, stage })
+        Ok(SessionOperation::new(admission, stage))
     }
 
     /// Routes an action for a known session: directly when its ledger is
@@ -350,7 +376,7 @@ impl SessionActor {
 
     fn pull_sync(
         &mut self,
-        operation: &mut SessionOperation,
+        operation: &mut SessionOpInner,
     ) -> Result<SessionPull, SessionTaskError> {
         {
             match &mut operation.stage {
@@ -514,11 +540,19 @@ impl PackTaskActor for SessionActor {
     }
 
     async fn invoke(&mut self, request: &Self::Request) -> Result<Self::Operation, Self::Error> {
-        self.invoke_sync(request)
+        let request = request.clone();
+        let core = Arc::clone(&self.core);
+        blocking_session(move || core.lock().expect("session actor").invoke_sync(&request)).await?
     }
 
     async fn pull(&mut self, operation: &mut Self::Operation) -> Result<Self::Pull, Self::Error> {
-        self.pull_sync(operation)
+        let core = Arc::clone(&self.core);
+        let inner = Arc::clone(&operation.inner);
+        blocking_session(move || {
+            let mut op = inner.lock().expect("session operation");
+            core.lock().expect("session actor").pull_sync(&mut op)
+        })
+        .await?
     }
 
     async fn drop_operation(&mut self, _operation: Self::Operation) -> Result<(), Self::Error> {
@@ -526,6 +560,22 @@ impl PackTaskActor for SessionActor {
     }
 
     fn take_admission(operation: &mut Self::Operation) -> Option<TaskOperationAdmission> {
-        operation.admission.take()
+        operation
+            .inner
+            .lock()
+            .expect("session operation")
+            .admission
+            .take()
     }
+}
+
+fn blocking_session<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> impl std::future::Future<Output = Result<T, SessionTaskError>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let value = job();
+        let _ = tx.send(value);
+    });
+    async move { rx.await.map_err(|_| SessionTaskError::Storage) }
 }

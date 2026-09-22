@@ -33,7 +33,9 @@ pub use builtin::fs_search::{
     PreparedSearch, SearchAccess, live_search_thread_handles, live_search_workers, prepare_search,
     prepare_search_async, prepare_search_async_with_access, run_search_worker_until_cancel,
 };
-pub use builtin::shell::{DetectedShell, ShellKind, detect_default_shell, set_runtime_shell};
+pub use builtin::shell::{
+    DetectedShell, ShellKind, detect_default_shell, detect_shell_kind, set_runtime_shell,
+};
 pub use builtin::{
     EditTool, ExecTool, FindTool, GrepTool, ReadTool, ShellTool, WriteTool, register_builtins,
 };

@@ -19,7 +19,9 @@ mod detect;
 #[cfg(windows)]
 use detect::runtime_shell;
 
-pub use detect::{DetectedShell, ShellKind, detect_default_shell, set_runtime_shell};
+pub use detect::{
+    DetectedShell, ShellKind, detect_default_shell, detect_shell_kind, set_runtime_shell,
+};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

@@ -289,6 +289,31 @@ fn reasoning_picks_route_through_the_reducer() {
     );
 }
 
+#[test]
+fn removing_a_recent_project_drops_it_from_the_list() {
+    let mut state = WorkspaceState::default();
+    state.recents = vec![r"D:\work\alpha".to_owned(), r"D:\work\beta".to_owned()];
+    state.project_dir = Some(r"D:\work\alpha".to_owned());
+    reduce(
+        &mut state,
+        DesktopAction::RecentRemoved(r"d:/work/alpha".to_owned()),
+    );
+    assert_eq!(state.recents, vec![r"D:\work\beta".to_owned()]);
+    assert_eq!(state.project_dir, None);
+}
+
+#[test]
+fn suggested_models_prefer_o3_over_compact_ids() {
+    let suggested = super::suggested_model_ids([
+        "gpt-4o-mini".to_owned(),
+        "o3".to_owned(),
+        "gpt-5-nano".to_owned(),
+        "o3-pro".to_owned(),
+        "claude-haiku".to_owned(),
+    ]);
+    assert_eq!(suggested, vec!["o3-pro".to_owned(), "o3".to_owned()]);
+}
+
 /// The shell-kind dropdown owns its own open flag instead of borrowing the
 /// Agents page's subagent menu state.
 #[test]

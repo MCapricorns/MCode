@@ -291,7 +291,7 @@ pub(super) fn render_tool_block(
                 ),
         );
     if let Some(result) = result {
-        let body = result_body(result, theme, &desk);
+        let body = result_body(call.text.as_ref(), result, theme, &desk);
         card = card.child(div().border_t_1().border_color(theme.border).child(body));
     }
     desk_block(
@@ -313,37 +313,30 @@ pub(super) fn render_tool_block(
     .into_any_element()
 }
 
-/// The tool result body: diff-style green/red lines stay colored text on the
-/// panel; longer output renders as a dark CRT strip (`.term`) in both modes.
-fn result_body(result: &ConversationEntry, theme: &Theme, desk: &Desk) -> impl IntoElement {
+/// The tool result body: edit diffs and search hits render as a preview
+/// so additions, deletions, and matches stay visible. Other long output
+/// stays a dark CRT strip.
+fn result_body(
+    tool: &str,
+    result: &ConversationEntry,
+    theme: &Theme,
+    desk: &Desk,
+) -> impl IntoElement {
     let text = result.text.to_string();
     let failed = text.starts_with("failed:");
     let lines: Vec<&str> = text.lines().collect();
-    let looks_diff = lines
+    let diff_lines = lines
         .iter()
-        .any(|line| line.starts_with('+') || line.starts_with('-') || line.starts_with("@@"));
-    if looks_diff {
-        div()
-            .flex()
-            .flex_col()
-            .py_1()
-            .text_xs()
-            .font_family(theme.mono_font_family.clone())
-            .children(lines.iter().take(40).map(|line| {
-                let (color, bg) = if line.starts_with('+') {
-                    (desk.green, desk.green.opacity(0.07))
-                } else if line.starts_with('-') {
-                    (desk.red, desk.red.opacity(0.06))
-                } else {
-                    (theme.muted_foreground, theme.transparent)
-                };
-                div()
-                    .px_2()
-                    .text_color(color)
-                    .bg(bg)
-                    .child(line.to_string())
-            }))
-            .into_any_element()
+        .filter(|line| {
+            line.starts_with("+ ")
+                || line.starts_with("- ")
+                || line.strip_prefix("[diff truncated]").is_some()
+        })
+        .count();
+    if diff_lines > 0 {
+        diff_preview(&lines, theme, desk).into_any_element()
+    } else if matches!(tool, "grep" | "find" | "search") && !failed {
+        search_preview(tool, &lines, theme, desk).into_any_element()
     } else if failed || text.len() > 300 || lines.len() > 6 {
         div()
             .px_2()
@@ -364,6 +357,85 @@ fn result_body(result: &ConversationEntry, theme: &Theme, desk: &Desk) -> impl I
             .child(ellipsis(&text, 600))
             .into_any_element()
     }
+}
+
+fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
+    let added = lines.iter().filter(|line| line.starts_with("+ ")).count();
+    let removed = lines.iter().filter(|line| line.starts_with("- ")).count();
+    let shown = lines.len().min(80);
+    div()
+        .flex()
+        .flex_col()
+        .py_1()
+        .text_xs()
+        .font_family(theme.mono_font_family.clone())
+        .child(preview_caption(
+            &format!("DIFF  +{added}  -{removed}"),
+            desk.green,
+            theme,
+        ))
+        .children(lines.iter().take(shown).map(|line| {
+            let (color, bg) = if line.starts_with("+ ") {
+                (desk.green, desk.green.opacity(0.08))
+            } else if line.starts_with("- ") {
+                (desk.red, desk.red.opacity(0.08))
+            } else {
+                (theme.muted_foreground, theme.transparent)
+            };
+            div()
+                .px_2()
+                .text_color(color)
+                .bg(bg)
+                .child((*line).to_owned())
+        }))
+        .when(lines.len() > shown, |this| {
+            this.child(preview_caption("… more changes omitted", desk.faint, theme))
+        })
+}
+
+fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
+    let hits = lines.iter().filter(|line| !line.starts_with('[')).count();
+    let label = if tool == "find" { "PATHS" } else { "MATCHES" };
+    let shown = lines.len().min(40);
+    div()
+        .flex()
+        .flex_col()
+        .py_1()
+        .text_xs()
+        .font_family(theme.mono_font_family.clone())
+        .child(preview_caption(
+            &format!("{label}  {hits}"),
+            desk.amber,
+            theme,
+        ))
+        .children(lines.iter().take(shown).map(|line| {
+            let notice = line.starts_with('[');
+            div()
+                .px_2()
+                .text_color(if notice {
+                    theme.muted_foreground
+                } else {
+                    theme.foreground
+                })
+                .bg(if notice {
+                    theme.transparent
+                } else {
+                    desk.green.opacity(0.06)
+                })
+                .child((*line).to_owned())
+        }))
+        .when(lines.len() > shown, |this| {
+            this.child(preview_caption("… more results omitted", desk.faint, theme))
+        })
+}
+
+fn preview_caption(label: &str, color: gpui_kit::Hsla, theme: &Theme) -> impl IntoElement {
+    div()
+        .px_2()
+        .py(px(2.))
+        .text_color(color)
+        .child(label.to_owned())
+        .font_family(theme.mono_font_family.clone())
 }
 
 /// One user bubble with hover actions: edit-and-resend (rewinds to before)

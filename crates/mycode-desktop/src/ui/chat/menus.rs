@@ -88,9 +88,9 @@ pub(super) fn render_model_menu(
                 .map(|provider| provider.models.clone())
         })
         .unwrap_or_default();
-    // Providers offer far more models than the configured subset; the
-    // catalog list is the menu, with any configured-but-uncataloged ids
-    // appended so nothing the user saved disappears.
+    // Providers offer far more models than the menu can show. Rank the
+    // strongest first (o3, gpt-5, opus) so the cap does not hide them, and
+    // keep configured ids that the catalog does not list.
     let models: Vec<String> = selected_provider
         .as_deref()
         .and_then(|provider_id| {
@@ -111,10 +111,18 @@ pub(super) fn render_model_menu(
                     all.push(model.clone());
                 }
             }
-            all.truncate(mycode_config::MAX_MODELS_PER_PROVIDER);
-            all
+            crate::view_model::rank_model_ids(all)
+                .into_iter()
+                .take(mycode_config::MAX_MODELS_PER_PROVIDER)
+                .collect()
         })
         .unwrap_or(configured_models);
+    let suggested = crate::view_model::suggested_model_ids(models.iter().cloned());
+    let rest: Vec<String> = models
+        .iter()
+        .filter(|id| !suggested.iter().any(|picked| picked == *id))
+        .cloned()
+        .collect();
 
     let mut rows: Vec<ModelMenuRow> = vec![ModelMenuRow::Header {
         label: "PROVIDER",
@@ -135,12 +143,22 @@ pub(super) fn render_model_menu(
                 }),
         );
     }
-    if !models.is_empty() {
+    if !suggested.is_empty() {
+        rows.push(ModelMenuRow::Header {
+            label: "SUGGESTED",
+            divider: true,
+        });
+        rows.extend(suggested.into_iter().map(|id| ModelMenuRow::Model {
+            selected: Some(&id) == selected_model.as_ref(),
+            id,
+        }));
+    }
+    if !rest.is_empty() {
         rows.push(ModelMenuRow::Header {
             label: "MODEL",
             divider: true,
         });
-        rows.extend(models.into_iter().map(|id| ModelMenuRow::Model {
+        rows.extend(rest.into_iter().map(|id| ModelMenuRow::Model {
             selected: Some(&id) == selected_model.as_ref(),
             id,
         }));

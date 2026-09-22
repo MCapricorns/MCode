@@ -276,16 +276,19 @@ async fn run_chat_turn(
     let history = crate::compaction::compact_history(&compact_scope, history).await;
 
     let resources = mycode_config::discover_resources(home, &cwd);
-    let mut system_prompt =
-        String::from("You are MYCode, a coding agent. Answer concisely and explain what you did.");
+    let mut system_prompt = String::from(
+        "You are MYCode, a coding agent. Answer concisely and explain what you did.\n\n\
+Skills, MCP tools, and subagents are already available. Use a matching skill, \
+MCP tool, or `task` role as soon as it fits — do not wait for the user to name \
+it. The tool list below is the live plugin surface.",
+    );
     system_prompt.push_str(
         "\n\nFile work MUST use the native tools: `find` and `grep` to locate \
 files and code, `read` to inspect them, `write` and `edit` to change them. \
 Use `shell` only when a task genuinely needs a process (build, test, git, \
 package installs) — never to search, read, or write files.\n\
 Use `web_search` then `fetch_content` for current web facts (Querit or AnySearch). \
-Use `task` to delegate to scout/artisan/steward/sentinel when a scoped role fits. \
-Connected MCP servers add their tools to the list below.",
+Use `task` to delegate to scout/artisan/steward/sentinel when a scoped role fits.",
     );
     for part in mycode_config::render_resource_prompt(&resources) {
         system_prompt.push_str(
@@ -753,12 +756,7 @@ mod tests {
         let registry = ToolRegistry::new();
         mycode_tools::register_builtins(&registry);
 
-        let service = tokio::task::spawn_blocking({
-            let layout = layout.clone();
-            move || mycode_agent::session::SessionService::new(&layout)
-        })
-        .await
-        .expect("service start");
+        let service = mycode_agent::session::SessionService::new(&layout);
         let created = service.create().await.expect("session created");
         let session = created.session_id;
         let branch = created.branch_id;

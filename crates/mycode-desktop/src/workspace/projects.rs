@@ -225,21 +225,14 @@ impl Workspace {
 
     /// Removes one directory from the remembered projects list.
     pub(crate) fn on_remove_recent(&mut self, project: &str, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         self.dispatch(
             BridgeCommand::RemoveRecent {
                 project: project.to_owned(),
             },
             cx,
         );
-        self.apply_action(
-            DesktopAction::ActiveProjectChanged(
-                self.vm
-                    .project_dir
-                    .clone()
-                    .filter(|current| current != project),
-            ),
-            cx,
-        );
+        self.apply_action(DesktopAction::RecentRemoved(project.to_owned()), cx);
     }
 
     pub(crate) fn on_new_session(&mut self, cx: &mut Context<Self>) {
@@ -315,8 +308,29 @@ impl Workspace {
     }
 
     pub(crate) fn on_picker_home(&mut self, cx: &mut Context<Self>) {
-        self.project_picker = Some(crate::ui::project_picker::ProjectPicker::open());
+        self.project_picker = Some(crate::ui::project_picker::ProjectPicker::home());
         cx.notify();
+    }
+
+    /// Binds the first dropped directory, or the parent of a dropped file.
+    pub(crate) fn on_drop_project(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        let folder = paths
+            .iter()
+            .find(|path| path.is_dir())
+            .cloned()
+            .or_else(|| {
+                paths
+                    .first()
+                    .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+            });
+        let Some(folder) = folder else {
+            return;
+        };
+        if !folder.is_dir() {
+            return;
+        }
+        self.project_picker = None;
+        self.bind_project(&folder.to_string_lossy(), cx);
     }
 
     pub(crate) fn on_picker_roots(&mut self, cx: &mut Context<Self>) {

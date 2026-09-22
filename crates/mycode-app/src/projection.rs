@@ -77,6 +77,23 @@ pub(crate) fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry
     }
 }
 
+/// Appends the UI-only diff from tool details. The model-facing content
+/// stays unchanged; this text is what the transcript renders.
+fn attach_ui_diff(text: &str, details: Option<&serde_json::Value>) -> String {
+    let Some(diff) = details
+        .and_then(|details| details.get("diff"))
+        .and_then(|diff| diff.as_str())
+        .map(str::trim)
+        .filter(|diff| !diff.is_empty())
+    else {
+        return text.to_owned();
+    };
+    if text.contains(diff) {
+        return text.to_owned();
+    }
+    format!("{text}\n{diff}")
+}
+
 /// Projects a committed tool-result payload into a display entry.
 pub(crate) fn project_tool_result(event_id: &str, payload: &[u8]) -> ConversationEntry {
     let result: ToolResultMessage =
@@ -95,6 +112,7 @@ pub(crate) fn project_tool_result(event_id: &str, payload: &[u8]) -> Conversatio
         })
         .collect::<Vec<_>>()
         .join("");
+    let text = attach_ui_diff(&text, result.details.as_ref());
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::ToolResult,
@@ -164,5 +182,23 @@ mod tests {
         assert_eq!(entry.kind, EntryKind::AssistantMessage);
         assert_eq!(entry.text.as_ref(), "hi there");
         assert_eq!(entry.thinking, "let me think");
+    }
+
+    #[test]
+    fn project_tool_result_shows_the_ui_diff() {
+        let result = mycode_core::ToolResultMessage {
+            tool_call_id: "call-1".to_owned(),
+            content: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                "Edited src/main.rs",
+            ))],
+            is_error: false,
+            details: Some(serde_json::json!({
+                "diff": "- old value\n+ new value\n"
+            })),
+        };
+        let entry = project_tool_result("evt-tool", &serde_json::to_vec(&result).expect("payload"));
+        assert!(entry.text.contains("- old value"), "{}", entry.text);
+        assert!(entry.text.contains("+ new value"), "{}", entry.text);
+        assert!(!entry.text.starts_with("failed:"), "{}", entry.text);
     }
 }

@@ -187,6 +187,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     let has_steward = enabled.iter().any(|role| role.name == "steward");
     let has_sentinel = enabled.iter().any(|role| role.name == "sentinel");
     let mut rules = vec![
+        "Call `task` when a listed role fits, even if the user did not ask for a subagent.".to_owned(),
         "Start in main; keep small or context-heavy work there. Delegate bounded, substantial work only when fresh context or independent exploration is worth the handoff.".to_owned(),
         "Children have no parent conversation; send a self-contained brief and reuse established evidence.".to_owned(),
         "One-shot runs return once. Main takes over failed or incomplete work; a different deliverable needs a new task call.".to_owned(),
