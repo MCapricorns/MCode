@@ -21,7 +21,8 @@ MYCode 是一个基于 Zed GPUI 的 Windows / macOS 桌面编码 agent（Desk �
 
 - `mycode-desktop-v<版本>-x86_64-pc-windows-msvc.zip` — Windows 10/11 x64
 - `mycode-desktop-v<版本>-aarch64-apple-darwin.zip` — macOS Apple Silicon
-- `mycode-desktop-v<版本>-x86_64-apple-darwin.zip` — macOS Intel
+
+自 v0.4.0 起不再发布 macOS Intel（x86_64）构建；历史版本的 Intel 包仍留在旧 Release 里。版本间变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 构建
 

@@ -1,11 +1,11 @@
 # Release builds: Windows and macOS executables attached to the GitHub
 # Release. Runs on `v*` tags.
 #
+# macOS ships Apple Silicon only; Intel Mac builds are dropped.
 # Assets produced per tag (plus a mcode-desktop-* alias for v0.2.0
 # clients, which still look up that prefix):
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
-#   mycode-desktop-<tag>-x86_64-apple-darwin.zip         (+ .sha256)
 #
 # Each archive contains the current binary and a mcode-desktop copy so
 # the in-app updater can swap it in place.
@@ -36,9 +36,6 @@ jobs:
             binary: mycode-desktop.exe
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary: mycode-desktop
-          - os: macos-latest
-            target: x86_64-apple-darwin
             binary: mycode-desktop
     steps:
       - uses: actions/checkout@v4

@@ -32,12 +32,13 @@ pub fn current_version() -> &'static str {
 }
 
 /// Release asset suffix for the running platform, empty when unsupported.
+/// Intel macOS builds are no longer published, so x86_64 macOS clients
+/// resolve no asset and stay on their installed version.
 #[must_use]
 pub fn asset_suffix() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "-x86_64-pc-windows-msvc.zip",
         ("macos", "aarch64") => "-aarch64-apple-darwin.zip",
-        ("macos", "x86_64") => "-x86_64-apple-darwin.zip",
         _ => "",
     }
 }
