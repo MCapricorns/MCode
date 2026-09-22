@@ -556,6 +556,48 @@ fn task_progress_fills_the_subagent_panel() {
 }
 
 #[test]
+fn concurrent_task_progress_keeps_one_card_per_call() {
+    let mut state = opened_conversation();
+    for (call_id, label) in [
+        ("call-a", "build"),
+        ("call-b", "framework"),
+        ("call-c", "gaming_plugins"),
+        ("call-d", "secommon"),
+    ] {
+        reduce(
+            &mut state,
+            DesktopAction::ToolStarted {
+                call_id: call_id.to_owned(),
+                name: "task".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            DesktopAction::ToolProgress {
+                call_id: call_id.to_owned(),
+                name: String::new(),
+                message: format!("task|scout|queued|{label}"),
+            },
+        );
+    }
+    assert_eq!(state.live_jobs.len(), 4);
+    assert_eq!(
+        state
+            .live_jobs
+            .iter()
+            .map(|job| job.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["build", "framework", "gaming_plugins", "secommon"]
+    );
+    assert!(
+        state
+            .live_jobs
+            .iter()
+            .all(|job| !job.done && job.role == "scout")
+    );
+}
+
+#[test]
 fn at_trigger_indexes_cwd_even_with_an_empty_fragment() {
     let mut state = WorkspaceState::default();
     reduce(&mut state, DesktopAction::ComposerChanged("@".to_owned()));

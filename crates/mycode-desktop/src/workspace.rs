@@ -249,10 +249,11 @@ impl Workspace {
         );
         let previous_error = self.vm.error.clone();
         reduce(&mut self.vm, action);
-        if self.vm.error.is_some() && self.vm.error != previous_error {
-            if let Some(message) = self.vm.error.take() {
-                self.push_toast(message, ToastKind::Error, cx);
-            }
+        if self.vm.error.is_some()
+            && self.vm.error != previous_error
+            && let Some(message) = self.vm.error.take()
+        {
+            self.push_toast(message, ToastKind::Error, cx);
         }
         // Transcript-growing actions keep the conversation scrolled to the
         // newest content, the way chat clients behave while streaming.

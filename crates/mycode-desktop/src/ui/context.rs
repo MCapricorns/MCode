@@ -4,8 +4,8 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    Context, Div, InteractiveElement, IntoElement, ParentElement, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::short_id;
@@ -330,79 +330,46 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
         .when(
             crate::view_model::task_surface_visible(vm) && !vm.live_jobs.is_empty(),
             |this| {
+                let running = vm.live_jobs.iter().filter(|job| !job.done).count();
+                let summary = if running == 0 {
+                    format!("{} done", vm.live_jobs.len())
+                } else {
+                    format!("{running} running")
+                };
                 this.child(insp_sec(
                     "subagents",
-                    Some(("SUBAGENTS".to_owned(), None)),
+                    Some(("SUBAGENTS".to_owned(), Some(summary))),
                     vm.live_jobs
                         .iter()
                         .enumerate()
                         .map(|(index, job)| {
-                            let (lamp, label, color) = if job.done {
+                            let (lamp, status, color) = if job.done {
                                 (desk.green, "DONE", desk.green)
                             } else {
                                 (desk.amber, "RUN", desk.amber)
                             };
-                            let title = if job.role.is_empty() {
-                                if job.label.is_empty() {
-                                    "task".to_owned()
-                                } else {
-                                    job.label.clone()
-                                }
-                            } else if job.label.is_empty() {
-                                job.role.clone()
+                            let role = if job.role.is_empty() {
+                                "task".to_owned()
                             } else {
-                                format!("{} · {}", job.role, job.label)
+                                job.role.clone()
                             };
                             let call_id = job.call_id.clone();
-                            div()
-                                .id(format!("subagent-{index}"))
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .py(px(6.))
-                                .border_b_1()
-                                .border_dashed()
-                                .border_color(theme.border)
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |workspace, _, _, cx| {
-                                    workspace.on_open_subagent(&call_id, cx);
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_start()
-                                        .gap_2()
-                                        .child(super::lamp(lamp))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .text_sm()
-                                                .whitespace_normal()
-                                                .when(job.done, |this| this.opacity(0.5))
-                                                .child(title),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .text_xs()
-                                                .font_family(theme.mono_font_family.clone())
-                                                .text_color(color)
-                                                .child(label),
-                                        ),
-                                )
-                                .when(!job.step.is_empty(), |this| {
-                                    this.child(
-                                        div()
-                                            .pl(px(18.))
-                                            .text_xs()
-                                            .text_color(desk.faint)
-                                            .whitespace_normal()
-                                            .child(job.step.clone()),
-                                    )
-                                })
-                                .into_any_element()
+                            rail_card(
+                                format!("subagent-{index}"),
+                                lamp,
+                                role,
+                                job.label.clone(),
+                                job.step.clone(),
+                                status,
+                                color,
+                                job.done,
+                                theme,
+                            )
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_open_subagent(&call_id, cx);
+                            }))
+                            .into_any_element()
                         })
                         .collect(),
                     theme,
@@ -424,35 +391,18 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                                 "in progress" => (desk.amber, "RUN", desk.amber),
                                 _ => (desk.faint, "QUEUE", desk.faint),
                             };
-                            div()
-                                .id(format!("todo-{index}"))
-                                .flex()
-                                .flex_row()
-                                .items_start()
-                                .gap_2()
-                                .py(px(6.))
-                                .border_b_1()
-                                .border_dashed()
-                                .border_color(theme.border)
-                                .child(super::lamp(lamp))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_sm()
-                                        .whitespace_normal()
-                                        .when(status == "done", |this| this.opacity(0.5))
-                                        .child(content.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .font_family(theme.mono_font_family.clone())
-                                        .text_color(color)
-                                        .child(label),
-                                )
-                                .into_any_element()
+                            rail_card(
+                                format!("todo-{index}"),
+                                lamp,
+                                String::new(),
+                                content.clone(),
+                                String::new(),
+                                label,
+                                color,
+                                status == "done",
+                                theme,
+                            )
+                            .into_any_element()
                         })
                         .collect(),
                     theme,
@@ -480,22 +430,31 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
                             .flex()
                             .flex_col()
                             .gap_0p5()
-                            .py(px(6.))
-                            .border_b_1()
-                            .border_color(theme.border)
+                            .min_w_0()
+                            .overflow_hidden()
+                            .px_2()
+                            .py(px(8.))
+                            .rounded(super::skin::radius_control())
+                            .bg(super::skin::frost(theme))
                             .child(
                                 div()
+                                    .min_w_0()
+                                    .overflow_hidden()
                                     .text_sm()
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(desk.amber)
-                                    .whitespace_normal()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
                                     .child(name.clone()),
                             )
                             .child(
                                 div()
+                                    .min_w_0()
+                                    .overflow_hidden()
                                     .text_xs()
                                     .text_color(desk.faint)
-                                    .whitespace_normal()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis_start()
                                     .child(path.clone()),
                             )
                             .into_any_element()
@@ -504,6 +463,92 @@ fn render_overview(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoE
             },
             theme,
         ))
+}
+
+/// One inspector row: a status chip stays on the first line, and the
+/// brief and step truncate instead of wrapping into the chip.
+#[allow(clippy::too_many_arguments)]
+fn rail_card(
+    id: impl Into<gpui_kit::ElementId>,
+    lamp: gpui_kit::Hsla,
+    kicker: String,
+    title: String,
+    detail: String,
+    status: &str,
+    status_color: gpui_kit::Hsla,
+    dim: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let desk = super::desk::Desk::of(theme);
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .min_w_0()
+        .overflow_hidden()
+        .px_2()
+        .py(px(8.))
+        .rounded(super::skin::radius_control())
+        .bg(super::skin::frost_card(theme))
+        .border_1()
+        .border_color(super::skin::glass_border(theme))
+        .when(dim, |this| this.opacity(0.55))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .child(super::lamp(lamp))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(desk.amber)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .when(!kicker.is_empty(), |this| this.child(kicker)),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .px_1()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(status_color)
+                        .child(status.to_owned()),
+                ),
+        )
+        .when(!title.is_empty(), |this| {
+            this.child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .pl(px(15.))
+                    .text_sm()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(title),
+            )
+        })
+        .when(!detail.is_empty(), |this| {
+            this.child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .pl(px(15.))
+                    .text_xs()
+                    .text_color(desk.faint)
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(detail),
+            )
+        })
 }
 
 fn insp_sec(
@@ -566,9 +611,11 @@ fn kv_row(id: &str, label: &str, value: &str, theme: &Theme) -> gpui_kit::AnyEle
             div()
                 .flex_1()
                 .min_w_0()
+                .overflow_hidden()
                 .text_sm()
                 .font_family(theme.mono_font_family.clone())
-                .whitespace_normal()
+                .whitespace_nowrap()
+                .text_ellipsis()
                 .child(value.to_owned()),
         )
         .into_any_element()
