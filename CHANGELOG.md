@@ -1,6 +1,21 @@
 # Changelog
 
-显著变化从当前版本 `0.4.0` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
+显著变化从 `0.4.0` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
+
+## [0.4.1] - 2026-09-22
+
+### Changed
+
+- Skills 只给短索引。任务对上了就用 `read` 读 `SKILL.md`，不再把正文写进每轮提示。
+- MCP 改为 Grok Build 的调用方式：先 `search_tool` 取 schema，再 `use_tool`。参数 schema 不再每轮内联。
+- 当前网页事实用 `web_search`，引用前再用 `fetch_content`。
+
+### Fixed
+
+- 子代理不再因为整段 SSE 累计超限而失败。
+- 会话头落后时跟上真实 tip，不再提示 “the session moved on, reopen it”。
+- 切出当前项目后，TASKS 和子代理界面会隐藏。Inspector 里的子代理可以点开进度小窗。
+- 对话栏铺满可用宽度；排队消息说明发送时机，并可打断后立即发送。
 
 ## [0.4.0] - 2026-09-22
 
@@ -24,4 +39,5 @@
 - 最近项目的删除会立刻从列表消失，相近路径不再抢同一个点击目标。
 - `edit` 的结果按 diff 预览增删行；`grep` / `find` 的命中逐行展开，不再收成一块截断文本。
 
+[0.4.1]: https://github.com/MCapricorns/MCode/releases/tag/v0.4.1
 [0.4.0]: https://github.com/MCapricorns/MCode/releases/tag/v0.4.0
