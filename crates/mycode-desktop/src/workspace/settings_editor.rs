@@ -678,14 +678,18 @@ impl Workspace {
         mycode_tools::set_runtime_shell(shell);
     }
 
-    pub(super) fn bind_unbound_to_active_project(&mut self, cx: &mut Context<Self>) {
-        let Some(project) = self.vm.project_dir.clone() else {
-            return;
-        };
-        let before = self.vm.session_projects.len();
-        self.apply_action(DesktopAction::UnboundSessionsAssigned(project), cx);
-        if self.vm.session_projects.len() != before {
-            self.persist_ui_state(cx);
+    /// Restores each chat's working directory after startup so a later
+    /// session switch does not run tools in the last-opened project.
+    pub(super) fn restore_session_projects(&mut self, cx: &mut Context<Self>) {
+        let bindings = self.vm.session_projects.clone();
+        for (session_id, project) in bindings {
+            self.dispatch(
+                BridgeCommand::SetProjectDir {
+                    session_id,
+                    path: Some(project),
+                },
+                cx,
+            );
         }
     }
 

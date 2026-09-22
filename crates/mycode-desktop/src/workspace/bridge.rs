@@ -186,7 +186,6 @@ impl Workspace {
         match reply {
             BridgeReply::Sessions(Ok(sessions)) => {
                 self.apply_action(DesktopAction::SessionsLoaded(sessions), cx);
-                self.bind_unbound_to_active_project(cx);
             }
             BridgeReply::Created(Ok(summary)) => {
                 let session_id = SessionId::parse(&summary.session_id).expect("core session id");
@@ -200,6 +199,7 @@ impl Workspace {
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
                 self.apply_action(DesktopAction::ConversationOpened(conversation), cx);
+                self.follow_session_project(&session_id, cx);
                 self.dispatch(BridgeCommand::ListResources { session_id }, cx);
                 self.refresh_skills(cx);
             }
@@ -279,10 +279,12 @@ impl Workspace {
             }
             BridgeReply::Recalled(Ok((conversation, edit))) => {
                 let prefill = edit.clone();
+                let session_id = conversation.session_id.clone();
                 self.apply_action(
                     DesktopAction::ConversationOpened((*conversation).clone()),
                     cx,
                 );
+                self.follow_session_project(&session_id, cx);
                 if prefill.is_some() {
                     self.pending_composer_prefill = prefill;
                 }
@@ -359,7 +361,7 @@ impl Workspace {
                     },
                     cx,
                 );
-                self.bind_unbound_to_active_project(cx);
+                self.restore_session_projects(cx);
                 self.refresh_skills(cx);
             }
             BridgeReply::UiState(Err(_)) => {}

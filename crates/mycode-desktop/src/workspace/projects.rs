@@ -244,6 +244,41 @@ impl Workspace {
         self.dispatch(BridgeCommand::CreateSession, cx);
     }
 
+    /// Makes the sidebar and tool directory follow one session's project.
+    /// Other chats keep their own bindings, so several projects can stay open.
+    pub(super) fn follow_session_project(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        let Some(project) = self
+            .vm
+            .session_projects
+            .iter()
+            .find(|(id, _)| id == session_id)
+            .map(|(_, project)| project.clone())
+        else {
+            return;
+        };
+        self.dispatch(
+            BridgeCommand::SetProjectDir {
+                session_id: session_id.to_owned(),
+                path: Some(project.clone()),
+            },
+            cx,
+        );
+        let already = self
+            .vm
+            .project_dir
+            .as_deref()
+            .is_some_and(|current| crate::view_model::same_project_path(current, &project));
+        if already {
+            return;
+        }
+        self.apply_action(
+            DesktopAction::ActiveProjectChanged(Some(project)),
+            cx,
+        );
+        self.refresh_skills(cx);
+        self.persist_ui_state(cx);
+    }
+
     /// Filters the sidebar to one project. Chats stay on the project they
     /// were opened in; switching must not drag every session into This Project.
     pub(crate) fn on_switch_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
@@ -364,10 +399,6 @@ impl Workspace {
             cx,
         );
         self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
-        self.apply_action(
-            DesktopAction::UnboundSessionsAssigned(project.to_owned()),
-            cx,
-        );
         self.dispatch(
             BridgeCommand::SetProjectDir {
                 session_id: session_id.clone(),

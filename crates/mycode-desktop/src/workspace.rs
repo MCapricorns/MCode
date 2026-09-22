@@ -287,6 +287,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        self.follow_session_project(session_id, cx);
         if let Some(session_id) = SessionId::parse(session_id) {
             self.dispatch(BridgeCommand::OpenSession(session_id), cx);
         }
