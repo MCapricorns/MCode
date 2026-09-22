@@ -54,6 +54,14 @@ pub struct WebSettings {
     pub backends: Vec<WebBackendSettings>,
 }
 
+impl Default for WebSettings {
+    fn default() -> Self {
+        Self {
+            backends: builtin_web_backends(),
+        }
+    }
+}
+
 impl AppSettings {
     /// Validates the web-search family: entry bounds, id grammar, kind
     /// vocabulary, https endpoints, duplicate ids, and the single-active rule.

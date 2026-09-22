@@ -52,6 +52,13 @@ pub enum RefreshOutcome {
     Unavailable(String),
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheHeader {
+    format_version: u32,
+    kind: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CacheDocument {
@@ -76,11 +83,27 @@ fn unix_now() -> u64 {
 }
 
 /// Reads the cached catalog from the owned home, when present and valid.
+///
+/// An older copy of the same kind is replaced with the bundled snapshot so
+/// newly added option fields are present, then refresh can update it.
 #[must_use]
 pub fn load_cache(home: &HomeLayout) -> Option<CachedCatalog> {
     let bytes = read_owned_file(home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES).ok()??;
+    let header: CacheHeader = serde_json::from_slice(bytes.as_slice()).ok()?;
+    if header.kind != CACHE_KIND {
+        return None;
+    }
+    if header.format_version > 0 && header.format_version < CACHE_FORMAT_VERSION {
+        let migrated = CachedCatalog {
+            document: bundled().clone(),
+            fetched_at: 0,
+            etag: None,
+        };
+        let _ = write_cache(home, &migrated);
+        return Some(migrated);
+    }
     let document: CacheDocument = serde_json::from_slice(bytes.as_slice()).ok()?;
-    if document.format_version != CACHE_FORMAT_VERSION || document.kind != CACHE_KIND {
+    if document.format_version != CACHE_FORMAT_VERSION {
         return None;
     }
     if document.etag.as_ref().is_some_and(|etag| etag.len() > 256) {
@@ -292,6 +315,24 @@ mod tests {
         )
         .expect("tamper");
         assert!(load_cache(&home).is_none(), "format check rejects");
+    }
+
+    #[test]
+    fn older_cache_is_replaced_with_the_bundled_snapshot() {
+        let (_parent, home) = layout();
+        let older = br#"{"formatVersion":2,"kind":"mycode-providers-cache","fetchedAt":1,"etag":null,"document":{"providers":[]}}"#;
+        locked_update_owned_file(&home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES, |_| {
+            Ok(older.to_vec())
+        })
+        .expect("seed");
+        let loaded = load_cache(&home).expect("migrated");
+        assert_eq!(loaded.document, *bundled());
+        assert_eq!(loaded.fetched_at, 0);
+        let bytes = read_owned_file(&home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES)
+            .expect("read")
+            .expect("present");
+        let header: CacheHeader = serde_json::from_slice(&bytes).expect("header");
+        assert_eq!(header.format_version, CACHE_FORMAT_VERSION);
     }
 
     #[tokio::test]

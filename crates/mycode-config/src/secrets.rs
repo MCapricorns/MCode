@@ -92,16 +92,23 @@ impl std::fmt::Debug for ProviderSecrets {
 
 /// Reads `secrets.json`; a missing document yields an empty store.
 ///
+/// A recoverable older copy (trailing commas) is rewritten in canonical form.
+/// A rewrite failure does not hide a document that already validated.
+///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for owned-path security, size, or strict
-/// validation failures.
+/// Returns [`ConfigError`] for owned-path security, size, or validation
+/// failures that recovery cannot repair.
 pub fn read_provider_secrets(home: &HomeLayout) -> Result<ProviderSecrets, ConfigError> {
     let bytes = read_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES)?;
     let Some(bytes) = bytes else {
         return Ok(ProviderSecrets::new());
     };
-    parse_secrets(bytes.as_slice())
+    let parsed = decode_secrets(bytes.as_slice())?;
+    if parsed.migrated {
+        let _ = replace_provider_secrets(home, parsed.revision, &parsed.secrets);
+    }
+    Ok(parsed.secrets)
 }
 
 /// Replaces `secrets.json` under revision compare-and-swap.
@@ -157,22 +164,24 @@ struct DeserializedSecrets {
     provider_keys: std::collections::BTreeMap<String, String>,
 }
 
-fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
-    let header: DeserializedSecrets =
-        serde_json::from_slice(bytes).map_err(|_| ConfigError::authority_rejection())?;
-    if header.format_version != SECRETS_FORMAT_VERSION || header.kind != SECRETS_KIND {
-        return Err(ConfigError::authority_rejection());
-    }
-    AuthorityRevision::new(header.revision)
+struct ParsedSecrets {
+    secrets: ProviderSecrets,
+    revision: AuthorityRevision,
+    migrated: bool,
 }
 
-fn parse_secrets(bytes: &[u8]) -> Result<ProviderSecrets, ConfigError> {
-    let document: DeserializedSecrets =
-        serde_json::from_slice(bytes).map_err(|_| ConfigError::authority_rejection())?;
+fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
+    Ok(decode_secrets(bytes)?.revision)
+}
+
+fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
+    let decoded = crate::json_recover::decode_json::<DeserializedSecrets>(bytes)?;
+    let document = decoded.value;
     if document.format_version != SECRETS_FORMAT_VERSION || document.kind != SECRETS_KIND {
-        return Err(ConfigError::authority_rejection());
+        return Err(ConfigError::authority_rejection()
+            .with_detail("secrets.json: formatVersion or kind does not match this build"));
     }
-    AuthorityRevision::new(document.revision)?;
+    let revision = AuthorityRevision::new(document.revision)?;
     let secrets = document
         .provider_keys
         .into_iter()
@@ -180,7 +189,11 @@ fn parse_secrets(bytes: &[u8]) -> Result<ProviderSecrets, ConfigError> {
             secrets.with_key(&id, Some(&key))
         });
     secrets.validate()?;
-    Ok(secrets)
+    Ok(ParsedSecrets {
+        secrets,
+        revision,
+        migrated: decoded.migrated,
+    })
 }
 
 #[cfg(test)]
@@ -191,6 +204,27 @@ mod tests {
         let parent = tempfile::tempdir().expect("parent");
         let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
         (parent, layout)
+    }
+
+    #[test]
+    fn trailing_comma_is_repaired_and_rewritten() {
+        let (_parent, layout) = layout();
+        let secrets = ProviderSecrets::new().with_key("acme", Some("test-key"));
+        replace_provider_secrets(&layout, AuthorityRevision::ABSENT, &secrets).expect("publish");
+        let path = layout.owned_join(SECRETS_PATH).expect("path");
+        let raw = std::fs::read_to_string(&path).expect("read");
+        let broken = raw.replacen("\n}", ",\n}", 1);
+        assert_ne!(broken, raw, "tamper must insert a trailing comma");
+        std::fs::write(&path, broken).expect("tamper");
+
+        let read = read_provider_secrets(&layout).expect("recovered");
+        assert_eq!(read.key("acme"), Some("test-key"));
+        let repaired = std::fs::read_to_string(&path).expect("rewritten");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&repaired).is_ok(),
+            "rewritten document must be strict JSON"
+        );
+        assert!(!repaired.contains(",\n}") && !repaired.contains(",\r\n}"));
     }
 
     #[test]

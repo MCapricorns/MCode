@@ -10,9 +10,11 @@
 //! [`PackInstallation`] document at its canonical family path. The Host vault
 //! is exclusively `plugins/.host/auth.json`.
 //!
-//! Obsolete product artifacts are not configuration inputs. This crate has no
-//! migration, compatibility read, layered merge, alias, or fallback for old
-//! settings, model, credential, Plugin-lock, session, or sibling-Pack layouts.
+//! Product documents (`settings.json`, `secrets.json`, `ui.json`) recover
+//! trailing commas from earlier writers, fill missing fields, and rewrite the
+//! canonical document. Unrelated obsolete layouts are still not inputs: there
+//! is no alias, layered merge, or fallback for Plugin-lock, session, or
+//! sibling-Pack paths.
 
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -23,6 +25,7 @@ mod compaction;
 mod error;
 mod home;
 mod host_vault;
+mod json_recover;
 mod mcp_import;
 mod pack_component;
 mod pack_installation;

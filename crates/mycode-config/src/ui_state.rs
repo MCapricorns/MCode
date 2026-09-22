@@ -169,7 +169,11 @@ pub fn read_ui_state(home: &crate::HomeLayout) -> Result<UiState, ConfigError> {
     let Some(bytes) = bytes else {
         return Ok(UiState::default());
     };
-    parse_ui_state(bytes.as_slice())
+    let (state, migrated) = decode_ui_state(bytes.as_slice())?;
+    if migrated {
+        let _ = replace_ui_state(home, &state);
+    }
+    Ok(state)
 }
 
 /// Replaces the UI state under the owned-file lock (no revision CAS; the
@@ -205,7 +209,7 @@ fn replace_bytes(state: &UiState) -> Result<Vec<u8>, ConfigError> {
     Ok(bytes)
 }
 
-fn parse_ui_state(bytes: &[u8]) -> Result<UiState, ConfigError> {
+fn decode_ui_state(bytes: &[u8]) -> Result<(UiState, bool), ConfigError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Envelope {
@@ -214,13 +218,14 @@ fn parse_ui_state(bytes: &[u8]) -> Result<UiState, ConfigError> {
         #[serde(flatten)]
         state: UiState,
     }
-    let envelope: Envelope =
-        serde_json::from_slice(bytes).map_err(|_| ConfigError::authority_rejection())?;
+    let decoded = crate::json_recover::decode_json::<Envelope>(bytes)?;
+    let envelope = decoded.value;
     if envelope.format_version != UI_STATE_FORMAT_VERSION || envelope.kind != UI_STATE_KIND {
-        return Err(ConfigError::authority_rejection());
+        return Err(ConfigError::authority_rejection()
+            .with_detail("ui.json: formatVersion or kind does not match this build"));
     }
     envelope.state.validate()?;
-    Ok(envelope.state)
+    Ok((envelope.state, decoded.migrated))
 }
 
 #[cfg(test)]

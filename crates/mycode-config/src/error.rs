@@ -142,22 +142,13 @@ impl ConfigError {
     pub fn backtrace(&self) -> &Backtrace {
         &self.inner.backtrace
     }
-}
 
-impl Debug for ConfigError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ConfigError")
-            .field("kind", &self.inner.kind)
-            .field("path", &self.inner.path)
-            .field("io_kind", &self.inner.io_kind)
-            .field("backtrace", &self.inner.backtrace)
-            .finish()
-    }
-}
-
-impl Display for ConfigError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+    /// Renders the bounded summary without a captured backtrace.
+    ///
+    /// UI banners use this so a syntax rejection stays one line. The detail,
+    /// when present, names a field or a line and column, never a value.
+    #[must_use]
+    pub fn summary(&self) -> String {
         let summary = match self.inner.kind {
             ConfigErrorKind::InvalidHome => "MYCode home path is invalid",
             ConfigErrorKind::CheckpointLimit => "session checkpoint limit was reached",
@@ -180,10 +171,28 @@ impl Display for ConfigError {
             ConfigErrorKind::AtomicReplace => "configuration file replacement failed",
             ConfigErrorKind::RecoveryIndeterminate => "staging recovery outcome is indeterminate",
         };
-        formatter.write_str(summary)?;
-        if let Some(detail) = &self.inner.detail {
-            write!(formatter, ": {detail}")?;
+        match &self.inner.detail {
+            Some(detail) => format!("{summary}: {detail}"),
+            None => summary.to_owned(),
         }
+    }
+}
+
+impl Debug for ConfigError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfigError")
+            .field("kind", &self.inner.kind)
+            .field("path", &self.inner.path)
+            .field("io_kind", &self.inner.io_kind)
+            .field("backtrace", &self.inner.backtrace)
+            .finish()
+    }
+}
+
+impl Display for ConfigError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.summary())?;
         if self.inner.backtrace.status() == BacktraceStatus::Captured {
             write!(formatter, "\n{}", self.inner.backtrace)?;
         }

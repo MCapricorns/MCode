@@ -68,11 +68,11 @@ pub(crate) fn load_settings(
         "settings",
     )?;
     let filled_shell = fill_detected_shell(&mut settings);
-    if settings.user_agent.trim().is_empty() {
+    let filled_agent = settings.user_agent.trim().is_empty();
+    if filled_agent {
         settings.user_agent = mycode_config::default_user_agent();
     }
-    if revision == AuthorityRevision::ABSENT
-        && (filled_shell || !settings.user_agent.is_empty())
+    if (filled_shell || filled_agent)
         && let Ok(next) = replace_app_settings(home, revision, &settings)
     {
         revision = next;
@@ -95,7 +95,7 @@ pub(crate) fn save_settings(
 }
 
 pub(crate) fn render_config_error(error: &mycode_config::ConfigError) -> String {
-    format!("settings error: {error}")
+    format!("settings error: {}", error.summary())
 }
 
 fn fill_detected_shell(settings: &mut AppSettings) -> bool {

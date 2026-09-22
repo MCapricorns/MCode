@@ -550,7 +550,15 @@ mod tests {
         let (document, revision, key_ids, _mcp_ids) = reloaded.expect("settings reload");
         assert_eq!(key_ids, vec!["openai-main".to_owned()]);
         assert_eq!(document.user_agent, "mycode-desktop-test/1");
-        assert_eq!(revision.get(), next_revision);
+        // A save that omits the shell is an older document. Load writes the
+        // detected shell and advances the revision; with no shell to detect,
+        // the saved revision stands.
+        let expected = if document.tools.shell.is_some() {
+            next_revision + 1
+        } else {
+            next_revision
+        };
+        assert_eq!(revision.get(), expected);
 
         bridge.shutdown();
     }

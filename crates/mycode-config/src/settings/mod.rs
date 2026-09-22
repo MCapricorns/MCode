@@ -5,8 +5,9 @@
 //! revision compare-and-swap through the hardened owned-file transaction.
 //! Secrets never live here; credentials stay in the Host vault.
 //!
-//! Obsolete product artifacts are not settings inputs. This authority has no
-//! migration, compatibility read, layered merge, alias, or fallback.
+//! A trailing comma from an earlier writer is repaired and the canonical
+//! document is rewritten. Missing fields take their defaults. Unknown fields
+//! and a wrong kind still fail closed.
 
 mod mcp;
 mod providers;
@@ -67,6 +68,12 @@ pub struct UsageSettings {
     pub enabled: bool,
 }
 
+impl Default for UsageSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// Appearance settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -75,9 +82,20 @@ pub struct AppearanceSettings {
     pub theme: String,
 }
 
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        Self {
+            theme: "dark".to_owned(),
+        }
+    }
+}
+
 /// The complete settings document.
+///
+/// Missing fields take [`Default`] so an older copy can be read and rewritten
+/// with the options this build expects.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct AppSettings {
     /// Outbound User-Agent. Defaults to the pi agent identity so the
     /// value is present in `settings.json` and stays configurable.
@@ -196,7 +214,11 @@ pub fn read_app_settings(home: &crate::HomeLayout) -> Result<AppSettings, Config
     let Some(bytes) = bytes else {
         return Ok(AppSettings::default());
     };
-    parse_settings(bytes.as_slice())
+    let parsed = decode_settings(bytes.as_slice())?;
+    if parsed.migrated {
+        let _ = replace_app_settings(home, parsed.revision, &parsed.settings);
+    }
+    Ok(parsed.settings)
 }
 
 /// Replaces `settings.json` under revision compare-and-swap.
@@ -268,27 +290,35 @@ struct DeserializedSettings {
 }
 
 /// Reads the current revision without full validation of the body.
-fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
-    let header: DeserializedSettings =
-        serde_json::from_slice(bytes).map_err(|_| ConfigError::authority_rejection())?;
-    if header.format_version != SETTINGS_FORMAT_VERSION || header.kind != SETTINGS_KIND {
-        return Err(ConfigError::authority_rejection());
-    }
-    AuthorityRevision::new(header.revision)
+struct ParsedSettings {
+    settings: AppSettings,
+    revision: AuthorityRevision,
+    migrated: bool,
 }
 
-fn parse_settings(bytes: &[u8]) -> Result<AppSettings, ConfigError> {
-    let document: DeserializedSettings = serde_json::from_slice(bytes).map_err(|_| {
-        ConfigError::authority_rejection().with_detail(
-            "settings.json: unknown field or wrong value type (check providers, web, mcpServers, usage, appearance)",
-        )
-    })?;
+fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
+    Ok(decode_settings(bytes)?.revision)
+}
+
+fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
+    let decoded =
+        crate::json_recover::decode_json::<DeserializedSettings>(bytes).map_err(|_| {
+            ConfigError::authority_rejection().with_detail(
+                "settings.json: unknown field, wrong type, or JSON that a comma repair cannot fix",
+            )
+        })?;
+    let document = decoded.value;
     if document.format_version != SETTINGS_FORMAT_VERSION || document.kind != SETTINGS_KIND {
-        return Err(ConfigError::authority_rejection());
+        return Err(ConfigError::authority_rejection()
+            .with_detail("settings.json: formatVersion or kind does not match this build"));
     }
-    AuthorityRevision::new(document.revision)?;
+    let revision = AuthorityRevision::new(document.revision)?;
     document.settings.validate()?;
-    Ok(document.settings)
+    Ok(ParsedSettings {
+        settings: document.settings,
+        revision,
+        migrated: decoded.migrated,
+    })
 }
 
 fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
@@ -476,5 +506,25 @@ mod tests {
 
         std::fs::write(&path, b"not json at all").expect("tamper");
         assert!(read_app_settings(&layout).is_err());
+    }
+
+    #[test]
+    fn trailing_comma_is_repaired_and_rewritten() {
+        let (_parent, layout) = layout();
+        let settings = AppSettings {
+            user_agent: "ua".to_owned(),
+            ..AppSettings::default()
+        };
+        replace_app_settings(&layout, AuthorityRevision::ABSENT, &settings).expect("publish");
+        let path = layout.owned_join(SETTINGS_PATH).expect("path");
+        let raw = std::fs::read_to_string(&path).expect("read");
+        let broken = raw.replacen("\n}", ",\n}", 1);
+        assert_ne!(broken, raw, "tamper must insert a trailing comma");
+        std::fs::write(&path, broken).expect("tamper");
+
+        let read = read_app_settings(&layout).expect("recovered");
+        assert_eq!(read.user_agent, "ua");
+        let repaired = std::fs::read_to_string(&path).expect("rewritten");
+        assert!(serde_json::from_str::<serde_json::Value>(&repaired).is_ok());
     }
 }
