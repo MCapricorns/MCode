@@ -38,7 +38,7 @@ jobs:
             target: aarch64-apple-darwin
             binary: mycode-desktop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -89,7 +89,7 @@ jobs:
           printf '%s  %s\n' "$hash" "$legacy" > "$legacy.sha256"
 
       - name: Attach assets to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             *.zip
