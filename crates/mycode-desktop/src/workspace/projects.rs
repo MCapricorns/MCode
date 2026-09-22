@@ -271,10 +271,7 @@ impl Workspace {
         if already {
             return;
         }
-        self.apply_action(
-            DesktopAction::ActiveProjectChanged(Some(project)),
-            cx,
-        );
+        self.apply_action(DesktopAction::ActiveProjectChanged(Some(project)), cx);
         self.refresh_skills(cx);
         self.persist_ui_state(cx);
     }

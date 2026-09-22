@@ -135,8 +135,8 @@ impl mycode_tools::builtin::TodoStore for BridgeTodoStore {
         // Models often send short ids (`"1"`) or omit them. Mint canonical
         // ids and remap dependencies so a usable plan is not rejected as an
         // invalid authority document.
-        let document = normalize_todo_document(tasks)
-            .map_err(mycode_tools::ToolError::Execution)?;
+        let document =
+            normalize_todo_document(tasks).map_err(mycode_tools::ToolError::Execution)?;
         document
             .validate()
             .map_err(|error| mycode_tools::ToolError::Execution(error.to_string()))?;
