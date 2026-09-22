@@ -882,9 +882,19 @@ fn session_project_bound_is_what_groups_this_project() {
         sessions: vec![summary("ses-a", 0), summary("ses-b", 0)],
         ..WorkspaceState::default()
     };
+    let project = if cfg!(windows) {
+        r"D:\my_private_pro\MCode"
+    } else {
+        "/work/MCode"
+    };
+    let same_project = if cfg!(windows) {
+        r"D:\my_private_pro\Mcode"
+    } else {
+        "/work/MCode"
+    };
     reduce(
         &mut state,
-        DesktopAction::ProjectOpened(r"D:\my_private_pro\MCode".to_owned()),
+        DesktopAction::ProjectOpened(project.to_owned()),
     );
     let grouped = group_sessions(
         &state.sessions,
@@ -898,13 +908,13 @@ fn session_project_bound_is_what_groups_this_project() {
         &mut state,
         DesktopAction::SessionProjectBound {
             session_id: "ses-a".to_owned(),
-            project: r"D:\my_private_pro\MCode".to_owned(),
+            project: project.to_owned(),
         },
     );
     let grouped = group_sessions(
         &state.sessions,
         &state.session_projects,
-        Some(r"D:\my_private_pro\Mcode"),
+        Some(same_project),
     );
     assert_eq!(grouped.current.len(), 1);
     assert_eq!(grouped.current[0].session_id, "ses-a");

@@ -312,16 +312,32 @@ fn task_cards_hide_when_the_open_chat_is_not_in_this_project() {
 
 #[test]
 fn removing_a_recent_project_drops_it_from_the_list() {
+    let alpha = if cfg!(windows) {
+        r"D:\work\alpha"
+    } else {
+        "/work/alpha"
+    };
+    let beta = if cfg!(windows) {
+        r"D:\work\beta"
+    } else {
+        "/work/beta"
+    };
+    // Windows also folds case and separators; other hosts compare the path as stored.
+    let remove = if cfg!(windows) {
+        r"d:/work/alpha"
+    } else {
+        "/work/alpha"
+    };
     let mut state = WorkspaceState {
-        recents: vec![r"D:\work\alpha".to_owned(), r"D:\work\beta".to_owned()],
-        project_dir: Some(r"D:\work\alpha".to_owned()),
+        recents: vec![alpha.to_owned(), beta.to_owned()],
+        project_dir: Some(alpha.to_owned()),
         ..WorkspaceState::default()
     };
     reduce(
         &mut state,
-        DesktopAction::RecentRemoved(r"d:/work/alpha".to_owned()),
+        DesktopAction::RecentRemoved(remove.to_owned()),
     );
-    assert_eq!(state.recents, vec![r"D:\work\beta".to_owned()]);
+    assert_eq!(state.recents, vec![beta.to_owned()]);
     assert_eq!(state.project_dir, None);
 }
 
