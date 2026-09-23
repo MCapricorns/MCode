@@ -182,7 +182,7 @@ impl WebClient {
             "count": max_results,
         }))
         .map_err(|_| WebError::Protocol)?;
-        let raw = self.post("/v1/search", &body, cancel).await?;
+        let raw = self.post("/v1/search", &body, self.timeout, cancel).await?;
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
         let hits = payload["results"]["result"].as_array().or_else(|| {
@@ -210,7 +210,7 @@ impl WebClient {
             "max_results": max_results,
         }))
         .map_err(|_| WebError::Protocol)?;
-        let raw = self.post("/v1/search", &body, cancel).await?;
+        let raw = self.post("/v1/search", &body, self.timeout, cancel).await?;
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
         if payload["code"].as_i64().is_some_and(|code| code != 0) {
@@ -261,7 +261,7 @@ impl WebClient {
     /// Wire contract (Querit): `POST /v1/contents` with
     /// `{"urls", "format": "text", "crawlTimeout", "extrasMeta"}` answering
     /// `{"results": [{url, content}]}`; the `pages` shape is accepted for
-    /// custom backends.
+    /// custom backends. `crawlTimeout` is seconds in `1..=60`.
     ///
     /// # Errors
     ///
@@ -293,11 +293,18 @@ impl WebClient {
         let body = serde_json::to_vec(&serde_json::json!({
             "urls": urls,
             "format": "text",
-            "crawlTimeout": 30_000,
+            "crawlTimeout": guard::CRAWL_TIMEOUT_SECS,
             "extrasMeta": false,
         }))
         .map_err(|_| WebError::Protocol)?;
-        let raw = self.post("/v1/contents", &body, cancel).await?;
+        let raw = self
+            .post(
+                "/v1/contents",
+                &body,
+                Duration::from_secs(guard::CONTENTS_TIMEOUT_SECS),
+                cancel,
+            )
+            .await?;
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
         let pages_wire = payload["results"]
@@ -317,7 +324,14 @@ impl WebClient {
         for url in urls {
             let body = serde_json::to_vec(&serde_json::json!({ "url": url }))
                 .map_err(|_| WebError::Protocol)?;
-            let raw = self.post("/v1/extract", &body, cancel.clone()).await?;
+            let raw = self
+                .post(
+                    "/v1/extract",
+                    &body,
+                    Duration::from_secs(guard::CONTENTS_TIMEOUT_SECS),
+                    cancel.clone(),
+                )
+                .await?;
             let payload: serde_json::Value =
                 serde_json::from_slice(&raw).map_err(|_| WebError::Protocol)?;
             if payload["code"].as_i64().is_some_and(|code| code != 0) {
@@ -387,6 +401,7 @@ impl WebClient {
         &self,
         path: &str,
         body: &[u8],
+        timeout: Duration,
         cancel: CancellationToken,
     ) -> Result<Vec<u8>, WebError> {
         let endpoint = format!("{}{path}", self.endpoint);
@@ -395,7 +410,7 @@ impl WebClient {
             () = cancel.cancelled() => return Err(WebError::Cancelled),
             raw = self
                 .transport
-                .post_json(&endpoint, self.bearer.as_deref(), body, self.timeout, cancel.clone()) => raw?,
+                .post_json(&endpoint, self.bearer.as_deref(), body, timeout, cancel.clone()) => raw?,
         };
         if raw.len() > guard::MAX_RESPONSE_BYTES {
             return Err(WebError::Protocol);
@@ -543,6 +558,31 @@ mod tests {
             serde_json::from_slice(&transport.bodies.lock().expect("bodies")[0])
                 .expect("request body");
         assert_eq!(request["url"], "https://docs.example.com/a");
+    }
+
+    #[tokio::test]
+    async fn contents_sends_crawl_timeout_in_seconds() {
+        let (client, transport) = client(serde_json::json!({
+            "results": [
+                {"url": "https://docs.example.com/a", "content": "page text"}
+            ]
+        }));
+        let pages = client
+            .contents(
+                &["https://docs.example.com/a".to_owned()],
+                CancellationToken::new(),
+            )
+            .await
+            .expect("pages");
+        assert_eq!(pages[0].content, "page text");
+        let request: serde_json::Value =
+            serde_json::from_slice(&transport.bodies.lock().expect("bodies")[0])
+                .expect("request body");
+        assert_eq!(request["crawlTimeout"], guard::CRAWL_TIMEOUT_SECS);
+        assert!(
+            (1..=60).contains(&guard::CRAWL_TIMEOUT_SECS),
+            "Querit rejects crawlTimeout outside 1..=60 seconds"
+        );
     }
 
     #[tokio::test]

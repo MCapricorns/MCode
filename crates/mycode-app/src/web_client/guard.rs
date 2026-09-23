@@ -12,6 +12,10 @@ pub const MAX_SEARCH_RESULTS: usize = 32;
 pub const MAX_CONTENTS_URLS: usize = 8;
 /// Default outbound timeout applied by the caller.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
+/// Querit `crawlTimeout` is seconds in `1..=60`, not milliseconds.
+pub const CRAWL_TIMEOUT_SECS: u64 = 20;
+/// HTTP deadline for a contents call. Stays above [`CRAWL_TIMEOUT_SECS`].
+pub const CONTENTS_TIMEOUT_SECS: u64 = 45;
 
 /// Rejects URLs the web client must not fetch.
 ///
