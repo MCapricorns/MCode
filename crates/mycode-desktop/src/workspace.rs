@@ -515,10 +515,7 @@ impl Workspace {
         if call_id.is_empty() {
             return;
         }
-        self.apply_action(
-            DesktopAction::SubagentDismissed(call_id.to_owned()),
-            cx,
-        );
+        self.apply_action(DesktopAction::SubagentDismissed(call_id.to_owned()), cx);
         self.dispatch(
             BridgeCommand::CancelSubagent {
                 session_id,

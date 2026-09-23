@@ -155,7 +155,13 @@ pub(super) fn render_composer(
                                 cx,
                             ))
                         })
-                        .child(composer_round_button(sending, has_session, has_draft, has_queue, cx)),
+                        .child(composer_round_button(
+                            sending,
+                            has_session,
+                            has_draft,
+                            has_queue,
+                            cx,
+                        )),
                 )
                 .child(
                     div()
