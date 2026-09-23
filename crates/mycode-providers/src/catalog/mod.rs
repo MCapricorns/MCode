@@ -23,8 +23,6 @@ pub const KIND_OPENAI_COMPLETIONS: &str = "openai-completions";
 /// Wire protocol: OpenAI Responses.
 pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
 
-/// Auth: a pasted API key stored in the secret vault (default).
-pub const AUTH_API_KEY: &str = "";
 /// Auth: an OAuth device-code sign-in (GitHub Copilot / Codex).
 pub const AUTH_DEVICE_CODE: &str = "device-code";
 /// Auth: subscription OAuth plus an optional pasted API key (xAI).
