@@ -12,7 +12,7 @@
 //! await terminate-and-reap; dropping the future transfers cleanup ownership.
 //! Launch is Windows x86_64, Linux x86_64 GNU, and macOS Apple Silicon.
 //! Other Unix (musl, Android, BSD) is unsupported.
-#[cfg(any(all(windows, target_arch = "x86_64"), test))]
+#[cfg(all(windows, target_arch = "x86_64"))]
 mod argv;
 mod env;
 mod image;

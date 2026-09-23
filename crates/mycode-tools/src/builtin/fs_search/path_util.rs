@@ -54,7 +54,7 @@ pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
 ///
 /// Handle-proven paths use this exact comparison. User-typed aliases use
 /// `strip_prefix_lexical` (Unicode-aware on Windows, never a string prefix).
-#[cfg(any(test, windows))]
+#[cfg(windows)]
 pub(crate) fn is_within(root: &Path, candidate: &Path) -> bool {
     components_within(root, candidate, |a: &OsStr, b: &OsStr| a == b)
 }
@@ -110,7 +110,7 @@ pub(crate) fn lexical_components_equal(left: &Component<'_>, right: &Component<'
     }
 }
 
-#[cfg(any(test, windows))]
+#[cfg(windows)]
 pub(crate) fn components_within(
     root: &Path,
     candidate: &Path,

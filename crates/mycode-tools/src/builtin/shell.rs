@@ -27,9 +27,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use base64::Engine as _;
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 use crate::builtin::blocking::run_blocking_supervised;
@@ -49,11 +49,11 @@ use crate::tool::{Concurrency, Tool, ToolError, ToolResult};
 pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Maximum `CreateProcessW` command-line length, including its terminator.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS: usize = 32_767;
 
 /// PowerShell 7 arguments placed before the directly encoded user script.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const POWERSHELL_ARGUMENTS: &[&str] = &[
     "-NoLogo",
     "-NoProfile",
@@ -65,7 +65,7 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
 
 /// Windows PowerShell 5.1 arguments. `-OutputFormat Text` must precede
 /// `-EncodedCommand` so redirected streams stay human text instead of CLIXML.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const POWERSHELL_51_ARGUMENTS: &[&str] = &[
     "-NoLogo",
     "-NoProfile",
@@ -573,7 +573,7 @@ fn scan_param_line(line: &str, paren_depth: &mut i64, quote: &mut Option<char>) 
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn powershell_fixed_arguments(kind: ShellKind) -> &'static [&'static str] {
     match kind {
         ShellKind::PowerShell => POWERSHELL_51_ARGUMENTS,
@@ -581,7 +581,7 @@ fn powershell_fixed_arguments(kind: ShellKind) -> &'static [&'static str] {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn powershell_args(encoded_command: String, kind: ShellKind) -> Vec<String> {
     let fixed = powershell_fixed_arguments(kind);
     let mut args = Vec::with_capacity(fixed.len() + 1);
@@ -837,7 +837,7 @@ fn display_exit(status: &std::process::ExitStatus) -> i32 {
 /// its permitted cmdlets. The exact `CreateProcessW` budget includes the
 /// quoted executable, fixed arguments, encoded payload, spaces, and final
 /// UTF-16 NUL.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub(crate) fn encode_powershell_command(
     command: &str,
     executable: &Path,
@@ -845,7 +845,7 @@ pub(crate) fn encode_powershell_command(
     encode_powershell_command_with(command, executable, POWERSHELL_ARGUMENTS)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn encode_powershell_command_with(
     command: &str,
     executable: &Path,
@@ -871,7 +871,7 @@ fn encode_powershell_command_with(
     Ok(BASE64_STANDARD.encode(utf16le_bytes(command, command_byte_len)))
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn powershell_command_line_units_with(
     executable: &Path,
     encoded_len: usize,
@@ -900,18 +900,18 @@ fn executable_utf16_units(executable: &Path) -> usize {
     executable.as_os_str().encode_wide().count()
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn maximum_encoded_command_chars_with(executable: &Path, arguments: &[&str]) -> Option<usize> {
     let one_character_line = powershell_command_line_units_with(executable, 1, arguments)?;
     WINDOWS_COMMAND_LINE_LIMIT_UTF16_UNITS.checked_sub(one_character_line.checked_sub(1)?)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn base64_encoded_len(byte_len: usize) -> Option<usize> {
     byte_len.checked_add(2)?.checked_div(3)?.checked_mul(4)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn utf16le_bytes(value: &str, byte_len: usize) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(byte_len);
     for unit in value.encode_utf16() {
@@ -920,7 +920,7 @@ fn utf16le_bytes(value: &str, byte_len: usize) -> Vec<u8> {
     bytes
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn command_too_long_with(
     executable: &Path,
     encoded_len: Option<usize>,
