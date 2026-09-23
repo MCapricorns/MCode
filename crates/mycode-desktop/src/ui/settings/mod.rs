@@ -40,11 +40,7 @@ pub(super) fn render_settings_view(
 ) -> AnyElement {
     let section = workspace.vm().settings_section;
     let settings_ready = workspace.vm().settings.is_some();
-    let header_meta = workspace
-        .vm()
-        .settings
-        .clone()
-        .map(|s| (s.dirty, s.saving, s.revision));
+    let header_meta = workspace.vm().settings.clone().map(|s| (s.dirty, s.saving));
     let nav = render_settings_nav(workspace, section, cx).into_any_element();
     let theme = cx.theme();
     div()
@@ -103,14 +99,8 @@ pub(super) fn render_settings_view(
                 )
                 .child(div().flex().flex_row().items_center().gap_2().when_some(
                     header_meta,
-                    |this, (dirty, saving, revision)| {
+                    |this, (dirty, saving)| {
                         this.child(
-                            div()
-                                .text_xs()
-                                .opacity(0.45)
-                                .child(format!("revision {revision}")),
-                        )
-                        .child(
                             Button::new("settings-save")
                                 .icon(IconName::Check)
                                 .label("Save changes")

@@ -489,6 +489,21 @@ pub struct Desk {
     pub screen_dim: Hsla,
 }
 
+impl Desk {
+    pub fn of(theme: &Theme) -> Self {
+        Self {
+            amber: theme.primary,
+            green: theme.green,
+            red: theme.red,
+            cyan: theme.cyan,
+            violet: theme.magenta,
+            faint: theme.muted_foreground,
+            screen: theme.background,
+            screen_dim: theme.muted_foreground,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,21 +522,6 @@ mod tests {
                 theme.selection.a < 1.0,
                 "{palette} selection is painted over the glyphs"
             );
-        }
-    }
-}
-
-impl Desk {
-    pub fn of(theme: &Theme) -> Self {
-        Self {
-            amber: theme.primary,
-            green: theme.green,
-            red: theme.red,
-            cyan: theme.cyan,
-            violet: theme.magenta,
-            faint: theme.muted_foreground,
-            screen: theme.background,
-            screen_dim: theme.muted_foreground,
         }
     }
 }

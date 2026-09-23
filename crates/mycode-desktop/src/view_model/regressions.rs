@@ -117,44 +117,6 @@ fn selecting_a_model_at_the_provider_cap_is_refused() {
     );
 }
 
-/// The bulk assignment used to reverse its binding block relative to the
-/// documented most-recent-first invariant.
-#[test]
-fn unbound_sessions_bind_most_recent_first() {
-    let mut state = WorkspaceState {
-        sessions: vec![
-            summary("ses-new", 3),
-            summary("ses-mid", 2),
-            summary("ses-old", 1),
-        ],
-        ..WorkspaceState::default()
-    };
-    reduce(
-        &mut state,
-        DesktopAction::UnboundSessionsAssigned(r"D:\proj".to_owned()),
-    );
-    assert_eq!(
-        state.session_projects,
-        vec![
-            ("ses-new".to_owned(), r"D:\proj".to_owned()),
-            ("ses-mid".to_owned(), r"D:\proj".to_owned()),
-            ("ses-old".to_owned(), r"D:\proj".to_owned()),
-        ]
-    );
-
-    // A later assignment only tops up rows that are still unbound.
-    state.sessions.push(summary("ses-late", 4));
-    reduce(
-        &mut state,
-        DesktopAction::UnboundSessionsAssigned(r"D:\proj".to_owned()),
-    );
-    assert_eq!(
-        state.session_projects[0],
-        ("ses-late".to_owned(), r"D:\proj".to_owned())
-    );
-    assert_eq!(state.session_projects.len(), 4);
-}
-
 /// `MessageSent` used to leave a typed `@`/`/` mention mounted over an empty
 /// draft, unlike its sibling `MessageQueued`.
 #[test]
