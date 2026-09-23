@@ -4272,7 +4272,6 @@ dependencies = [
 name = "mycode-config"
 version = "0.4.5"
 dependencies = [
- "base64 0.23.1",
  "blake3",
  "getrandom 0.4.3",
  "junction",
@@ -4280,7 +4279,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "syn 2.0.119",
  "tempfile",
  "uuid",
  "windows-sys 0.61.2",
@@ -4336,7 +4334,7 @@ version = "0.4.5"
 dependencies = [
  "aho-corasick",
  "async-trait",
- "base64 0.23.1",
+ "base64 0.22.1",
  "blake3",
  "globset",
  "grep-matcher",
@@ -5978,12 +5976,10 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2",
  "http",
  "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "js-sys",

@@ -19,7 +19,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.23"
+base64 = "0.22"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 async-trait = "0.1"
@@ -31,7 +31,6 @@ zeroize = "1.9"
 # library, on top of the OS stack these product targets already have.
 reqwest = { version = "0.13", default-features = false, features = [
     "charset",
-    "http2",
     "native-tls",
     "stream",
     "system-proxy",
@@ -59,7 +58,6 @@ sha2 = "0.11"
 getrandom = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1", features = ["serde"] }
-syn = { version = "2", features = ["full", "visit"] }
 # tree-sitter 0.25.10: Parser::set_language(&Language), Query::new(&Language, &str),
 # QueryCursor::matches + StreamingIterator. Grammar crates export LanguageFn via
 # LANGUAGE / LANGUAGE_TYPESCRIPT / LANGUAGE_TSX; pin exact so ABI stays compatible.
@@ -83,3 +81,11 @@ split-debuginfo = "unpacked"
 
 [profile.test]
 debug = "line-tables-only"
+
+# Maximum-performance release binaries: fat LTO across the whole workspace
+# and a single codegen unit. Link time grows accordingly; CI release builds
+# and local release builds both pay it once.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
