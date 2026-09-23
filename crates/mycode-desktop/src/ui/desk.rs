@@ -375,7 +375,8 @@ fn paint(theme: &mut Theme, spec: &Spec) {
     theme.accent = tint;
     theme.accent_foreground = accent;
     theme.caret = accent;
-    theme.selection = tint;
+    // Painted over the glyphs, so an opaque fill hides the selected text.
+    theme.selection = hex_a(spec.accent, 0.38);
     theme.primary = accent;
     theme.primary_foreground = accent_ink;
     theme.primary_hover = accent;
@@ -486,6 +487,28 @@ pub struct Desk {
     pub faint: Hsla,
     pub screen: Hsla,
     pub screen_dim: Hsla,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_selection_stays_translucent() {
+        let mut theme = Theme::default();
+        for (palette, dark) in [("slate", true), ("ocean", false)] {
+            theme.mode = if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            };
+            apply_palette(&mut theme, palette);
+            assert!(
+                theme.selection.a < 1.0,
+                "{palette} selection is painted over the glyphs"
+            );
+        }
+    }
 }
 
 impl Desk {
