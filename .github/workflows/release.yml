@@ -2,6 +2,9 @@
 # Release. Runs on `v*` tags.
 #
 # macOS ships Apple Silicon only; Intel Mac builds are dropped.
+# The release body is the tagged section of CHANGELOG.md (headers read
+# `## [<version>]` without the leading `v`), with GitHub's
+# auto-generated commit notes appended.
 # Assets produced per tag:
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
@@ -75,9 +78,21 @@ jobs:
           hash=$(shasum -a 256 "$zip" | awk '{print $1}')
           printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
+      - name: Extract changelog section
+        shell: bash
+        run: |
+          version="${{ github.ref_name }}"
+          version="${version#v}"
+          awk -v section="## [${version}]" '
+            index($0, section) == 1 { in_section = 1; next }
+            in_section && /^## \[/ { exit }
+            in_section { print }
+          ' CHANGELOG.md > changelog_section.md
+
       - name: Attach assets to the release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: changelog_section.md
           files: |
             *.zip
             *.zip.sha256
