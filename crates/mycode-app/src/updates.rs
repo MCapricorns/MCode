@@ -16,7 +16,7 @@ use sha2::Digest as _;
 
 /// GitHub API endpoint resolving the latest published release.
 pub const LATEST_RELEASE_API: &str =
-    "https://api.github.com/repos/MCapricorns/MCode/releases/latest";
+    "https://api.github.com/repos/MCapricorns/mycode/releases/latest";
 
 /// Maximum accepted update asset size: 512 MiB.
 pub const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
