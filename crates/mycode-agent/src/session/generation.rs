@@ -1,9 +1,9 @@
-//! Host-owned generation fence for atomic Pack set publication.
+//! Host-owned generation fence for atomic authority publication.
 //!
-//! One fence owns one family's generation lifecycle. Preparation cannot admit
-//! Host work. Publication and retirement use one atomic phase-plus-count state
-//! so retirement linearizes with every activity reservation before quiescent
-//! Store cleanup.
+//! One fence owns one authority's generation lifecycle. Preparation cannot
+//! admit Host work. Publication and retirement use one atomic phase-plus-count
+//! state so retirement linearizes with every activity reservation before
+//! quiescent Store cleanup.
 //!
 //! The shared publication state is a monotonically increasing epoch: even
 //! values mark a stable published authority, odd values mark a publication
@@ -15,59 +15,13 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard};
 
-use mycode_config::PluginFamily;
 use tokio::sync::Notify;
-
-const MAX_HOST_GENERATION: u64 = 9_007_199_254_740_991;
-
-/// Identifies one Host generation of one family's active Pack set.
-///
-/// Values start at one. Zero is the reserved [`HostGeneration::ABSENT`]
-/// binding used before any generation has been published.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct HostGeneration(u64);
-
-impl HostGeneration {
-    /// Creates one generation value in the exact JSON-safe positive range.
-    pub(crate) const fn new(value: u64) -> Option<Self> {
-        if value == 0 || value > MAX_HOST_GENERATION {
-            None
-        } else {
-            Some(Self(value))
-        }
-    }
-
-    /// Returns the exact generation value.
-    #[expect(dead_code, reason = "T16+ multi-domain fences read the value")]
-    pub(crate) const fn get(self) -> u64 {
-        self.0
-    }
-}
 
 /// Marks a publication authority as finally closed.
 pub(crate) const PUBLICATION_CLOSED: u64 = u64::MAX;
 
-/// Names the authority one generation fence gates.
-///
-/// External Pack families are gated by their plugin family; first-party
-/// built-in services are gated by their dedicated fixed domain so a built-in
-/// generation can never be confused with an external Pack publication.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GenerationDomain {
-    /// One external Plugin family's active Pack set.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "T10+ publishes family Pack generations")
-    )]
-    Family(PluginFamily),
-    /// The first-party built-in Session service publication.
-    Session,
-}
-
 pub(crate) struct GenerationFence {
     publication_state: Arc<AtomicU64>,
-    domain: GenerationDomain,
-    generation: HostGeneration,
     state: AtomicUsize,
     drained: Notify,
     commit: SyncMutex<()>,
@@ -83,31 +37,13 @@ const GENERATION_ACTIVITY_INCREMENT: usize = GENERATION_PHASE_MASK + 1;
 const MAX_GENERATION_ACTIVITIES: usize = usize::MAX >> 2;
 
 impl GenerationFence {
-    pub(crate) fn new(
-        publication_state: Arc<AtomicU64>,
-        domain: GenerationDomain,
-        generation: HostGeneration,
-    ) -> Self {
+    pub(crate) fn new(publication_state: Arc<AtomicU64>) -> Self {
         Self {
             publication_state,
-            domain,
-            generation,
             state: AtomicUsize::new(GENERATION_PREPARING),
             drained: Notify::new(),
             commit: SyncMutex::new(()),
         }
-    }
-
-    /// Returns the authority domain this fence gates.
-    #[expect(dead_code, reason = "T16+ multi-domain fences distinguish authorities")]
-    pub(crate) const fn domain(&self) -> GenerationDomain {
-        self.domain
-    }
-
-    /// Returns the generation this fence gates.
-    #[expect(dead_code, reason = "T16+ multi-domain fences distinguish authorities")]
-    pub(crate) const fn generation(&self) -> HostGeneration {
-        self.generation
     }
 
     /// Returns whether the publication authority is finally closed.
@@ -275,11 +211,7 @@ mod tests {
 
     fn fence(publication: u64) -> (Arc<AtomicU64>, Arc<GenerationFence>) {
         let publication_state = Arc::new(AtomicU64::new(publication));
-        let fence = Arc::new(GenerationFence::new(
-            Arc::clone(&publication_state),
-            GenerationDomain::Family(PluginFamily::Providers),
-            HostGeneration::new(1).expect("nonzero generation"),
-        ));
+        let fence = Arc::new(GenerationFence::new(Arc::clone(&publication_state)));
         (publication_state, fence)
     }
 

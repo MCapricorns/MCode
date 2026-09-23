@@ -1,6 +1,6 @@
-//! Abort scenarios: `CancellationToken` / `agent.abort()` mid-turn keep
-//! state consistent (no half `TurnEnded::Completed`), and an abort
-//! mid-dispatch of a multi-call response still answers every tool call.
+//! Abort scenarios: `CancellationToken` mid-turn keeps state consistent
+//! (no half `TurnEnded::Completed`), and an abort mid-dispatch of a
+//! multi-call response still answers every tool call.
 //!
 //! Part of the loop scenario groups listed in `common/mod.rs`.
 
@@ -72,33 +72,6 @@ async fn abort_via_env_cancel_mid_stream_keeps_state_consistent() {
     assert_eq!(outcome, TurnOutcome::Completed);
     // user1, user2, recovered assistant (no partial aborted response).
     assert_eq!(agent.state().messages.len(), 3);
-}
-
-#[tokio::test]
-async fn abort_via_agent_handle_mid_stream() {
-    let long = "x".repeat(600);
-    let rig = Rig::new(LocalProvider::new(vec![text_turn(&long)]).with_delay(DELAY));
-    let mut agent = Agent::new(AgentConfig::new());
-    let handle = agent.handle();
-    let canceller = spawn_on_first_delta(&rig, move || handle.abort());
-
-    let outcome = agent
-        .prompt(user("an essay please"), &rig.env())
-        .await
-        .expect("abort is a normal outcome");
-    canceller.await.expect("canceller must finish");
-
-    assert_eq!(outcome, TurnOutcome::Aborted);
-    assert_eq!(agent.state().messages.len(), 1);
-
-    // abort() while idle is a no-op.
-    agent.abort();
-    rig.provider.push_turn(text_turn("fine"));
-    let outcome = agent
-        .prompt(user("again"), &rig.env())
-        .await
-        .expect("prompt after idle abort must succeed");
-    assert_eq!(outcome, TurnOutcome::Completed);
 }
 
 /// Aborting mid-dispatch of a multi-call response must still answer

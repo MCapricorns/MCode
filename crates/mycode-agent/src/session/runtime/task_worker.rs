@@ -124,20 +124,6 @@ impl<A: PackTaskActor> TaskActorClient<A> {
         }
     }
 
-    #[expect(dead_code, reason = "T10+ activation probes actor availability")]
-    pub(crate) fn is_available(&self) -> bool {
-        !self.sender.is_closed()
-    }
-
-    #[expect(dead_code, reason = "T10+ activation probes live operations")]
-    pub(crate) fn is_operation_open(&self, operation: TaskActorOperationId) -> bool {
-        self.live
-            .lock()
-            .expect("task actor live-operation lock")
-            .get(&operation)
-            .is_some_and(|close| !close.is_closed())
-    }
-
     pub(crate) async fn invoke(
         &self,
         request: A::Request,

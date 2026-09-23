@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use mycode_config::HomeLayout;
 
-use crate::session::generation::{GenerationDomain, GenerationFence, HostGeneration};
+use crate::session::generation::GenerationFence;
 use crate::session::runtime::{TaskActorClient, TaskActorError, TaskCloseSignal};
 
 use super::actor::{SessionActor, SessionTaskError};
@@ -58,11 +58,7 @@ impl SessionService {
     /// runtime, and its storage work uses `spawn_blocking`.
     #[must_use]
     pub fn new(home: &HomeLayout) -> Self {
-        let fence = Arc::new(GenerationFence::new(
-            Arc::new(AtomicU64::new(0)),
-            GenerationDomain::Session,
-            HostGeneration::new(1).expect("first generation is JSON-safe"),
-        ));
+        let fence = Arc::new(GenerationFence::new(Arc::new(AtomicU64::new(0))));
         fence.mark_current();
         let actor = SessionActor::new(home.clone(), Arc::clone(&fence));
         let client = TaskActorClient::start(actor);

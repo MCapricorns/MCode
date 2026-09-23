@@ -1,5 +1,5 @@
-//! Basic loop scenarios: single-turn text replies, the multi-turn tool
-//! loop, queue-mode drain semantics, and steer queued while idle.
+//! Basic loop scenarios: single-turn text replies and the multi-turn
+//! tool loop.
 //!
 //! Part of the loop scenario groups listed in `common/mod.rs`.
 
@@ -7,7 +7,6 @@ mod common;
 
 use common::local_provider::LocalProvider;
 use common::{Rig, position, spawn_collector, text_turn, tool_turn, user};
-use mycode_agent::agent::QueueMode;
 use mycode_agent::{Agent, AgentConfig, TurnEnv, build_system_prompt};
 use mycode_core::events::{AgentEvent, MessageDelta, TurnOutcome};
 use mycode_core::message::{AssistantMessage, ContentBlock, Message, StopReason};
@@ -167,77 +166,4 @@ async fn tool_call_loop_executes_writes_back_and_stops() {
         Some(&AgentEvent::TurnEnded(TurnOutcome::Completed))
     );
     let _ = result_added;
-}
-
-#[tokio::test]
-async fn queue_mode_one_at_a_time_delivers_each_follow_up_in_own_request() {
-    let rig = Rig::new(LocalProvider::new(vec![
-        text_turn("answer one"),
-        text_turn("answer two"),
-        text_turn("answer three"),
-    ]));
-    let mut agent = Agent::new(AgentConfig::new());
-    assert_eq!(agent.queue_mode(), QueueMode::OneAtATime);
-    // Queued while idle (a subagent callback before the next prompt).
-    agent.follow_up(user("task one"));
-    agent.follow_up(user("task two"));
-
-    let outcome = agent
-        .prompt(user("start"), &rig.env())
-        .await
-        .expect("prompt must succeed");
-
-    assert_eq!(outcome, TurnOutcome::Completed);
-    assert_eq!(rig.provider.recorded_requests().len(), 3);
-    let messages = &agent.state().messages;
-    // user, asst, task1, asst, task2, asst
-    assert_eq!(messages.len(), 6);
-    assert_eq!(messages[2], user("task one"));
-    assert_eq!(messages[4], user("task two"));
-}
-
-#[tokio::test]
-async fn queue_mode_all_batches_follow_ups_into_one_request() {
-    let rig = Rig::new(LocalProvider::new(vec![
-        text_turn("answer one"),
-        text_turn("answer both"),
-    ]));
-    let mut agent = Agent::new(AgentConfig::new());
-    agent.set_queue_mode(QueueMode::All);
-    agent.follow_up(user("task one"));
-    agent.follow_up(user("task two"));
-
-    let outcome = agent
-        .prompt(user("start"), &rig.env())
-        .await
-        .expect("prompt must succeed");
-
-    assert_eq!(outcome, TurnOutcome::Completed);
-    assert_eq!(rig.provider.recorded_requests().len(), 2);
-    let requests = rig.provider.recorded_requests();
-    // Both follow-ups were injected before the second response.
-    assert_eq!(requests[1].messages[2], user("task one"));
-    assert_eq!(requests[1].messages[3], user("task two"));
-}
-
-#[tokio::test]
-async fn steer_queued_while_idle_lands_before_the_first_response() {
-    let rig = Rig::new(LocalProvider::new(vec![text_turn("combined answer")]));
-    let mut agent = Agent::new(AgentConfig::new());
-    agent.steer(user("context update before you start"));
-
-    let outcome = agent
-        .prompt(user("initial prompt"), &rig.env())
-        .await
-        .expect("prompt must succeed");
-
-    assert_eq!(outcome, TurnOutcome::Steered);
-    let requests = rig.provider.recorded_requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].messages.len(), 2);
-    assert_eq!(requests[0].messages[0], user("initial prompt"));
-    assert_eq!(
-        requests[0].messages[1],
-        user("context update before you start")
-    );
 }

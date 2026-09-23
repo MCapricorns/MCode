@@ -2,18 +2,14 @@
 //!
 //! Run from the workspace root:
 //! - `cargo test -p mycode-agent` or `cargo t-agent`
-//! - `cargo test -p mycode-core` or `cargo t-core`
 //!
 //! [`local_provider`] is the scripted in-process provider used by every
-//! loop scenario file. The scenario groups split out of the original
-//! `loop_test.rs` are:
+//! loop scenario file. The scenario groups are:
 //!
-//! - `loop_basic` — single-turn text replies, tool-call loop write-back,
-//!   queue-mode drain semantics, and steer queued while idle.
-//! - `loop_steer_followup` — steer jumping the queue mid-stream and
-//!   follow-ups continuing an agent that is about to stop.
-//! - `loop_abort` — env-cancel / agent-handle aborts keeping state
-//!   consistent, including multi-call aborts answering every call.
+//! - `loop_basic` — single-turn text replies and the multi-turn
+//!   tool-call loop.
+//! - `loop_abort` — env-cancel aborts keeping state consistent,
+//!   including multi-call aborts answering every call.
 //! - `loop_provider_failures` — provider errors, setup cancellation,
 //!   oversized requests, and dangling streams.
 //! - `loop_tools` — registered-tool dispatch, progress streaming,
@@ -26,6 +22,8 @@
 //!   Windows share-locked alias case.
 //! - `loop_tool_panics` — panic-on-drop and panic-any isolation plus
 //!   search-worker cleanup on dropped dispatch.
+//! - `loop_task_parallel` — same-response task calls running together,
+//!   including cancel and failure propagation.
 
 // Each scenario binary compiles this module independently, so fixtures
 // used only by other binaries would otherwise trip dead_code.

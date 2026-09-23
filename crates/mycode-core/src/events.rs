@@ -60,8 +60,6 @@ pub enum MessageDelta {
 pub enum TurnOutcome {
     /// The model stopped without further tool calls.
     Completed,
-    /// A steer message took over; a new turn follows.
-    Steered,
     /// The turn was aborted via cancellation.
     Aborted,
 }
@@ -109,7 +107,6 @@ mod tests {
                 },
             },
             AgentEvent::TurnEnded(TurnOutcome::Completed),
-            AgentEvent::TurnEnded(TurnOutcome::Steered),
             AgentEvent::TurnEnded(TurnOutcome::Aborted),
             AgentEvent::Error(MycodeError::Tool("boom".into())),
         ]

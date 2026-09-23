@@ -11,21 +11,16 @@
 //! ```text
 //! caller ──Message──► Agent::prompt(msg, &TurnEnv)
 //!                        │
-//!                        ▼ double loop
-//!        outer: drain follow-up queue whenever the agent would stop
-//!          inner: build request → provider.stream → mirror deltas as
-//!                 AgentEvent stream → dispatch registered tools → write
-//!                 results back
+//!                        ▼ loop
+//!        build request → provider.stream → mirror deltas as
+//!        AgentEvent stream → dispatch registered tools → write
+//!        results back, until the model stops calling tools
 //!                        │
 //!                        ▼
-//!        steer queue drained after every response cycle (jumps the
-//!        queue ahead of follow-ups); abort() / env.cancel ends the
-//!        turn with TurnOutcome::Aborted
+//!        env.cancel ends the turn with TurnOutcome::Aborted
 //! ```
 //!
-//! * [`Agent`] owns the conversation state and the steer/follow-up
-//!   queues; [`agent::AgentHandle`] lets other tasks steer, follow up, or
-//!   abort while a turn streams.
+//! * [`Agent`] owns the conversation state.
 //! * [`TurnEnv`] injects everything ambient — provider, tool registry,
 //!   hooks, cancellation, and the event bus. Registered schema-valid
 //!   tools execute directly; no permission callback is required.

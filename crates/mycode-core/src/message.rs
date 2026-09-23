@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Message {
-    /// A message authored by the user (prompts, steers, follow-ups).
+    /// A message authored by the user (prompts).
     User(UserMessage),
     /// A message produced by the model.
     Assistant(AssistantMessage),

@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use common::local_provider::LocalProvider;
 use common::{NoArgs, Rig, text_turn, tool_turn, user};
 use mycode_agent::Agent;
-use mycode_agent::agent::{AgentConfig, AgentHandle};
+use mycode_agent::agent::AgentConfig;
 use mycode_core::events::TurnOutcome;
 use mycode_core::message::{ContentBlock, Message};
 use mycode_tools::{
@@ -214,9 +214,10 @@ impl Tool for HangPanicAnyDropTool {
     }
 }
 
-fn hang_drop_rig(entered: Arc<AtomicBool>) -> (Rig, Agent, AgentHandle) {
+fn hang_drop_rig(entered: Arc<AtomicBool>) -> (CancellationToken, Rig, Agent) {
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HangPanicDropTool { entered }));
+    let cancel = CancellationToken::new();
     let rig = Rig {
         provider: LocalProvider::new(vec![tool_turn(
             "hang",
@@ -225,11 +226,10 @@ fn hang_drop_rig(entered: Arc<AtomicBool>) -> (Rig, Agent, AgentHandle) {
         registry,
         hooks: mycode_agent::HookRunner::new(),
         events: broadcast::channel(256).0,
-        cancel: CancellationToken::new(),
+        cancel: cancel.clone(),
     };
     let agent = Agent::new(AgentConfig::new());
-    let handle = agent.handle();
-    (rig, agent, handle)
+    (cancel, rig, agent)
 }
 
 async fn wait_until_entered(entered: &AtomicBool) {
@@ -249,10 +249,10 @@ async fn wait_until_entered(entered: &AtomicBool) {
 #[tokio::test]
 async fn aborting_pending_panic_on_drop_tool_does_not_unwind_prompt() {
     let entered = Arc::new(AtomicBool::new(false));
-    let (rig, mut agent, handle) = hang_drop_rig(Arc::clone(&entered));
+    let (cancel, rig, mut agent) = hang_drop_rig(Arc::clone(&entered));
     let task = tokio::spawn(async move { agent.prompt(user("go"), &rig.env()).await });
     wait_until_entered(&entered).await;
-    handle.abort();
+    cancel.cancel();
     let outcome = task
         .await
         .expect("prompt task must not unwind from tool Drop panic")
@@ -263,7 +263,7 @@ async fn aborting_pending_panic_on_drop_tool_does_not_unwind_prompt() {
 #[tokio::test]
 async fn dropping_dispatch_of_panic_on_drop_tool_does_not_unwind_prompt() {
     let entered = Arc::new(AtomicBool::new(false));
-    let (rig, mut agent, _handle) = hang_drop_rig(Arc::clone(&entered));
+    let (_cancel, rig, mut agent) = hang_drop_rig(Arc::clone(&entered));
     let task = tokio::spawn(async move { agent.prompt(user("go"), &rig.env()).await });
     wait_until_entered(&entered).await;
     task.abort();
@@ -310,9 +310,10 @@ async fn completing_panic_on_drop_tool_becomes_error_result() {
     assert_eq!(rig.provider.recorded_requests().len(), 2);
 }
 
-fn hang_panic_any_drop_rig(entered: Arc<AtomicBool>) -> (Rig, Agent, AgentHandle) {
+fn hang_panic_any_drop_rig(entered: Arc<AtomicBool>) -> (CancellationToken, Rig, Agent) {
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HangPanicAnyDropTool { entered }));
+    let cancel = CancellationToken::new();
     let rig = Rig {
         provider: LocalProvider::new(vec![tool_turn(
             "hang",
@@ -321,11 +322,10 @@ fn hang_panic_any_drop_rig(entered: Arc<AtomicBool>) -> (Rig, Agent, AgentHandle
         registry,
         hooks: mycode_agent::HookRunner::new(),
         events: broadcast::channel(256).0,
-        cancel: CancellationToken::new(),
+        cancel: cancel.clone(),
     };
     let agent = Agent::new(AgentConfig::new());
-    let handle = agent.handle();
-    (rig, agent, handle)
+    (cancel, rig, agent)
 }
 
 #[tokio::test]
@@ -399,10 +399,10 @@ async fn completing_panic_any_on_drop_tool_becomes_error_result() {
 #[tokio::test]
 async fn aborting_pending_panic_any_on_drop_tool_does_not_unwind_prompt() {
     let entered = Arc::new(AtomicBool::new(false));
-    let (rig, mut agent, handle) = hang_panic_any_drop_rig(Arc::clone(&entered));
+    let (cancel, rig, mut agent) = hang_panic_any_drop_rig(Arc::clone(&entered));
     let task = tokio::spawn(async move { agent.prompt(user("go"), &rig.env()).await });
     wait_until_entered(&entered).await;
-    handle.abort();
+    cancel.cancel();
     let outcome = task
         .await
         .expect("prompt task must not unwind from payload Drop panic")
@@ -413,7 +413,7 @@ async fn aborting_pending_panic_any_on_drop_tool_does_not_unwind_prompt() {
 #[tokio::test]
 async fn dropping_dispatch_of_panic_any_on_drop_tool_does_not_unwind_prompt() {
     let entered = Arc::new(AtomicBool::new(false));
-    let (rig, mut agent, _handle) = hang_panic_any_drop_rig(Arc::clone(&entered));
+    let (_cancel, rig, mut agent) = hang_panic_any_drop_rig(Arc::clone(&entered));
     let task = tokio::spawn(async move { agent.prompt(user("go"), &rig.env()).await });
     wait_until_entered(&entered).await;
     task.abort();
@@ -433,6 +433,7 @@ async fn aborting_dispatch_drops_tool_and_joins_search_workers() {
     registry.register(Arc::new(DropSearchTool {
         dropped: Arc::clone(&dropped),
     }));
+    let cancel = CancellationToken::new();
     let rig = Rig {
         provider: LocalProvider::new(vec![tool_turn(
             "search",
@@ -441,10 +442,9 @@ async fn aborting_dispatch_drops_tool_and_joins_search_workers() {
         registry,
         hooks: mycode_agent::HookRunner::new(),
         events: broadcast::channel(256).0,
-        cancel: CancellationToken::new(),
+        cancel: cancel.clone(),
     };
     let mut agent = Agent::new(AgentConfig::new());
-    let handle = agent.handle();
     let task = tokio::spawn(async move { agent.prompt(user("go"), &rig.env()).await });
     let started = Instant::now();
     loop {
@@ -457,7 +457,7 @@ async fn aborting_dispatch_drops_tool_and_joins_search_workers() {
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    handle.abort();
+    cancel.cancel();
     let _ = task.await;
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
