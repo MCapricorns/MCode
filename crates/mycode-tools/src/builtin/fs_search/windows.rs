@@ -49,9 +49,7 @@ pub(crate) fn open_windows_parent_directory(dir: &File) -> io::Result<ParentDire
     let Some(child_name) = last_wide_component(path.as_os_str()) else {
         return Ok(ParentDirectory::FilesystemRoot);
     };
-    let parent_path =
-        apply_parent_discovery_hook(&path)?.unwrap_or_else(|| parent_path.to_path_buf());
-    let parent = open_windows_path_nofollow(&parent_path)?;
+    let parent = open_windows_path_nofollow(parent_path)?;
     let reopened = open_named_windows(
         &parent,
         &child_name,
@@ -217,7 +215,6 @@ pub(crate) fn open_named_windows(
     name_match: NameMatch,
     access: SearchAccess,
 ) -> io::Result<StableHandle> {
-    apply_open_fault(name)?;
     validate_component_name(name)?;
     open_windows_component(parent, name, expected, name_match, access)
 }
@@ -295,15 +292,6 @@ pub(crate) fn open_windows_component(
         }
         SearchAccess::Metadata => FILE_READ_ATTRIBUTES,
     };
-    #[cfg(test)]
-    apply_access_gate(
-        name,
-        ObservedOpen {
-            access,
-            desired_access,
-            options,
-        },
-    )?;
     // SAFETY: `parent` stays live; `object_name` references `wide` for this
     // call; all output pointers reference initialized writable storage.
     let status = unsafe {
@@ -329,7 +317,7 @@ pub(crate) fn open_windows_component(
     // other owner will close it after this transfer.
     let file = unsafe { File::from_raw_handle(handle) };
     let opened = stable_from_windows_file(file, true, access == SearchAccess::Metadata)?;
-    enforce_windows_child_containment(parent, &opened, name)?;
+    enforce_windows_child_containment(parent, &opened)?;
     Ok(opened)
 }
 
@@ -366,7 +354,6 @@ pub(crate) fn stable_from_windows_file(
 pub(crate) fn enforce_windows_child_containment(
     parent: &File,
     child: &StableHandle,
-    name: &OsStr,
 ) -> io::Result<()> {
     let (parent_identity, parent_kind, _, _) = windows_identity_kind_reparse(parent)?;
     if parent_kind != FsEntryKind::Directory {
@@ -375,7 +362,7 @@ pub(crate) fn enforce_windows_child_containment(
             "walk parent is no longer a directory",
         ));
     }
-    let child_volume = overridden_child_device(name, child.identity.volume);
+    let child_volume = child.identity.volume;
     if parent_identity.volume != child_volume {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -418,11 +405,6 @@ pub(crate) fn windows_identity_kind_reparse(
         BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_ID_INFO, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
     };
-
-    #[cfg(test)]
-    if current_limiter(|limiter| limiter.force_identity_error()).unwrap_or(false) {
-        return Err(io::Error::other("injected file identity query failure"));
-    }
 
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
     // SAFETY: the handle is borrowed from a live `File` and `information`
@@ -499,45 +481,4 @@ pub(crate) fn final_path_by_handle(file: &File) -> io::Result<PathBuf> {
         }
         buffer.resize(written as usize + 1, 0);
     }
-}
-
-/// On-disk 8.3 path for a Windows test fixture.
-///
-/// # Errors
-///
-/// Returns an I/O error when `GetShortPathNameW` fails or the path contains NUL.
-#[cfg(all(test, windows))]
-pub(crate) fn windows_short_path(path: &Path) -> io::Result<PathBuf> {
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use std::ptr::null_mut;
-    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
-
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if wide.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "path contains NUL",
-        ));
-    }
-    wide.push(0);
-    // SAFETY: `wide` is a live NUL-terminated UTF-16 path. A null
-    // zero-sized output buffer is the documented size-query form.
-    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), null_mut(), 0) };
-    if needed == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut buffer = vec![0u16; needed as usize];
-    // SAFETY: `buffer` is writable UTF-16 storage with capacity `needed`.
-    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), needed) };
-    if written == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if written >= needed {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "short path did not fit the queried buffer",
-        ));
-    }
-    buffer.truncate(written as usize);
-    Ok(PathBuf::from(OsString::from_wide(&buffer)))
 }

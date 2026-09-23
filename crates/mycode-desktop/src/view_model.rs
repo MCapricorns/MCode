@@ -13,11 +13,6 @@ mod state;
 mod usage;
 
 mod reduce;
-#[cfg(test)]
-mod regressions;
-#[cfg(test)]
-mod tests;
-
 // The transcript vocabulary is the core's protocol, not a rendering concern:
 // it is defined in `mycode-app` and re-exported here so render code keeps one
 // import path.

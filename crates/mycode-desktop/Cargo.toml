@@ -21,3 +21,6 @@ winresource = "0.1"
 [[bin]]
 name = "mycode-desktop"
 path = "src/main.rs"
+
+[lints]
+workspace = true

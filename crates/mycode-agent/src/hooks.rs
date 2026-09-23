@@ -4,33 +4,18 @@
 //! [`HookRunner::with_before_request`] (history compaction immediately
 //! before a provider request) and [`HookRunner::with_before_tool`] (an
 //! observer fired after tool-call admission, right before dispatch).
-//! Tests can additionally install a tool-call gate via
-//! [`HookRunner::with_test_gate`] to verify argument rebinding and
-//! blocked dispatch.
 //!
 //! The three dispatch semantics (pi's model):
 //!
 //! * [`notify`](HookRunner::notify) — fire-and-forget broadcast.
 //! * [`transform`](HookRunner::transform) — middleware chain: value in,
 //!   possibly rewritten value out.
-//! * [`gate`](HookRunner::gate) — may rewrite the payload in place and/or
-//!   block the action ([`GateResult::Block`]).
 
 use mycode_core::Request;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-
-/// Outcome of a [`HookRunner::gate`] call.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GateResult {
-    /// No objection; continue (payload possibly rewritten).
-    Pass,
-    /// Block the action. The reason is surfaced to the model as an
-    /// `is_error` tool result; stop-gate reasons are not surfaced.
-    Block(String),
-}
 
 /// The loop node at which a hook is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,30 +34,20 @@ pub enum HookEvent {
     /// An assistant message finished streaming (Transform: may rewrite
     /// the whole message before it enters history).
     MessageEnd,
-    /// A tool call is about to be dispatched (Gate: may rewrite arguments
-    /// or block).
-    ToolCall,
     /// A tool result is about to be written back into the context
     /// (Transform: redaction, summarization, truncation).
     ToolResult,
-    /// The agent is about to stop (Gate: plugins may block the stop and
-    /// inject follow-ups).
-    StopGate,
 }
 
 /// Hook runner for the loop's dispatch points.
 ///
-/// [`notify`](HookRunner::notify), [`transform`](HookRunner::transform),
-/// and the [`GateResult::Pass`] arm of [`gate`](HookRunner::gate) are
-/// pass-throughs with no production subscriber today. The live production
+/// [`notify`](HookRunner::notify) and [`transform`](HookRunner::transform)
+/// are pass-throughs with no production subscriber today. The live production
 /// paths are [`prepare_request`](HookRunner::prepare_request), which runs
 /// the installed before-request rewrite (history compaction), and
 /// [`observe_before_tool`](HookRunner::observe_before_tool), which fires
 /// the installed before-tool observer immediately before dispatch;
 /// panics in the observer are contained and never affect the turn.
-/// [`with_test_gate`](HookRunner::with_test_gate) adds the test-only
-/// tool-call gate that rewrites arguments or blocks the dispatch.
-type TestGate = Arc<dyn Fn(&mut Value) -> GateResult + Send + Sync>;
 /// The observer clones what it needs while invoked and returns a future;
 /// asynchronous observers may offload blocking work (file snapshots) onto
 /// `spawn_blocking` instead of stalling the calling executor.
@@ -82,7 +57,6 @@ type BeforeRequestFuture = Pin<Box<dyn Future<Output = Request> + Send>>;
 type BeforeRequest = Arc<dyn Fn(Request) -> BeforeRequestFuture + Send + Sync>;
 
 pub struct HookRunner {
-    test_gate: Option<TestGate>,
     before_tool: Option<BeforeToolObserver>,
     before_request: Option<BeforeRequest>,
 }
@@ -91,7 +65,6 @@ impl HookRunner {
     /// An empty runner.
     pub fn new() -> Self {
         Self {
-            test_gate: None,
             before_tool: None,
             before_request: None,
         }
@@ -152,15 +125,6 @@ impl HookRunner {
             eprintln!("mycode-agent: before_tool observer panicked (contained)");
         }
     }
-
-    /// Install a tool-call gate used by tests to rewrite or block arguments.
-    pub fn with_test_gate(
-        mut self,
-        gate: impl Fn(&mut Value) -> GateResult + Send + Sync + 'static,
-    ) -> Self {
-        self.test_gate = Some(Arc::new(gate));
-        self
-    }
 }
 
 impl Default for HookRunner {
@@ -176,43 +140,5 @@ impl HookRunner {
     /// Passes `value` through the transform point.
     pub async fn transform<T>(&self, _event: HookEvent, value: T) -> T {
         value
-    }
-
-    /// Inspects a gate payload. Production passes; tests may rewrite or block.
-    ///
-    /// Call sites: `ToolCall` payloads are the call's arguments (may be
-    /// rewritten before execution); `StopGate` currently receives `Value::Null`.
-    pub async fn gate(&self, event: HookEvent, payload: &mut Value) -> GateResult {
-        if event == HookEvent::ToolCall
-            && let Some(gate) = &self.test_gate
-        {
-            return gate(payload);
-        }
-        GateResult::Pass
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn placeholder_methods_pass_through() {
-        let hooks = HookRunner::new();
-        hooks.notify(HookEvent::TurnStart).await;
-        assert_eq!(
-            hooks
-                .transform(HookEvent::UserPrompt, "unchanged".to_string())
-                .await,
-            "unchanged"
-        );
-        let mut payload = serde_json::json!({"command": "ls"});
-        assert_eq!(
-            hooks.gate(HookEvent::ToolCall, &mut payload).await,
-            GateResult::Pass
-        );
-        assert_eq!(payload, serde_json::json!({"command": "ls"}));
-        // Default constructible (the loop stores it in TurnEnv).
-        let _hooks: HookRunner = Default::default();
     }
 }

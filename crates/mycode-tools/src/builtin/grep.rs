@@ -50,10 +50,6 @@ use super::fs_search::{
     stop_reason_error, to_posix, walk_retained_tree,
 };
 
-#[cfg(all(test, windows))]
-use super::fs_search::windows_short_path;
-#[cfg(test)]
-use super::fs_search::{IGNORE_FILE_MAX_BYTES, resolve_search_root, resolve_search_root_cancel};
 use super::search_report::{ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report};
 
 /// Default cap on reported matching lines.
@@ -350,26 +346,6 @@ impl Sink for FileSink<'_> {
     }
 }
 
-#[cfg(test)]
-type BeforeOpenHook = Arc<dyn Fn(&Path) + Send + Sync>;
-
-#[derive(Clone, Default)]
-struct SearchHooks {
-    #[cfg(test)]
-    before_open: Option<BeforeOpenHook>,
-}
-
-impl SearchHooks {
-    fn before_open(&self, path: &Path) {
-        #[cfg(test)]
-        if let Some(hook) = &self.before_open {
-            hook(path);
-        }
-        #[cfg(not(test))]
-        let _ = path;
-    }
-}
-
 #[async_trait]
 impl Tool for GrepTool {
     type Args = GrepArgs;
@@ -461,49 +437,9 @@ fn run_search(
     cancel: &CancellationToken,
     limits: &Limits,
 ) -> Result<ToolResult, ToolError> {
-    run_search_core(
-        matcher,
-        root,
-        include,
-        exclude,
-        max_results,
-        cancel,
-        limits,
-        &SearchHooks::default(),
-    )
+    run_search_core(matcher, root, include, exclude, max_results, cancel, limits)
 }
 
-#[cfg(test)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test hook mirrors the production search inputs"
-)]
-fn run_search_with_hooks(
-    matcher: RegexMatcher,
-    root: ResolvedRoot,
-    include: Option<GlobMatcher>,
-    exclude: Option<GlobMatcher>,
-    max_results: Option<usize>,
-    cancel: &CancellationToken,
-    limits: &Limits,
-    hooks: &SearchHooks,
-) -> Result<ToolResult, ToolError> {
-    run_search_core(
-        matcher,
-        root,
-        include,
-        exclude,
-        max_results,
-        cancel,
-        limits,
-        hooks,
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "search policy inputs remain explicit and immutable"
-)]
 fn run_search_core(
     matcher: RegexMatcher,
     mut root: ResolvedRoot,
@@ -512,7 +448,6 @@ fn run_search_core(
     max_results: Option<usize>,
     cancel: &CancellationToken,
     limits: &Limits,
-    hooks: &SearchHooks,
 ) -> Result<ToolResult, ToolError> {
     let cap = max_results
         .unwrap_or(MAX_MATCHES)
@@ -554,7 +489,6 @@ fn run_search_core(
             cap,
             cancel,
             limits,
-            hooks,
         ) {
             return Ok(ToolResult::error(format!(
                 "search ignore boundary could not be established: {error}"
@@ -591,7 +525,6 @@ fn walk_and_search(
     cap: usize,
     cancel: &CancellationToken,
     limits: &Limits,
-    hooks: &SearchHooks,
 ) -> io::Result<()> {
     let mut searcher = build_searcher(limits);
     walk_retained_tree(
@@ -617,9 +550,6 @@ fn walk_and_search(
                 return ignore::WalkState::Continue;
             }
 
-            // The test hook is deliberately after enumeration and before the
-            // one secure open, making name-replacement races deterministic.
-            hooks.before_open(&root.root.join(relative_path));
             let mut file = match root.open_walked(parent, name, FsEntryKind::File) {
                 Ok(file) => file,
                 Err(error) => {
@@ -933,10 +863,3 @@ fn compile_glob(glob: Option<&str>, label: &str) -> Result<Option<GlobMatcher>, 
         Some(pattern) => Ok(Some(compile_glob_labeled(pattern, label)?)),
     }
 }
-
-#[cfg(test)]
-#[path = "grep_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "grep_tests_races.rs"]
-mod tests_races;

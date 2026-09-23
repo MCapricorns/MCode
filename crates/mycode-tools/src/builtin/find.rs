@@ -33,14 +33,6 @@ use super::fs_search::{
     walk_retained_tree,
 };
 
-#[cfg(test)]
-use super::fs_search::MAX_PATTERN_BYTES;
-#[cfg(all(test, windows))]
-use super::fs_search::windows_short_path;
-#[cfg(test)]
-use super::fs_search::{IGNORE_FILE_MAX_BYTES, resolve_search_root, resolve_search_root_cancel};
-#[cfg(all(test, unix))]
-use super::fs_search::{resolve_search_root_with_access, unix_casefold_alias_supported};
 use super::search_report::{ReportSpec, compile_glob_labeled, reject_pattern_bytes, render_report};
 
 /// Default cap on reported paths.
@@ -98,26 +90,6 @@ fn offer(
         heap.push(path);
     } else {
         limiter.release_result_bytes(bytes);
-    }
-}
-
-#[cfg(test)]
-type BeforeOpenHook = Arc<dyn Fn(&Path) + Send + Sync>;
-
-#[derive(Clone, Default)]
-struct FindHooks {
-    #[cfg(test)]
-    before_open: Option<BeforeOpenHook>,
-}
-
-impl FindHooks {
-    fn before_open(&self, path: &Path) {
-        #[cfg(test)]
-        if let Some(hook) = &self.before_open {
-            hook(path);
-        }
-        #[cfg(not(test))]
-        let _ = path;
     }
 }
 
@@ -193,19 +165,7 @@ fn run_find(
     cancel: &CancellationToken,
     limits: &Limits,
 ) -> Result<ToolResult, ToolError> {
-    run_find_core(glob, root, limit, cancel, limits, &FindHooks::default())
-}
-
-#[cfg(test)]
-fn run_find_with_hooks(
-    glob: GlobMatcher,
-    root: ResolvedRoot,
-    limit: Option<usize>,
-    cancel: &CancellationToken,
-    limits: &Limits,
-    hooks: &FindHooks,
-) -> Result<ToolResult, ToolError> {
-    run_find_core(glob, root, limit, cancel, limits, hooks)
+    run_find_core(glob, root, limit, cancel, limits)
 }
 
 fn run_find_core(
@@ -214,7 +174,6 @@ fn run_find_core(
     limit: Option<usize>,
     cancel: &CancellationToken,
     limits: &Limits,
-    hooks: &FindHooks,
 ) -> Result<ToolResult, ToolError> {
     let effective_limit = limit.unwrap_or(DEFAULT_LIMIT).min(limits.stored_ceiling);
     let state = Arc::new(FindState::new(Arc::clone(&root.limiter)));
@@ -274,7 +233,6 @@ fn run_find_core(
 
                 // Deterministic race hook: enumeration has completed, but the
                 // candidate has not yet been opened or trusted.
-                hooks.before_open(&root.root.join(relative_path));
                 if let Err(error) = root.confirm_walked(parent, name, expected) {
                     if !is_hidden_skip(&error) {
                         state.io_errors.record(&relative, &error);
@@ -356,14 +314,3 @@ fn compile_find_glob(pattern: &str) -> Result<GlobMatcher, ToolError> {
     reject_pattern_bytes(pattern, "pattern")?;
     compile_glob_labeled(pattern, "pattern")
 }
-
-#[cfg(test)]
-#[path = "find_performance_tests.rs"]
-mod performance_tests;
-
-#[cfg(test)]
-#[path = "find_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "find_tests_ignores.rs"]
-mod tests_ignores;

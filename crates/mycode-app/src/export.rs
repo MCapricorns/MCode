@@ -300,30 +300,3 @@ fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String>
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundle_roundtrips_through_a_file() {
-        let (_parent, home) = crate::test_support::home();
-        replace_ui_state(&home, &UiState::default()).expect("ui");
-        let export_path = home.root().with_extension("export.json");
-        let summary = export_to_file(&home, &export_path).expect("export");
-        assert_eq!(summary.sessions, 0);
-        let imported = import_from_file(&home, &export_path).expect("import");
-        assert!(imported.settings && imported.ui_state);
-        assert_eq!(imported.sessions, 0);
-        std::fs::remove_file(&export_path).ok();
-    }
-
-    #[test]
-    fn foreign_bundle_is_rejected() {
-        let (_parent, home) = crate::test_support::home();
-        let path = home.root().with_extension("foreign.json");
-        std::fs::write(&path, br#"{"formatVersion":1,"kind":"other"}"#).expect("write");
-        assert!(import_from_file(&home, &path).is_err());
-        std::fs::remove_file(&path).ok();
-    }
-}

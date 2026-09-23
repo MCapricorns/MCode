@@ -318,8 +318,6 @@ fn write_existing(
     let result = (|| {
         let temp_identity = created.meta.identity;
         let expected_hash = content_hash(content.as_bytes());
-        #[cfg(test)]
-        run_temp_links_hook();
         let temp_file = write_temp(created.file, content.as_bytes(), cancel)?;
         // Windows copies the source DACL and attributes (including a possible
         // read-only bit) onto the temp before publish so cleanup mirrors the
@@ -337,8 +335,6 @@ fn write_existing(
         // All irreversible pre-publish work is complete. The final cancel gate
         // runs immediately before the rename so a cancelled or timed-out call
         // can never publish while its supervisor reports cancellation.
-        #[cfg(test)]
-        run_pre_publish_hook(&key);
         check_cancel(cancel).map_err(|error| {
             ToolError::Execution(format!("cancelled before publishing {key}: {error}"))
         })?;
@@ -355,8 +351,6 @@ fn write_existing(
             ToolError::Execution(format!("failed to sync parent of {key}: {error}"))
         })?;
         close_share_denying_handles(&mut temp, temp_file);
-        #[cfg(test)]
-        run_post_publish_hook(&key);
         finish_write(
             &parent,
             &name,
@@ -421,13 +415,9 @@ fn write_missing(
         attach_security_probe(&parent, &mut temp, cancel)?;
         // The deterministic test observer opens every inode visible to a
         // foreign reader before the payload receives any content.
-        #[cfg(test)]
-        run_temp_links_hook();
         let temp_file = write_temp(created.file, content.as_bytes(), cancel)?;
         // All pre-publish work is complete; the final cancel gate runs
         // immediately before the irreversible publish rename.
-        #[cfg(test)]
-        run_pre_publish_hook(&key);
         check_cancel(cancel).map_err(|error| {
             ToolError::Execution(format!("cancelled before publishing {key}: {error}"))
         })?;
@@ -449,8 +439,6 @@ fn write_missing(
             ))
         })?;
         close_share_denying_handles(&mut temp, temp_file);
-        #[cfg(test)]
-        run_post_publish_hook(&key);
         finish_write(
             &parent,
             &dest,

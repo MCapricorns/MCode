@@ -60,11 +60,6 @@ pub(crate) fn is_within(root: &Path, candidate: &Path) -> bool {
 }
 
 /// Lexical containment is `strip_prefix_lexical` succeeding.
-#[cfg(test)]
-pub(crate) fn is_within_lexical(root: &Path, candidate: &Path) -> bool {
-    strip_prefix_lexical(root, candidate).is_some()
-}
-
 /// Windows user-path equality: NT ordinal case-insensitive UTF-16.
 ///
 /// Each UTF-16 code unit is mapped with `RtlUpcaseUnicodeChar` and

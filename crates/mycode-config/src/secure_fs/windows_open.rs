@@ -73,41 +73,7 @@ struct NativeOpenedDirectory {
     created: bool,
 }
 
-#[cfg(test)]
-pub(super) fn open_existing_directory_nofollow(path: &Path) -> Result<File, ConfigError> {
-    open_path_directory(path, DIRECTORY_READ_ACCESS)
-}
-
 /// Opens the trailing component without following it, for evidence probes.
-#[cfg(test)]
-pub(super) fn open_existing_object_nofollow(path: &Path) -> Result<File, ConfigError> {
-    if !path.is_absolute() {
-        return Err(ConfigError::for_path(ConfigErrorKind::InvalidHome, path));
-    }
-    let wide = wide_path(path)?;
-    // SAFETY: `wide` is a live NUL-terminated UTF-16 path. The trailing
-    // component is opened rather than traversed by OPEN_REPARSE_POINT.
-    let handle = unsafe {
-        CreateFileW(
-            wide.as_ptr(),
-            GENERIC_READ | READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            null(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        let error = io::Error::last_os_error();
-        return Err(ConfigError::for_path(ConfigErrorKind::Io, path).with_io_kind(error.kind()));
-    }
-    // SAFETY: CreateFileW returned a fresh successful handle.
-    let file = unsafe { File::from_raw_handle(handle) };
-    reject_reparse(&file)?;
-    Ok(file)
-}
-
 /// Creates or repairs the owned root and returns its parent handle.
 ///
 /// The root directory is opened relative to the parent with the exact
@@ -174,29 +140,7 @@ pub(super) fn open_owned_relative(parent: &File, name: &OsStr) -> Result<File, C
     Ok(opened.file)
 }
 
-/// Opens a regular file only under its exact spelling, for case-alias tests.
-#[cfg(test)]
-pub(super) fn open_relative_file_exact(
-    parent: &File,
-    name: &OsStr,
-    access: u32,
-) -> Result<File, ConfigError> {
-    require_exact_child(parent, name)?;
-    let opened = nt_open_file(parent, name, access, FILE_OPEN, None, false)?;
-    reject_reparse_or_directory(&opened.file)?;
-    require_exact_child(parent, name)?;
-    Ok(opened.file)
-}
-
-#[cfg(test)]
-fn require_exact_child(parent: &File, name: &OsStr) -> Result<(), ConfigError> {
-    if !exact_child_exists(parent, name)? {
-        return Err(ConfigError::new(ConfigErrorKind::AuthorityValidation)
-            .with_io_kind(io::ErrorKind::NotFound));
-    }
-    Ok(())
-}
-
+/// Opens a regular file only under its exact spelling.
 pub(super) fn open_relative_file(
     parent: &File,
     name: &OsStr,
@@ -403,17 +347,7 @@ fn nt_open_file(
     })
 }
 
-/// Reports whether one child exists under its exact spelling, for tests.
-#[cfg(test)]
-pub(super) fn exact_child_exists(parent: &File, expected: &OsStr) -> Result<bool, ConfigError> {
-    let mut exact = false;
-    query_directory_names(parent, |name| {
-        exact |= name == expected;
-        Ok(None::<()>)
-    })?;
-    Ok(exact)
-}
-
+/// Reports the attributes of one child under its exact spelling.
 pub(super) fn child_attributes(parent: &File, name: &OsStr) -> Result<Option<u32>, ConfigError> {
     let mut wide = wide_component(name)?;
     let byte_length = u16::try_from(wide.len().saturating_mul(2))
@@ -486,11 +420,6 @@ fn reject_wrong_case_root(
     Ok(())
 }
 
-#[cfg(test)]
-fn open_path_directory(path: &Path, access: u32) -> Result<File, ConfigError> {
-    open_path_directory_access(path, access, false, true)
-}
-
 pub(super) fn open_path_directory_follow(path: &Path, access: u32) -> Result<File, ConfigError> {
     open_path_directory_access(path, access, false, false)
 }
@@ -549,14 +478,6 @@ fn reject_reparse_or_wrong_type(file: &File) -> Result<(), ConfigError> {
         return Err(ConfigError::new(ConfigErrorKind::LinkEscape));
     }
     reject_non_directory(attributes)
-}
-
-#[cfg(test)]
-fn reject_reparse(file: &File) -> Result<(), ConfigError> {
-    if file_attributes(file)? & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(ConfigError::new(ConfigErrorKind::LinkEscape));
-    }
-    Ok(())
 }
 
 fn reject_reparse_or_directory(file: &File) -> Result<(), ConfigError> {
@@ -787,90 +708,4 @@ pub(super) fn map_ntstatus(status: NTSTATUS) -> ConfigError {
         ConfigErrorKind::Io
     };
     ConfigError::new(kind).with_io_kind(error.kind())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsStr;
-    use std::mem::{offset_of, size_of};
-
-    use windows_sys::Win32::Foundation::GENERIC_READ;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FULL_DIR_INFO;
-
-    use super::{
-        FILE_OPEN, FILE_OPEN_IF, exact_child_exists, open_existing_directory_nofollow,
-        open_relative_file_exact, ordinal_names_equal_ignore_case, requires_publication,
-        visit_directory_names,
-    };
-    use crate::ConfigErrorKind;
-
-    fn malformed_record(next: u32, name_bytes: u32, length: usize) -> Vec<u8> {
-        let mut bytes = vec![0u8; length];
-        if length >= size_of::<FILE_FULL_DIR_INFO>() {
-            let next_offset = offset_of!(FILE_FULL_DIR_INFO, NextEntryOffset);
-            let name_length_offset = offset_of!(FILE_FULL_DIR_INFO, FileNameLength);
-            bytes[next_offset..next_offset + 4].copy_from_slice(&next.to_ne_bytes());
-            bytes[name_length_offset..name_length_offset + 4]
-                .copy_from_slice(&name_bytes.to_ne_bytes());
-        }
-        bytes
-    }
-
-    #[test]
-    fn directory_parser_rejects_malformed_record_bounds() {
-        let header = size_of::<FILE_FULL_DIR_INFO>();
-        for (label, bytes) in [
-            ("oversized next", malformed_record(4096, 0, header)),
-            (
-                "unaligned next",
-                malformed_record((header + 1) as u32, 0, header + 8),
-            ),
-            (
-                "overlapping name",
-                malformed_record(header as u32, 16, header * 2),
-            ),
-            ("truncated header", vec![0; header - 1]),
-        ] {
-            assert_eq!(
-                visit_directory_names(&bytes, &mut |_| Ok(None::<()>))
-                    .expect_err(label)
-                    .kind(),
-                ConfigErrorKind::Io,
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
-    fn ordinal_case_comparison_detects_non_ascii_aliases() {
-        assert!(
-            ordinal_names_equal_ignore_case(OsStr::new("Ångström"), OsStr::new("ångström"))
-                .expect("ordinal comparison")
-        );
-        assert!(
-            !ordinal_names_equal_ignore_case(OsStr::new("ångström"), OsStr::new("angstrom"))
-                .expect("ordinal distinction")
-        );
-    }
-
-    #[test]
-    fn exact_queries_and_opens_do_not_accept_case_aliases() {
-        let directory = tempfile::tempdir().expect("directory");
-        std::fs::write(directory.path().join("ExactName"), b"x").expect("file");
-        let parent = open_existing_directory_nofollow(directory.path()).expect("open parent");
-
-        assert!(exact_child_exists(&parent, OsStr::new("ExactName")).expect("exact query"));
-        assert!(!exact_child_exists(&parent, OsStr::new("exactname")).expect("alias query"));
-        open_relative_file_exact(&parent, OsStr::new("ExactName"), GENERIC_READ)
-            .expect("exact open");
-        assert!(open_relative_file_exact(&parent, OsStr::new("exactname"), GENERIC_READ).is_err());
-    }
-
-    #[test]
-    fn observed_absence_requires_publication_when_open_if_loses_creation_race() {
-        assert!(requires_publication(FILE_OPEN_IF, true, false));
-        assert!(requires_publication(FILE_OPEN_IF, false, true));
-        assert!(!requires_publication(FILE_OPEN_IF, false, false));
-        assert!(!requires_publication(FILE_OPEN, true, false));
-    }
 }

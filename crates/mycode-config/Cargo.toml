@@ -34,8 +34,5 @@ windows-sys = { workspace = true, features = [
     "Win32_System_WindowsProgramming",
 ] }
 
-[dev-dependencies]
-tempfile.workspace = true
-
-[target.'cfg(windows)'.dev-dependencies]
-junction.workspace = true
+[lints]
+workspace = true

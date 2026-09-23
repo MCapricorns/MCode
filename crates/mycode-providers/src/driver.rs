@@ -102,7 +102,7 @@ async fn send_all(sender: &EventStreamSender, events: Vec<StreamEvent>) -> bool 
     false
 }
 
-/// Converts a parser failure into a terminal error event for tests.
+/// Converts a parser failure into a terminal error event.
 pub(crate) fn protocol_error(message: &'static str) -> StreamEvent {
     StreamEvent::Error(ProviderError::with_message(
         mycode_core::ProviderErrorKind::Protocol,

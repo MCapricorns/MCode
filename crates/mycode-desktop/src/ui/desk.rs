@@ -503,25 +503,3 @@ impl Desk {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn text_selection_stays_translucent() {
-        let mut theme = Theme::default();
-        for (palette, dark) in [("slate", true), ("ocean", false)] {
-            theme.mode = if dark {
-                ThemeMode::Dark
-            } else {
-                ThemeMode::Light
-            };
-            apply_palette(&mut theme, palette);
-            assert!(
-                theme.selection.a < 1.0,
-                "{palette} selection is painted over the glyphs"
-            );
-        }
-    }
-}

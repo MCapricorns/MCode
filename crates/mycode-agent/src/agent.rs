@@ -22,7 +22,7 @@ use mycode_core::message::{ContentBlock, Message, StopReason, ToolCall, ToolResu
 use tokio_util::sync::CancellationToken;
 
 use crate::env::TurnEnv;
-use crate::hooks::{GateResult, HookEvent};
+use crate::hooks::HookEvent;
 use crate::turn::{self, TurnFailure};
 
 /// Static provider-neutral agent configuration.
@@ -234,18 +234,6 @@ async fn agent_loop(
                 break;
             }
             has_tool_calls = true;
-        }
-
-        if !has_tool_calls {
-            // The current stop gate always passes. Its payload remains
-            // reserved for a hook-provided follow-up.
-            let mut payload = serde_json::Value::Null;
-            if !matches!(
-                env.hooks.gate(HookEvent::StopGate, &mut payload).await,
-                GateResult::Pass
-            ) {
-                has_tool_calls = true;
-            }
         }
     }
 

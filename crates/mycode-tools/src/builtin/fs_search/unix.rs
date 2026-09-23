@@ -2,33 +2,9 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
-#[cfg(all(test, unix))]
-use std::path::Path;
-
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-
-/// Returns whether `on_disk` and its lower-case alias name the same inode.
-///
-/// Independent of handle-relative resolve so casefold tests can skip a
-/// case-sensitive volume without treating a later resolve error as "unsupported".
-#[cfg(all(test, unix))]
-pub(crate) fn unix_casefold_alias_supported(dir: &Path, on_disk: &str) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let folded = on_disk.to_lowercase();
-    if folded == on_disk {
-        return false;
-    }
-    let Ok(canonical) = std::fs::symlink_metadata(dir.join(on_disk)) else {
-        return false;
-    };
-    let Ok(alias) = std::fs::symlink_metadata(dir.join(folded)) else {
-        return false;
-    };
-    canonical.dev() == alias.dev() && canonical.ino() == alias.ino()
-}
 
 #[cfg(target_os = "macos")]
 pub(crate) fn unix_device_identity(value: libc::dev_t) -> io::Result<u64> {
@@ -145,8 +121,6 @@ pub(crate) fn unix_on_disk_component_name(
             return Err(io::Error::other("walk entry limit reached"));
         }
         unix_clear_errno();
-        #[cfg(test)]
-        limiter.record_entry_access();
         // SAFETY: `owner.0` is a live `DIR*`. A non-null `dirent` is valid
         // until the next `readdir`/`closedir` on this stream.
         let entry = unsafe { libc::readdir(owner.0) };
@@ -326,11 +300,6 @@ pub(crate) fn stable_from_file(file: File) -> io::Result<StableHandle> {
 pub(crate) fn identity_and_kind(file: &File) -> io::Result<(FileIdentity, FsEntryKind)> {
     use std::os::unix::fs::MetadataExt;
 
-    #[cfg(test)]
-    if current_limiter(|limiter| limiter.force_identity_error()).unwrap_or(false) {
-        return Err(io::Error::other("injected file identity query failure"));
-    }
-
     let metadata = file.metadata()?;
     let kind = if metadata.is_file() {
         FsEntryKind::File
@@ -362,7 +331,6 @@ pub(crate) fn open_named_unix(
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
 
-    apply_open_fault(name)?;
     validate_component_name(name)?;
     let c_name = CString::new(name.as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL"))?;
@@ -390,7 +358,7 @@ pub(crate) fn open_named_unix(
     let descriptor = open_unix_descriptor(parent.as_raw_fd(), c_name.as_ptr(), flags, access)?;
     // SAFETY: the descriptor is a fresh owned fd from `openat`/`openat2`.
     let file = unsafe { File::from_raw_fd(descriptor) };
-    enforce_unix_child_containment(parent, &file, expected, name)?;
+    enforce_unix_child_containment(parent, &file, expected)?;
     Ok(file)
 }
 
@@ -410,14 +378,6 @@ pub(crate) fn unix_named_identity(
     let c_name = CString::new(name.as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL"))?;
     let mut stat = MaybeUninit::<libc::stat>::zeroed();
-    #[cfg(test)]
-    apply_access_gate(
-        name,
-        ObservedOpen {
-            access: SearchAccess::Metadata,
-            flags: 0,
-        },
-    )?;
     // SAFETY: `parent` is a live directory fd, `c_name` is a NUL-terminated
     // component, and `stat` is writable. The final link is not followed.
     let status = unsafe {
@@ -441,7 +401,7 @@ pub(crate) fn unix_named_identity(
         ));
     }
     let parent_meta = parent.metadata()?;
-    let child_dev = overridden_child_device(name, stat.st_dev as u64);
+    let child_dev = stat.st_dev as u64;
     if parent_meta.dev() != child_dev {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -513,7 +473,7 @@ pub(crate) fn confirm_named_unix_metadata(
         ));
     }
     let parent_meta = parent.metadata()?;
-    let child_dev = overridden_child_device(name, stat.st_dev as u64);
+    let child_dev = stat.st_dev as u64;
     if parent_meta.dev() != child_dev {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -567,19 +527,6 @@ fn open_unix_descriptor(
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
-        #[cfg(test)]
-        {
-            use std::ffi::CStr;
-            use std::os::unix::ffi::OsStrExt;
-
-            // SAFETY: the caller supplies a live NUL-terminated component.
-            let name = unsafe { CStr::from_ptr(c_name) };
-            apply_access_gate(
-                OsStr::from_bytes(name.to_bytes()),
-                ObservedOpen { access, flags },
-            )?;
-        }
-        #[cfg(not(test))]
         let _ = access;
         // SAFETY: `dirfd` is a live directory fd, `c_name` is NUL-terminated,
         // and flags request a new owned descriptor only.
@@ -615,23 +562,6 @@ fn openat2_beneath(
         mode: 0,
         resolve: OPENAT2_REQUIRED_RESOLVE,
     };
-    #[cfg(test)]
-    {
-        use std::ffi::CStr;
-        use std::os::unix::ffi::OsStrExt;
-
-        // SAFETY: the caller supplies a live NUL-terminated component.
-        let name = unsafe { CStr::from_ptr(c_name) };
-        apply_access_gate(
-            OsStr::from_bytes(name.to_bytes()),
-            ObservedOpen {
-                access,
-                flags,
-                resolve: how.resolve,
-            },
-        )?;
-    }
-    #[cfg(not(test))]
     let _ = access;
     // SAFETY: `dirfd` is a live directory fd, `c_name` is a NUL-terminated
     // component, and `how` is the documented 24-byte `open_how` layout.
@@ -677,13 +607,12 @@ fn enforce_unix_child_containment(
     parent: &File,
     child: &File,
     expected: Option<FsEntryKind>,
-    name: &OsStr,
 ) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let parent_meta = parent.metadata()?;
     let child_meta = child.metadata()?;
-    let child_dev = overridden_child_device(name, child_meta.dev());
+    let child_dev = child_meta.dev();
     if parent_meta.dev() != child_dev {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

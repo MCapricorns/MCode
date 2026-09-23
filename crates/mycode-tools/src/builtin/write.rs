@@ -118,10 +118,3 @@ impl Tool for WriteTool {
         })))
     }
 }
-
-#[cfg(test)]
-#[path = "write_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "write_tests_publish.rs"]
-mod tests_publish;

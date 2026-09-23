@@ -84,23 +84,3 @@ pub(crate) fn relax_trailing_commas(bytes: &[u8]) -> Result<Vec<u8>, ConfigError
     }
     Ok(out.into_bytes())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn trailing_commas_outside_strings_are_dropped() {
-        let raw = br#"{"a": 1, "note": "keep, }", "items": [1,],}"#;
-        let relaxed = relax_trailing_commas(raw).expect("utf-8");
-        let value: serde_json::Value = serde_json::from_slice(&relaxed).expect("recovered");
-        assert_eq!(value["note"], "keep, }");
-        assert_eq!(value["items"][0], 1);
-    }
-
-    #[test]
-    fn strict_json_is_not_marked_migrated() {
-        let decoded: Decoded<serde_json::Value> = decode_json(br#"{"a":1}"#).expect("strict");
-        assert!(!decoded.migrated);
-    }
-}

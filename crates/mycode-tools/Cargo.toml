@@ -66,9 +66,5 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Threading",
 ] }
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread"] }
-tempfile.workspace = true
-
-[target.'cfg(windows)'.dev-dependencies]
-junction.workspace = true
+[lints]
+workspace = true

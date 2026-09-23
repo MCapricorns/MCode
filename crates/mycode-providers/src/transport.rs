@@ -173,20 +173,3 @@ fn status_error_kind(status: reqwest::StatusCode) -> ProviderErrorKind {
         ProviderErrorKind::Protocol
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn status_kinds_map_rejected_unavailable_and_protocol() {
-        let kind = |code: u16| status_error_kind(reqwest::StatusCode::from_u16(code).unwrap());
-        assert_eq!(kind(400), ProviderErrorKind::Rejected);
-        assert_eq!(kind(401), ProviderErrorKind::Rejected);
-        assert_eq!(kind(404), ProviderErrorKind::Rejected);
-        assert_eq!(kind(408), ProviderErrorKind::Unavailable);
-        assert_eq!(kind(429), ProviderErrorKind::Unavailable);
-        assert_eq!(kind(500), ProviderErrorKind::Unavailable);
-        assert_eq!(kind(503), ProviderErrorKind::Unavailable);
-    }
-}

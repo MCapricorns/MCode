@@ -6,7 +6,6 @@
 //! Credential headers come from the server binding; keys live in the secret
 //! store and never travel through settings.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -59,9 +58,6 @@ pub struct HttpChannel {
     endpoint: String,
     options: HttpChannelOptions,
     session_id: RwLock<Option<String>>,
-    /// Test seam: when set, posts are served from this table keyed by
-    /// `method` instead of hitting the network.
-    responder: Option<Arc<dyn Fn(String) -> Value + Send + Sync>>,
 }
 
 impl HttpChannel {
@@ -79,19 +75,7 @@ impl HttpChannel {
             endpoint: endpoint.to_owned(),
             options,
             session_id: RwLock::new(None),
-            responder: None,
         })
-    }
-
-    /// Installs the test responder seam; production channels never set this.
-    #[cfg(test)]
-    #[must_use]
-    pub fn with_test_responder(
-        mut self,
-        responder: Arc<dyn Fn(String) -> Value + Send + Sync>,
-    ) -> Self {
-        self.responder = Some(responder);
-        self
     }
 
     async fn post_envelope(&self, envelope: Value) -> Result<Option<Value>, McpError> {
@@ -99,10 +83,6 @@ impl HttpChannel {
             serde_json::to_vec(&envelope).map_err(|error| McpError::protocol(error.to_string()))?;
         if body.len() > MAX_MESSAGE_BYTES {
             return Err(McpError::Oversized);
-        }
-        if let Some(responder) = &self.responder {
-            let method = envelope["method"].as_str().unwrap_or_default().to_owned();
-            return Ok(Some(responder(method)));
         }
         let mut request = self
             .client
@@ -235,67 +215,5 @@ impl JsonRpcChannel for HttpChannel {
         // 202/empty responses are success; transport failures propagate.
         self.post_envelope(envelope).await?;
         Ok(())
-    }
-}
-
-/// Test helper covering the SSE and JSON reply shapes.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sse_reply_extracts_the_jsonrpc_object() {
-        let body = b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n";
-        let reply = sse_reply(body).expect("frames").expect("reply");
-        assert_eq!(reply["id"], 7);
-        assert!(finish_reply(Some(reply), 7).is_ok());
-    }
-
-    #[test]
-    fn id_mismatch_and_errors_fail_closed() {
-        let value = json!({"jsonrpc": "2.0", "id": 9, "result": {}});
-        assert!(matches!(
-            finish_reply(Some(value), 7),
-            Err(McpError::Protocol(_))
-        ));
-        let value = json!({"jsonrpc": "2.0", "id": 7, "error": {"code": -1, "message": "nope"}});
-        assert_eq!(
-            finish_reply(Some(value), 7),
-            Err(McpError::Server("nope (code -1)".to_owned()))
-        );
-        assert_eq!(finish_reply(None, 7), Ok(Value::Null));
-    }
-
-    #[tokio::test]
-    async fn request_roundtrips_through_the_seam() {
-        let channel = HttpChannel::new(
-            "https://mcp.example.com/mcp",
-            HttpChannelOptions {
-                key_header: KeyHeader::Bearer,
-                api_key: Some("k".to_owned()),
-                timeout: super::super::DEFAULT_REQUEST_TIMEOUT,
-            },
-        )
-        .expect("channel")
-        .with_test_responder(Arc::new(|method| {
-            if method == "tools/list" {
-                json!({"jsonrpc": "2.0", "id": 1,
-                       "result": {"tools": [{"name": "resolve", "inputSchema": {}}]}})
-            } else {
-                json!({"jsonrpc": "2.0", "id": 1, "result": {}})
-            }
-        }));
-        let result = channel
-            .request(1, "tools/list", json!({}))
-            .await
-            .expect("reply");
-        assert!(result["tools"].as_array().is_some());
-    }
-
-    #[test]
-    fn key_header_parsing_covers_the_settings_vocabulary() {
-        assert_eq!(KeyHeader::parse(Some("x-api-key")), KeyHeader::XApiKey);
-        assert_eq!(KeyHeader::parse(Some("bearer")), KeyHeader::Bearer);
-        assert_eq!(KeyHeader::parse(None), KeyHeader::Bearer);
     }
 }

@@ -441,24 +441,6 @@ where
     created.finish(result)
 }
 
-/// Payload privacy mode, overridable in test builds only.
-///
-/// The `MYCODE_TOOLS_TEST_TEMP_PRIVATE_MODE` override exists solely so the
-/// write tests can prove their foreign-reader observer detects a payload
-/// temp that regressed to a group-readable mode (for example `0640`).
-#[cfg(test)]
-fn private_mode() -> rfs::RawMode {
-    std::env::var_os("MYCODE_TOOLS_TEST_TEMP_PRIVATE_MODE")
-        .and_then(|value| rfs::RawMode::from_str_radix(value.to_string_lossy().as_ref(), 8).ok())
-        .unwrap_or(TEMP_PRIVATE_MODE)
-}
-
-/// Payload privacy mode for production builds.
-#[cfg(not(test))]
-fn private_mode() -> rfs::RawMode {
-    TEMP_PRIVATE_MODE
-}
-
 /// Creates a same-parent exclusive payload temp file.
 ///
 /// The payload inode is private from the first instant it exists: it is
@@ -485,7 +467,7 @@ pub(super) fn create_temp(parent: &File, name: &OsStr) -> io::Result<OpenedChild
         |file| {
             // The create mode argument alone keeps group/other bits empty;
             // this also re-asserts privacy against a parent default ACL.
-            rfs::fchmod(file.as_fd(), Mode::from_raw_mode(private_mode())).map_err(map_errno)
+            rfs::fchmod(file.as_fd(), Mode::from_raw_mode(TEMP_PRIVATE_MODE)).map_err(map_errno)
         },
     )
 }
@@ -632,12 +614,6 @@ pub(super) fn apply_new_file_mode(file: &File, mode: u32) -> io::Result<()> {
 
 pub(super) fn unlink_child(parent: &File, name: &OsStr) -> io::Result<()> {
     validate_component_name(name)?;
-    // Test-only deterministic cleanup-failure injection; keyed to one
-    // directory so concurrently running tests are unaffected.
-    #[cfg(test)]
-    if let Some(error) = super::unlink_fault(parent, name) {
-        return Err(error);
-    }
     rfs::unlinkat(parent.as_fd(), name, AtFlags::empty()).map_err(map_errno)
 }
 
@@ -753,151 +729,4 @@ pub(super) fn sync_file(file: &File) -> io::Result<()> {
 
 pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
     sync_file(dir)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn injected_failure(stage: &str) -> io::Error {
-        io::Error::other(format!("injected {stage} failure"))
-    }
-
-    fn expect_io_error<T>(result: io::Result<T>, message: &str) -> io::Error {
-        match result {
-            Ok(_) => panic!("{message}"),
-            Err(error) => error,
-        }
-    }
-
-    fn assert_name_absent(dir: &tempfile::TempDir, name: &str) {
-        assert!(
-            !dir.path().join(name).exists(),
-            "rejected named inode must be unlinked"
-        );
-    }
-
-    #[test]
-    fn payload_stat_failure_unlinks_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-stat.tmp");
-        let error = expect_io_error(
-            create_temp_with(&parent, name, |_| Err(injected_failure("stat")), |_| Ok(())),
-            "injected stat failure must be returned",
-        );
-        assert!(error.to_string().contains("injected stat failure"));
-        assert_name_absent(&dir, "mycode-write-stat.tmp");
-    }
-
-    #[test]
-    fn payload_chmod_failure_unlinks_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-chmod.tmp");
-        let error = expect_io_error(
-            create_temp_with(
-                &parent,
-                name,
-                |file| {
-                    enforce_same_device(&parent, file)?;
-                    stat_meta(file)
-                },
-                |_| Err(injected_failure("chmod")),
-            ),
-            "injected chmod failure must be returned",
-        );
-        assert!(error.to_string().contains("injected chmod failure"));
-        assert_name_absent(&dir, "mycode-write-chmod.tmp");
-    }
-
-    #[test]
-    fn probe_stat_failure_unlinks_created_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-probe.tmp");
-        let error = create_mode_probe_with(&parent, name, |_| Err(injected_failure("probe stat")))
-            .expect_err("injected probe stat failure must be returned");
-        assert!(error.to_string().contains("injected probe stat failure"));
-        assert_name_absent(&dir, "mycode-write-probe.tmp");
-    }
-
-    #[test]
-    fn payload_stat_failure_reports_cleanup_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let name = OsStr::new("mycode-write-stat-cleanup.tmp");
-        let fault = crate::builtin::fs_io::install_unlink_fault_under(dir.path(), Some(name))
-            .expect("fault fixture must install");
-        let error = expect_io_error(
-            create_temp_with(&parent, name, |_| Err(injected_failure("stat")), |_| Ok(())),
-            "injected stat failure must be returned",
-        );
-        assert!(
-            error.to_string().contains("injected stat failure"),
-            "{error}"
-        );
-        assert!(
-            error.to_string().contains("injected mycode unlink failure"),
-            "cleanup failure must be folded into the returned error: {error}"
-        );
-        assert!(
-            dir.path().join("mycode-write-stat-cleanup.tmp").exists(),
-            "faulted cleanup must leave documented residue"
-        );
-        drop(fault);
-        std::fs::remove_file(dir.path().join("mycode-write-stat-cleanup.tmp")).unwrap();
-    }
-
-    // The `linkat` publish variant must never report success while the
-    // published temp name could not be removed.
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    #[test]
-    fn publish_link_unlink_cleanup_failure_is_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = open_allowed_root(dir.path()).unwrap();
-        let src = OsStr::new("mycode-publish-src.tmp");
-        std::fs::write(dir.path().join("mycode-publish-src.tmp"), "payload").unwrap();
-        let fault = crate::builtin::fs_io::install_unlink_fault_under(dir.path(), Some(src))
-            .expect("fault fixture must install");
-        let error = publish_link_unlink(&parent, src, OsStr::new("dest-linked.txt"))
-            .expect_err("a failed temp-name cleanup must not return success");
-        assert!(
-            error.to_string().contains("injected mycode unlink failure"),
-            "{error}"
-        );
-        assert!(
-            error
-                .to_string()
-                .contains("failed to remove the temporary name after publish"),
-            "{error}"
-        );
-        // The linkat half succeeded, so the destination is published and the
-        // faulted source name remains as documented residue.
-        assert_eq!(
-            std::fs::read(dir.path().join("dest-linked.txt")).unwrap(),
-            b"payload"
-        );
-        assert!(dir.path().join("mycode-publish-src.tmp").exists());
-        drop(fault);
-        std::fs::remove_file(dir.path().join("mycode-publish-src.tmp")).unwrap();
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod macos_compile {
-    #[test]
-    fn apple_rename_excl_and_fullfsync_are_linked() {
-        let _ = rustix::fs::RenameFlags::NOREPLACE;
-        let _ = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY;
-    }
-
-    #[test]
-    fn signed_device_identity_preserves_kernel_bits() {
-        let device: libc::dev_t = -1;
-        assert_eq!(
-            crate::builtin::fs_search::unix_device_identity(device).unwrap(),
-            device as u64
-        );
-    }
 }

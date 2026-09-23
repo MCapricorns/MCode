@@ -572,7 +572,6 @@ pub(super) fn read_child_text(
         if read == 0 {
             break;
         }
-        limiter.record_ignore_read(read);
         if read > room {
             return Err(ignore_too_large());
         }

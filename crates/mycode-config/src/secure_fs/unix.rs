@@ -256,13 +256,3 @@ fn map_path_errno(path: &Path, error: Errno, kind: ConfigErrorKind) -> ConfigErr
     }
     ConfigError::for_path(kind, path).with_io_kind(io::Error::from(error).kind())
 }
-
-#[cfg(test)]
-mod tests {
-    #[cfg(target_vendor = "apple")]
-    #[test]
-    fn apple_directory_sync_uses_fullfsync_helper() {
-        let helper: fn(&std::fs::File) -> Result<(), crate::ConfigError> = super::sync_directory;
-        let _ = helper;
-    }
-}

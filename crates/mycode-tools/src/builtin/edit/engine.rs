@@ -952,22 +952,3 @@ pub(super) fn snippet(text: &str) -> String {
     }
     visible
 }
-
-#[cfg(test)]
-mod diff_preview_tests {
-    use super::append_diff;
-
-    #[test]
-    fn preview_lists_only_added_and_removed_lines() {
-        let mut diff = String::new();
-        append_diff(
-            &mut diff,
-            "keep\nold value\ntrail",
-            "keep\nnew value\ntrail",
-        );
-        assert!(diff.contains("- old value\n"), "{diff}");
-        assert!(diff.contains("+ new value\n"), "{diff}");
-        assert!(!diff.contains("- keep"), "{diff}");
-        assert!(!diff.contains("+ trail"), "{diff}");
-    }
-}

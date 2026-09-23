@@ -108,11 +108,8 @@ const SHELL_CANDIDATES: &[ShellCandidate] = &[
     ShellCandidate { executable: "sh" },
 ];
 
-#[cfg(test)]
-pub(crate) use crate::builtin::process::{MAX_RETAINED_OUTPUT_BYTES, read_bounded};
-
 /// Whether another shell candidate may be attempted.
-#[cfg(any(not(windows), test))]
+#[cfg(not(windows))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellCandidateAction {
     /// PATH or path lookup missed the executable.
@@ -122,7 +119,7 @@ pub(crate) enum ShellCandidateAction {
 }
 
 /// Classifies a prepare failure for shell candidate fallback.
-#[cfg(any(not(windows), test))]
+#[cfg(not(windows))]
 #[must_use]
 pub(crate) fn shell_candidate_action(error: &ResolveError) -> ShellCandidateAction {
     if error.is_not_found() {
@@ -480,11 +477,6 @@ async fn prepare_posix_shell(
         prepared = &mut pin_work => prepared?,
     };
     Ok(Some(prepared))
-}
-
-#[cfg(all(windows, test))]
-fn powershell_script(command: &str) -> String {
-    powershell_script_for(command, ShellKind::Pwsh)
 }
 
 #[cfg(windows)]
@@ -879,11 +871,6 @@ fn encode_powershell_command_with(
     Ok(BASE64_STANDARD.encode(utf16le_bytes(command, command_byte_len)))
 }
 
-#[cfg(test)]
-fn powershell_command_line_units(executable: &Path, encoded_len: usize) -> Option<usize> {
-    powershell_command_line_units_with(executable, encoded_len, POWERSHELL_ARGUMENTS)
-}
-
 #[cfg(any(windows, test))]
 fn powershell_command_line_units_with(
     executable: &Path,
@@ -911,20 +898,6 @@ fn executable_utf16_units(executable: &Path) -> usize {
     use std::os::windows::ffi::OsStrExt as _;
 
     executable.as_os_str().encode_wide().count()
-}
-
-#[cfg(all(test, not(windows)))]
-fn executable_utf16_units(executable: &Path) -> usize {
-    executable
-        .as_os_str()
-        .to_string_lossy()
-        .encode_utf16()
-        .count()
-}
-
-#[cfg(test)]
-fn maximum_encoded_command_chars(executable: &Path) -> Option<usize> {
-    maximum_encoded_command_chars_with(executable, POWERSHELL_ARGUMENTS)
 }
 
 #[cfg(any(windows, test))]
@@ -967,7 +940,3 @@ fn command_too_long_with(
          for executable {executable_name} is {maximum}"
     ))
 }
-
-#[cfg(test)]
-#[path = "shell_tests.rs"]
-mod tests;

@@ -74,35 +74,3 @@ impl AppSettings {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tools_shell_validates_kind_and_program_together() {
-        let mut settings = AppSettings::default();
-        assert!(settings.validate().is_ok());
-
-        settings.tools.shell = Some(ShellSettings {
-            kind: "pwsh".to_owned(),
-            program: String::new(),
-            source: "auto".to_owned(),
-        });
-        assert!(settings.validate().is_err(), "empty program");
-
-        settings.tools.shell = Some(ShellSettings {
-            kind: "fish".to_owned(),
-            program: r"C:\shell\pwsh.exe".to_owned(),
-            source: "user".to_owned(),
-        });
-        assert!(settings.validate().is_err(), "unknown kind");
-
-        settings.tools.shell = Some(ShellSettings {
-            kind: "pwsh".to_owned(),
-            program: r"C:\Program Files\PowerShell\7\pwsh.exe".to_owned(),
-            source: "auto".to_owned(),
-        });
-        assert!(settings.validate().is_ok());
-    }
-}

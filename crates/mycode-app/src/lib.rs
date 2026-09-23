@@ -557,16 +557,3 @@ struct WithReply {
     command: BridgeCommand,
     reply: oneshot::Sender<BridgeReply>,
 }
-
-/// Shared test home: one throwaway layout under a tempdir parent, used by
-/// the unit tests across modules (export.rs previously kept a duplicate).
-#[cfg(test)]
-pub(crate) mod test_support {
-    use mycode_config::HomeLayout;
-
-    pub(crate) fn home() -> (tempfile::TempDir, HomeLayout) {
-        let parent = tempfile::tempdir().expect("parent");
-        let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
-        (parent, layout)
-    }
-}

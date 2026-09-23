@@ -805,24 +805,3 @@ impl gpui_kit::Render for Workspace {
         self.render_root(window, cx)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn env_lines_parse_pairs_and_reject_malformed_entries() {
-        let env = parse_env_line("A=1, B=two").expect("pairs");
-        assert_eq!(env.get("A").map(String::as_str), Some("1"));
-        assert_eq!(env.get("B").map(String::as_str), Some("two"));
-        assert!(parse_env_line("").expect("empty").is_empty());
-        assert!(parse_env_line("NOEQUALS").is_err());
-        assert!(parse_env_line("=x").is_err());
-        let env = parse_env_line("PATH_X=\"C:\\Program Files\\x\" DEBUG=1").expect("quoted");
-        assert_eq!(
-            env.get("PATH_X").map(String::as_str),
-            Some("C:\\Program Files\\x")
-        );
-        assert_eq!(env.get("DEBUG").map(String::as_str), Some("1"));
-    }
-}

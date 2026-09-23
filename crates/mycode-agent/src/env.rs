@@ -32,7 +32,7 @@ pub struct TurnEnv<'a> {
     ///
     /// [`TurnOutcome::Aborted`]: mycode_core::events::TurnOutcome::Aborted
     pub cancel: CancellationToken,
-    /// Fan-out bus for Agent events (UI, telemetry, tests subscribe).
+    /// Fan-out bus for Agent events (UI and telemetry subscribe).
     pub events: broadcast::Sender<AgentEvent>,
     /// Working directory tools resolve relative paths against.
     pub cwd: PathBuf,

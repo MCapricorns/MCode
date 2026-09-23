@@ -36,50 +36,6 @@ const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 /// Prefix read for magic-byte classification.
 const IMAGE_HEADER_BYTES: usize = 4_096;
 
-#[cfg(test)]
-type InitialHashHook = std::sync::Arc<dyn Fn(&Path) + Send + Sync>;
-
-/// Restores the previous initial-hash test hook on drop.
-#[cfg(test)]
-pub(super) struct InitialHashHookGuard(Option<InitialHashHook>);
-
-#[cfg(test)]
-impl Drop for InitialHashHookGuard {
-    fn drop(&mut self) {
-        let mut slot = initial_hash_hook()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot = self.0.take();
-    }
-}
-
-#[cfg(test)]
-fn initial_hash_hook() -> &'static std::sync::Mutex<Option<InitialHashHook>> {
-    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<InitialHashHook>>> =
-        std::sync::OnceLock::new();
-    HOOK.get_or_init(|| std::sync::Mutex::new(None))
-}
-
-/// Installs an observer invoked before the initial executable hash.
-#[cfg(test)]
-pub(super) fn install_initial_hash_hook(hook: InitialHashHook) -> InitialHashHookGuard {
-    let mut slot = initial_hash_hook()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    InitialHashHookGuard(slot.replace(hook))
-}
-
-#[cfg(test)]
-fn observe_initial_hash(path: &Path) {
-    let hook = initial_hash_hook()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    if let Some(hook) = hook {
-        hook(path);
-    }
-}
-
 /// Retained executable object used as the launch anchor.
 #[derive(Debug)]
 pub(super) struct PinnedImage {
@@ -145,23 +101,6 @@ pub(super) fn encode_hex(bytes: &[u8]) -> String {
 ///
 /// Returns [`ToolError::InvalidArgs`] when the program cannot be resolved
 /// fail-closed and [`ToolError::Execution`] when the call is cancelled.
-#[cfg(test)]
-pub(super) fn pin_program(
-    session_cwd: &Path,
-    program: &str,
-    args: &[String],
-    cancel: &CancellationToken,
-) -> Result<PinnedImage, ToolError> {
-    pin_program_with_path(
-        session_cwd,
-        program,
-        args,
-        std::env::var_os("PATH").as_deref(),
-        cancel,
-    )
-    .map_err(ResolveError::into_tool_error)
-}
-
 /// Resolves `program` against an already-snapshotted PATH value.
 ///
 /// # Errors
@@ -374,19 +313,6 @@ fn is_path_program(program: &str) -> bool {
     }
 }
 
-#[cfg(all(test, unix))]
-fn resolve_program(
-    program: &str,
-    session_cwd: &Path,
-    path_var: Option<&std::ffi::OsStr>,
-) -> Result<PathBuf, ResolveError> {
-    if is_path_program(program) {
-        resolve_path_program(program, session_cwd).map_err(ResolveError::Other)
-    } else {
-        resolve_basename(program, path_var)
-    }
-}
-
 fn resolve_path_program(program: &str, session_cwd: &Path) -> Result<PathBuf, ToolError> {
     let path = Path::new(program);
     #[cfg(windows)]
@@ -413,28 +339,6 @@ fn resolve_path_program(program: &str, session_cwd: &Path) -> Result<PathBuf, To
         ));
     }
     Ok(normalized)
-}
-
-#[cfg(test)]
-fn resolve_basename(
-    name: &str,
-    path_var: Option<&std::ffi::OsStr>,
-) -> Result<PathBuf, ResolveError> {
-    let path_var = path_var.unwrap_or_default();
-    let mut searched = 0usize;
-    for entry in std::env::split_paths(path_var) {
-        if !is_searchable_path_entry(&entry) {
-            continue;
-        }
-        searched += 1;
-        if let Some(found) = candidate_in_dir(&entry, name)? {
-            return Ok(found);
-        }
-    }
-    Err(ResolveError::NotFound {
-        program: name.to_owned(),
-        searched: Some(searched),
-    })
 }
 
 fn candidate_in_dir(dir: &Path, name: &str) -> Result<Option<PathBuf>, ResolveError> {
@@ -516,8 +420,6 @@ fn pin_candidate(path: &Path, cancel: &CancellationToken) -> Result<PinnedImage,
     }
     file.seek(SeekFrom::Start(0))
         .map_err(|err| ToolError::InvalidArgs(format!("program could not be rewound: {err}")))?;
-    #[cfg(test)]
-    observe_initial_hash(&canonical_path);
     let digest = hash_file_cancellable(&mut file, &mut || check_cancelled(cancel))?;
     Ok(PinnedImage {
         file,
@@ -878,7 +780,3 @@ fn windows_extended_length_path(path: &Path) -> PathBuf {
         _ => path.to_path_buf(),
     }
 }
-
-#[cfg(test)]
-#[path = "resolve_tests.rs"]
-mod tests;

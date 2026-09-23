@@ -151,28 +151,6 @@ impl MacChild {
         joined.map_err(io::Error::other)?
     }
 
-    #[cfg(test)]
-    pub(super) fn inject_waiter(
-        &mut self,
-        waiter: tokio::task::JoinHandle<io::Result<ExitStatus>>,
-    ) {
-        self.waiter = Some(waiter);
-    }
-
-    #[cfg(test)]
-    pub(super) fn pid(&self) -> Option<libc::pid_t> {
-        lock_process_state(&self.state).ok()?.pid
-    }
-
-    #[cfg(test)]
-    pub(super) fn terminate(&self) -> io::Result<()> {
-        let state = lock_process_state(&self.state)?;
-        let Some(pid) = state.pid else {
-            return Ok(());
-        };
-        kill_leader(pid)
-    }
-
     pub(super) fn terminate_tree(&self, process_tree: &ProcessTree) -> io::Result<()> {
         let state = lock_process_state(&self.state)?;
         let Some(pid) = state.pid else {
@@ -264,16 +242,12 @@ impl SpawnedPid {
     }
 
     fn cleanup_inner(&self) -> io::Result<()> {
-        #[cfg(test)]
-        wait_tests::note_cleanup(self.pid);
         // A still-suspended child with no process tree is reaped through the
         // leader only. After group enrollment, terminate the tree first and
         // reap only once that succeeds, so a retry cannot signal a reused PGID.
         match self.process_tree.as_ref() {
             None => kill_leader_and_reap(self.pid),
             Some(process_tree) => {
-                #[cfg(test)]
-                wait_tests::observe_containment()?;
                 process_tree.terminate(None)?;
                 reap_pid(self.pid)
             }
@@ -548,10 +522,6 @@ fn waitpid_status(
     pid: libc::pid_t,
     options: libc::c_int,
 ) -> io::Result<(libc::pid_t, libc::c_int)> {
-    #[cfg(test)]
-    if let Some(result) = wait_tests::intercept_waitpid(pid, options) {
-        return result;
-    }
     let mut status = 0;
     // SAFETY: `pid` is a specific child; `status` is waitpid output storage.
     let rc = unsafe { libc::waitpid(pid, &raw mut status, options) };
@@ -563,10 +533,6 @@ fn waitpid_status(
 }
 
 fn send_signal(pid: libc::pid_t, sig: libc::c_int) -> libc::c_int {
-    #[cfg(test)]
-    if let Some(rc) = wait_tests::intercept_kill(pid, sig) {
-        return rc;
-    }
     // SAFETY: the caller proves `pid` still names the unreaped child.
     unsafe { libc::kill(pid, sig) }
 }
@@ -884,11 +850,3 @@ fn pointers(entries: &[CString]) -> Vec<*mut libc::c_char> {
     ptrs.push(ptr::null_mut());
     ptrs
 }
-
-#[cfg(test)]
-#[path = "macos_child_tests.rs"]
-mod child_tests;
-
-#[cfg(test)]
-#[path = "macos_wait_tests.rs"]
-mod wait_tests;

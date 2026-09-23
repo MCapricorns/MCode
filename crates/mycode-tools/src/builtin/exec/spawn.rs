@@ -462,8 +462,6 @@ fn spawn_program(
             process_tree,
             _pin: pinned,
             _lease: lease,
-            #[cfg(test)]
-            _on_release: ReleaseFlag(None),
         }),
     })
 }
@@ -478,30 +476,8 @@ struct LiveSpawn {
     process_tree: ProcessTree,
     _pin: PinnedImage,
     _lease: ExecutionLease,
-    #[cfg(test)]
-    _on_release: ReleaseFlag,
 }
 
-/// Last field of [`LiveSpawn`] so pin/lease drop before tests observe release.
-#[cfg(test)]
-struct ReleaseFlag(Option<Arc<AtomicBool>>);
-
-#[cfg(test)]
-impl Drop for ReleaseFlag {
-    fn drop(&mut self) {
-        if let Some(flag) = &self.0 {
-            flag.store(true, Ordering::Release);
-        }
-    }
-}
-
-#[cfg_attr(
-    all(test, windows, target_arch = "x86_64"),
-    expect(
-        clippy::large_enum_variant,
-        reason = "test fixture variant is intentionally tiny next to a live child"
-    )
-)]
 enum Inner {
     #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
     Tokio(tokio::process::Child),
@@ -509,23 +485,13 @@ enum Inner {
     Windows(super::windows::WindowsChild),
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     Mac(super::macos::MacChild),
-    /// Deterministic cleanup owner used to inject teardown failures in tests.
-    #[cfg(test)]
-    Fixture(FixtureBehavior),
+    /// Platform without a supported process runtime.
     #[cfg(not(any(
         all(windows, target_arch = "x86_64"),
         all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     Unsupported,
-}
-
-/// How a fixture child behaves during collect.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FixtureBehavior {
-    Hang,
-    FailCollect,
 }
 
 impl Drop for SpawnedProgram {
@@ -572,11 +538,6 @@ fn take_pending_cleanup(pending: &std::sync::Mutex<Option<LiveSpawn>>) -> Option
         .take()
 }
 
-#[cfg(test)]
-fn observe_injected_teardown() -> Result<(), std::io::Error> {
-    teardown_probe::observe()
-}
-
 fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
     match &mut live.inner {
         #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
@@ -601,8 +562,6 @@ fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
             child.terminate_tree(&live.process_tree)?;
             child.reap_blocking()
         }
-        #[cfg(test)]
-        Inner::Fixture(_) => observe_injected_teardown(),
         #[cfg(not(any(
             all(windows, target_arch = "x86_64"),
             all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
@@ -673,8 +632,6 @@ async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
                 }),
             }
         }
-        #[cfg(test)]
-        Inner::Fixture(_) => observe_injected_teardown(),
         #[cfg(not(any(
             all(windows, target_arch = "x86_64"),
             all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
@@ -764,16 +721,6 @@ impl SpawnedProgram {
                 drain_pipes(&mut stdout_pipe, &mut stderr_pipe, stdout, stderr).await?;
                 child.wait().await
             }
-            #[cfg(test)]
-            Inner::Fixture(behavior) => {
-                let _ = (stdout, stderr);
-                match *behavior {
-                    FixtureBehavior::Hang => std::future::pending().await,
-                    FixtureBehavior::FailCollect => {
-                        Err(std::io::Error::other("injected collect failure"))
-                    }
-                }
-            }
             #[cfg(not(any(
                 all(windows, target_arch = "x86_64"),
                 all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
@@ -801,130 +748,3 @@ impl SpawnedProgram {
         }
     }
 }
-
-#[cfg(test)]
-mod teardown_probe {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc;
-    use std::sync::{Arc, Mutex, OnceLock};
-
-    pub(super) struct TeardownProbeGuard {
-        probe: Arc<Probe>,
-        _serialize: std::sync::MutexGuard<'static, ()>,
-    }
-
-    struct Probe {
-        remaining_failures: AtomicUsize,
-        attempts: AtomicUsize,
-        in_flight: AtomicUsize,
-        max_in_flight: AtomicUsize,
-        failed: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-        release: Mutex<Option<mpsc::Receiver<()>>>,
-    }
-
-    fn probe_serialize() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn slot() -> &'static Mutex<Option<Arc<Probe>>> {
-        static SLOT: OnceLock<Mutex<Option<Arc<Probe>>>> = OnceLock::new();
-        SLOT.get_or_init(|| Mutex::new(None))
-    }
-
-    impl Drop for TeardownProbeGuard {
-        fn drop(&mut self) {
-            *slot()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        }
-    }
-
-    impl TeardownProbeGuard {
-        pub(super) fn attempts(&self) -> usize {
-            self.probe.attempts.load(Ordering::Acquire)
-        }
-
-        pub(super) fn max_in_flight(&self) -> usize {
-            self.probe.max_in_flight.load(Ordering::Acquire)
-        }
-    }
-
-    pub(super) fn install_first_failure_probe() -> (
-        TeardownProbeGuard,
-        tokio::sync::oneshot::Receiver<()>,
-        mpsc::Sender<()>,
-    ) {
-        let serialize = probe_serialize()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (failed_tx, failed_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let probe = Arc::new(Probe {
-            remaining_failures: AtomicUsize::new(1),
-            attempts: AtomicUsize::new(0),
-            in_flight: AtomicUsize::new(0),
-            max_in_flight: AtomicUsize::new(0),
-            failed: Mutex::new(Some(failed_tx)),
-            release: Mutex::new(Some(release_rx)),
-        });
-        *slot()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&probe));
-        (
-            TeardownProbeGuard {
-                probe,
-                _serialize: serialize,
-            },
-            failed_rx,
-            release_tx,
-        )
-    }
-
-    pub(super) fn observe() -> std::io::Result<()> {
-        let probe = slot()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let Some(probe) = probe else {
-            return Ok(());
-        };
-        probe.attempts.fetch_add(1, Ordering::AcqRel);
-        let flying = probe.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-        probe.max_in_flight.fetch_max(flying, Ordering::AcqRel);
-        let result = match probe.remaining_failures.try_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |remaining| remaining.checked_sub(1),
-        ) {
-            Ok(_) => {
-                if let Some(failed) = probe
-                    .failed
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take()
-                {
-                    let _ = failed.send(());
-                }
-                Err(std::io::Error::other("injected teardown failure"))
-            }
-            Err(_) => {
-                if let Some(release) = probe
-                    .release
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take()
-                {
-                    let _ = release.recv();
-                }
-                Ok(())
-            }
-        };
-        probe.in_flight.fetch_sub(1, Ordering::AcqRel);
-        result
-    }
-}
-
-#[cfg(test)]
-#[path = "spawn_tests.rs"]
-mod tests;

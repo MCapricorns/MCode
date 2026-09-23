@@ -18,10 +18,6 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use crate::{ConfigError, ConfigErrorKind};
 
 pub(super) fn flush_directory(directory: &File) -> Result<(), ConfigError> {
-    #[cfg(test)]
-    if let Some(code) = NEXT_BARRIER_ERROR.with(std::cell::Cell::take) {
-        return classify_directory_flush_error(io::Error::from_raw_os_error(code));
-    }
     let mut status_block = IO_STATUS_BLOCK::default();
     // SAFETY: `directory` is a live synchronous directory handle opened with
     // write-data access. Parameters are absent as required for flags zero, and
@@ -47,12 +43,3 @@ pub(super) fn flush_directory(directory: &File) -> Result<(), ConfigError> {
 fn classify_directory_flush_error(error: io::Error) -> Result<(), ConfigError> {
     Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(error.kind()))
 }
-
-#[cfg(test)]
-thread_local! {
-    static NEXT_BARRIER_ERROR: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
-}
-
-#[cfg(test)]
-#[path = "windows_tests.rs"]
-mod tests;

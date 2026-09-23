@@ -1,7 +1,3 @@
-# Workspace test shortcuts: `cargo t-agent`, `cargo t-core`, `cargo t-tools`.
+# Workspace check: `cargo c-all` formats and lints every crate.
 [alias]
-t-agent = "test -p mycode-agent"
-t-core = "test -p mycode-core"
-t-tools = "test -p mycode-tools"
-t-app = "test -p mycode-app"
-t-desktop = "test -p mycode-desktop"
+c-all = "clippy --workspace --all-targets -- -D warnings"

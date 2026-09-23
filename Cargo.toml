@@ -9,6 +9,10 @@ members = [
     "crates/mycode-app",
     "crates/mycode-desktop",
 ]
+# mod.rs is legacy module layout; modern foo.rs + foo/ is enforced.
+[workspace.lints]
+clippy.mod_module_files = "deny"
+
 [workspace.package]
 version = "0.4.6"
 edition = "2024"
@@ -48,12 +52,10 @@ regex = "1"
 aho-corasick = "1"
 memchr = "2"
 jsonschema = { version = "0.52", default-features = false }
-tempfile = "3"
 blake3 = "1"
 libc = "0.2"
 rustix = "1"
 windows-sys = "0.61"
-junction = { version = "2", default-features = false }
 sha2 = "0.11"
 getrandom = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }

@@ -28,14 +28,6 @@ use super::*;
 /// targets, or handle-proven containment failures. Missing or inaccessible
 /// roots, cancelled or overdue ignore reads, and oversized ignore files
 /// return [`ToolError::Execution`].
-#[cfg(test)]
-pub(crate) fn resolve_search_root(
-    cwd: &Path,
-    path_arg: Option<&str>,
-) -> Result<ResolvedRoot, ToolError> {
-    resolve_search_root_cancel(cwd, path_arg, &CancellationToken::new(), &Limits::default())
-}
-
 /// Resolves a search root while honouring `cancel` and `limits`.
 ///
 /// Ignore files loaded during resolution use the same cancel token and
@@ -46,16 +38,6 @@ pub(crate) fn resolve_search_root(
 ///
 /// Same as [`resolve_search_root`], plus cancellation and deadline expiry
 /// while reading ignore files.
-#[cfg(test)]
-pub(crate) fn resolve_search_root_cancel(
-    cwd: &Path,
-    path_arg: Option<&str>,
-    cancel: &CancellationToken,
-    limits: &Limits,
-) -> Result<ResolvedRoot, ToolError> {
-    resolve_search_root_with_access(cwd, path_arg, cancel, limits, SearchAccess::Content)
-}
-
 /// Resolves a search root with an explicit content/metadata capability.
 pub(crate) fn resolve_search_root_with_access(
     cwd: &Path,
@@ -64,10 +46,6 @@ pub(crate) fn resolve_search_root_with_access(
     limits: &Limits,
     access: SearchAccess,
 ) -> Result<ResolvedRoot, ToolError> {
-    #[cfg(test)]
-    if let Some(counter) = &limits.resolve_count {
-        counter.fetch_add(1, Ordering::Relaxed);
-    }
     let absolute_cwd = normalize_session_cwd(cwd)?;
 
     let allowed = open_allowed_root(&absolute_cwd)
@@ -98,7 +76,6 @@ pub(crate) fn resolve_search_root_with_access(
     };
     let raw = path_arg.unwrap_or("");
     let limiter = Arc::new(WalkLimiter::new(limits));
-    let _seams = bind_current_limiter(&limiter);
     if matches!(limiter.check(cancel), ignore::WalkState::Quit) {
         let reason = limiter.stopped_reason().unwrap_or("search stopped");
         return Err(ToolError::Execution(format!(

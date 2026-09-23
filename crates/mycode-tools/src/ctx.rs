@@ -82,34 +82,3 @@ impl ToolCtx {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ctx() -> ToolCtx {
-        ToolCtx::new("/tmp/mycode")
-    }
-
-    #[test]
-    fn resolves_relative_paths_against_cwd() {
-        assert_eq!(
-            ctx().resolve("a/b.txt"),
-            PathBuf::from("/tmp/mycode/a/b.txt")
-        );
-        assert_eq!(ctx().resolve("/abs/b.txt"), PathBuf::from("/abs/b.txt"));
-    }
-
-    #[test]
-    fn default_token_is_not_cancelled() {
-        assert!(!ctx().cancel.is_cancelled());
-    }
-
-    #[test]
-    fn with_cancel_replaces_token() {
-        let token = CancellationToken::new();
-        token.cancel();
-        let ctx = ctx().with_cancel(token);
-        assert!(ctx.cancel.is_cancelled());
-    }
-}

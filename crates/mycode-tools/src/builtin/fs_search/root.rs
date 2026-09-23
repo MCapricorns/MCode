@@ -32,14 +32,6 @@ pub(crate) struct FileIdentity {
     pub(crate) file_id: [u8; 16],
 }
 
-#[cfg(all(test, windows))]
-impl FileIdentity {
-    /// Builds an identity for comparison tests, including ReFS-style 128-bit ids.
-    pub(crate) fn from_raw(volume: u64, file_id: [u8; 16]) -> Self {
-        Self { volume, file_id }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct StableHandle {
     pub(crate) file: File,
@@ -103,10 +95,6 @@ impl StableHandle {
 pub(crate) fn handle_is_hidden(handle: &StableHandle, name: &OsStr) -> io::Result<bool> {
     if walk::name_is_hidden(name) {
         return Ok(true);
-    }
-    #[cfg(test)]
-    if current_limiter(|limiter| limiter.force_hidden_error()).unwrap_or(false) {
-        return Err(io::Error::other("injected hidden-attribute query failure"));
     }
     #[cfg(windows)]
     {
@@ -207,11 +195,6 @@ impl ResolvedRoot {
     /// Handle-relative path from the allowed root to the selected target.
     ///
     /// On Windows this is the on-disk component spelling after alias open.
-    #[cfg(test)]
-    pub(crate) fn target_relative(&self) -> &Path {
-        &self.target_relative
-    }
-
     /// Returns a mutable reference to the already opened single-file target.
     pub fn target_file_mut(&mut self) -> io::Result<&mut File> {
         if !self.is_file() {
@@ -509,42 +492,6 @@ pub(crate) fn open_child_file(
     }
 }
 
-pub(crate) fn apply_open_fault(name: &OsStr) -> io::Result<()> {
-    #[cfg(test)]
-    if let Some(result) = current_limiter(|limiter| limiter.apply_open_fault(name)) {
-        return result;
-    }
-    let _ = name;
-    Ok(())
-}
-
-pub(crate) fn overridden_child_device(name: &OsStr, device: u64) -> u64 {
-    #[cfg(test)]
-    if let Some(over) = current_limiter(|limiter| limiter.child_device_override(name)).flatten() {
-        return over;
-    }
-    let _ = name;
-    device
-}
-
-#[cfg(test)]
-pub(crate) fn apply_access_gate(name: &OsStr, observed: ObservedOpen) -> io::Result<()> {
-    if let Some(result) = current_limiter(|limiter| limiter.apply_access_gate(name, observed)) {
-        return result;
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-pub(crate) fn apply_parent_discovery_hook(path: &Path) -> io::Result<Option<PathBuf>> {
-    #[cfg(test)]
-    if let Some(result) = current_limiter(|limiter| limiter.apply_parent_discovery_hook(path)) {
-        return result;
-    }
-    let _ = path;
-    Ok(None)
-}
-
 /// Result of opening the parent of a live directory handle.
 #[derive(Debug)]
 pub(crate) enum ParentDirectory {
@@ -567,7 +514,6 @@ pub(crate) enum ParentDirectory {
 /// Returns an I/O error when `..` cannot be opened as a directory, or
 /// when a path-derived parent no longer contains `dir`.
 pub(crate) fn open_parent_directory(dir: &File) -> io::Result<ParentDirectory> {
-    apply_open_fault(OsStr::new(".."))?;
     #[cfg(unix)]
     {
         use std::os::fd::{AsRawFd, FromRawFd};

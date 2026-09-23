@@ -14,5 +14,5 @@ tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
 async-trait.workspace = true
 
-[dev-dependencies]
-tokio.workspace = true
+[lints]
+workspace = true

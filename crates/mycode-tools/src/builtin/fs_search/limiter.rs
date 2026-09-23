@@ -1,9 +1,6 @@
 //! Cooperative budgets, stop state, and test fault hooks for one search.
-#[cfg(test)]
-use std::ffi::OsStr;
 use std::io;
-#[cfg(all(test, windows))]
-use std::path::{Path, PathBuf};
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,91 +10,6 @@ use tokio_util::sync::CancellationToken;
 use crate::tool::ToolError;
 
 use super::*;
-
-/// Test-only child-open fault injected through [`Limits`].
-#[cfg(test)]
-pub(crate) type OpenFaultFn = Arc<dyn Fn(&OsStr) -> io::Result<()> + Send + Sync>;
-
-/// Test-only child-open fault injected through [`Limits`].
-#[cfg(test)]
-#[derive(Clone)]
-pub(crate) struct OpenFault(pub OpenFaultFn);
-
-#[cfg(test)]
-impl std::fmt::Debug for OpenFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("OpenFault")
-    }
-}
-
-/// Test-only replacement for a child's device/volume after a successful open.
-#[cfg(test)]
-pub(crate) type ChildDeviceOverrideFn = Arc<dyn Fn(&OsStr) -> Option<u64> + Send + Sync>;
-
-/// Test-only replacement for a child's device/volume after a successful open.
-#[cfg(test)]
-#[derive(Clone)]
-pub(crate) struct ChildDeviceOverride(pub ChildDeviceOverrideFn);
-
-#[cfg(test)]
-impl std::fmt::Debug for ChildDeviceOverride {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ChildDeviceOverride")
-    }
-}
-
-/// Access mode and platform flags observed at a real open boundary.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ObservedOpen {
-    /// Content versus metadata capability requested by the caller.
-    pub access: SearchAccess,
-    /// Unix `openat`/`openat2` flags, including `O_PATH` when used.
-    #[cfg(unix)]
-    pub flags: libc::c_int,
-    /// Linux/Android `openat2` resolution policy passed to the syscall.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub resolve: u64,
-    /// Windows `NtOpenFile` desired access mask.
-    #[cfg(windows)]
-    pub desired_access: u32,
-    /// Windows `NtOpenFile` create options, including reparse bits.
-    #[cfg(windows)]
-    pub options: u32,
-}
-
-/// Test-only gate invoked after flags/access are chosen and before/at open.
-#[cfg(test)]
-pub(crate) type AccessGateFn = Arc<dyn Fn(&OsStr, ObservedOpen) -> io::Result<()> + Send + Sync>;
-
-/// Test-only gate invoked after flags/access are chosen and before/at open.
-#[cfg(test)]
-#[derive(Clone)]
-pub(crate) struct AccessGate(pub AccessGateFn);
-
-#[cfg(test)]
-impl std::fmt::Debug for AccessGate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("AccessGate")
-    }
-}
-
-/// Test-only hook after a parent path is snapshotted from a handle.
-#[cfg(all(test, windows))]
-pub(crate) type ParentDiscoveryHookFn =
-    Arc<dyn Fn(&Path) -> io::Result<Option<PathBuf>> + Send + Sync>;
-
-/// Test-only hook after a parent path is snapshotted from a handle.
-#[cfg(all(test, windows))]
-#[derive(Clone)]
-pub(crate) struct ParentDiscoveryHook(pub ParentDiscoveryHookFn);
-
-#[cfg(all(test, windows))]
-impl std::fmt::Debug for ParentDiscoveryHook {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ParentDiscoveryHook")
-    }
-}
 
 /// Result of attempting an atomic scan-byte reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,33 +51,9 @@ pub(crate) struct WalkLimiter {
     ignore_rules: AtomicU64,
     max_open_handles: u64,
     handles: AtomicU64,
-    #[cfg(test)]
-    peak_handles: AtomicU64,
     max_result_bytes: u64,
     result_bytes: AtomicU64,
     result_store_truncated: AtomicBool,
-    /// Bytes actually read from ignore files, including the one-byte probe
-    /// that proves an oversized file. Tested separately from stored bytes.
-    #[cfg(test)]
-    ignore_read_bytes: AtomicU64,
-    #[cfg(test)]
-    reverse_dir_enum: AtomicBool,
-    #[cfg(test)]
-    force_identity_error: AtomicBool,
-    #[cfg(test)]
-    force_hidden_error: AtomicBool,
-    #[cfg(test)]
-    open_fault: Mutex<Option<OpenFault>>,
-    #[cfg(test)]
-    child_device_override: Mutex<Option<ChildDeviceOverride>>,
-    #[cfg(test)]
-    access_gate: Mutex<Option<AccessGate>>,
-    #[cfg(all(test, windows))]
-    parent_discovery_hook: Mutex<Option<ParentDiscoveryHook>>,
-    #[cfg(test)]
-    entry_accesses: AtomicU64,
-    #[cfg(test)]
-    listing_key_allocations: AtomicU64,
 }
 
 impl WalkLimiter {
@@ -192,31 +80,9 @@ impl WalkLimiter {
             ignore_rules: AtomicU64::new(0),
             max_open_handles: limits.max_open_handles,
             handles: AtomicU64::new(0),
-            #[cfg(test)]
-            peak_handles: AtomicU64::new(0),
             max_result_bytes: u64::try_from(limits.max_result_bytes).unwrap_or(u64::MAX),
             result_bytes: AtomicU64::new(0),
             result_store_truncated: AtomicBool::new(false),
-            #[cfg(test)]
-            ignore_read_bytes: AtomicU64::new(0),
-            #[cfg(test)]
-            reverse_dir_enum: AtomicBool::new(limits.reverse_dir_enum),
-            #[cfg(test)]
-            force_identity_error: AtomicBool::new(limits.force_identity_error),
-            #[cfg(test)]
-            force_hidden_error: AtomicBool::new(limits.force_hidden_error),
-            #[cfg(test)]
-            open_fault: Mutex::new(limits.open_fault.clone()),
-            #[cfg(test)]
-            child_device_override: Mutex::new(limits.child_device_override.clone()),
-            #[cfg(test)]
-            access_gate: Mutex::new(limits.access_gate.clone()),
-            #[cfg(all(test, windows))]
-            parent_discovery_hook: Mutex::new(limits.parent_discovery_hook.clone()),
-            #[cfg(test)]
-            entry_accesses: AtomicU64::new(0),
-            #[cfg(test)]
-            listing_key_allocations: AtomicU64::new(0),
         }
     }
 
@@ -248,47 +114,6 @@ impl WalkLimiter {
     /// Credits a reservation that did not materialize an examined name.
     pub fn release_entry(&self) {
         self.entries.fetch_sub(1, Ordering::AcqRel);
-    }
-
-    /// Examined-name count charged to this invocation (tests).
-    #[cfg(test)]
-    pub fn walk_entries(&self) -> u64 {
-        self.entries.load(Ordering::Acquire)
-    }
-
-    /// Records one materialized directory-entry access (tests).
-    #[cfg(test)]
-    pub fn record_entry_access(&self) {
-        self.entry_accesses.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// Materialized directory-entry accesses (tests).
-    #[cfg(test)]
-    pub fn entry_accesses(&self) -> u64 {
-        self.entry_accesses.load(Ordering::Acquire)
-    }
-
-    /// Records one rendered-key allocation per name in a completed listing.
-    #[cfg(test)]
-    pub fn record_listing_key_allocations(&self, count: usize) {
-        self.listing_key_allocations
-            .fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed);
-    }
-
-    /// Rendered-key allocations made by completed listing sorts (tests).
-    #[cfg(test)]
-    pub fn listing_key_allocations(&self) -> u64 {
-        self.listing_key_allocations.load(Ordering::Relaxed)
-    }
-
-    /// Records `bytes` actually read from ignore files for the test-only
-    /// read counter. Production code does not charge a budget here; stored
-    /// ignore bytes are charged separately via [`Self::add_ignore_stored`].
-    pub fn record_ignore_read(&self, bytes: usize) {
-        #[cfg(test)]
-        self.ignore_read_bytes
-            .fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::Relaxed);
-        let _ = bytes;
     }
 
     /// Reserves stored ignore bytes against the invocation total.
@@ -333,24 +158,6 @@ impl WalkLimiter {
         self.ignore_layers.fetch_sub(1, Ordering::AcqRel);
     }
 
-    /// Compiled ignore rules charged to this invocation (tests).
-    #[cfg(test)]
-    pub fn ignore_rules(&self) -> u64 {
-        self.ignore_rules.load(Ordering::Acquire)
-    }
-
-    /// Bytes actually read from ignore files (tests).
-    #[cfg(test)]
-    pub fn ignore_read_bytes(&self) -> u64 {
-        self.ignore_read_bytes.load(Ordering::Relaxed)
-    }
-
-    /// Compiled ignore layers charged to this invocation (tests).
-    #[cfg(test)]
-    pub fn ignore_layers(&self) -> u64 {
-        self.ignore_layers.load(Ordering::Relaxed)
-    }
-
     /// Reserves `bytes` in the result heap. Does not stop the walk.
     pub fn try_reserve_result_bytes(&self, bytes: usize) -> bool {
         let added = u64::try_from(bytes).unwrap_or(u64::MAX);
@@ -374,79 +181,6 @@ impl WalkLimiter {
         self.result_store_truncated.load(Ordering::Acquire)
     }
 
-    /// Result-heap bytes charged to this invocation (tests).
-    #[cfg(test)]
-    pub fn result_store_bytes(&self) -> u64 {
-        self.result_bytes.load(Ordering::Acquire)
-    }
-
-    /// Whether this invocation should reverse the raw OS listing.
-    #[cfg(test)]
-    pub fn reverse_dir_enum(&self) -> bool {
-        self.reverse_dir_enum.load(Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_identity_error(&self) -> bool {
-        self.force_identity_error.load(Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn force_hidden_error(&self) -> bool {
-        self.force_hidden_error.load(Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn apply_open_fault(&self, name: &OsStr) -> io::Result<()> {
-        let fault = self.open_fault.lock().expect("open_fault poisoned");
-        if let Some(fault) = fault.as_ref() {
-            return (fault.0)(name);
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn child_device_override(&self, name: &OsStr) -> Option<u64> {
-        let override_fn = self
-            .child_device_override
-            .lock()
-            .expect("child_device_override poisoned");
-        override_fn.as_ref().and_then(|hook| (hook.0)(name))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn apply_access_gate(&self, name: &OsStr, observed: ObservedOpen) -> io::Result<()> {
-        let gate = self.access_gate.lock().expect("access_gate poisoned");
-        if let Some(gate) = gate.as_ref() {
-            return (gate.0)(name, observed);
-        }
-        Ok(())
-    }
-
-    #[cfg(all(test, windows))]
-    pub(crate) fn apply_parent_discovery_hook(&self, path: &Path) -> io::Result<Option<PathBuf>> {
-        let hook = self
-            .parent_discovery_hook
-            .lock()
-            .expect("parent_discovery_hook poisoned");
-        if let Some(hook) = hook.as_ref() {
-            return (hook.0)(path);
-        }
-        Ok(None)
-    }
-
-    /// Live handles charged to this invocation (tests).
-    #[cfg(test)]
-    pub fn live_handles(&self) -> u64 {
-        self.handles.load(Ordering::Relaxed)
-    }
-
-    /// Peak live handles charged to this invocation (tests).
-    #[cfg(test)]
-    pub fn peak_handles(&self) -> u64 {
-        self.peak_handles.load(Ordering::Relaxed)
-    }
-
     /// Charges one live handle against the invocation budget.
     pub fn acquire_handle(&self) -> io::Result<()> {
         let previous = self.handles.fetch_add(1, Ordering::AcqRel);
@@ -455,8 +189,6 @@ impl WalkLimiter {
             self.stop("handle budget reached");
             return Err(io::Error::other("handle budget reached"));
         }
-        #[cfg(test)]
-        self.peak_handles.fetch_max(previous + 1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -519,12 +251,6 @@ impl WalkLimiter {
         *self.deadline.lock().expect("deadline poisoned") = deadline;
     }
 
-    /// Absolute deadline shared with the outer run_blocking timer.
-    #[cfg(test)]
-    pub fn deadline(&self) -> Instant {
-        *self.deadline.lock().expect("deadline poisoned")
-    }
-
     /// Atomically reserves capacity for one actual file read.
     pub fn reserve_scan(&self, requested: usize, cap: u64) -> ScanReservation {
         if requested == 0 {
@@ -561,15 +287,6 @@ impl WalkLimiter {
         budget.claimed -= reserved - actual;
         budget.inflight -= reserved;
     }
-
-    /// Returns settled bytes plus any currently outstanding reservations.
-    #[cfg(test)]
-    pub fn claimed_scan_bytes(&self) -> u64 {
-        self.scan_budget
-            .lock()
-            .expect("scan budget poisoned")
-            .claimed
-    }
 }
 
 /// Releases one [`WalkLimiter`] handle charge when dropped.
@@ -594,47 +311,6 @@ pub(crate) fn stop_reason_error(label: &str, limiter: &WalkLimiter) -> Option<To
         ))),
         _ => None,
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    static CURRENT_LIMITER: std::cell::RefCell<Option<Arc<WalkLimiter>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-pub(crate) struct LimiterBindGuard {
-    #[cfg(test)]
-    previous: Option<Arc<WalkLimiter>>,
-}
-
-pub(crate) fn bind_current_limiter(limiter: &Arc<WalkLimiter>) -> LimiterBindGuard {
-    #[cfg(test)]
-    {
-        let previous = CURRENT_LIMITER.with(|slot| slot.replace(Some(Arc::clone(limiter))));
-        LimiterBindGuard { previous }
-    }
-    #[cfg(not(test))]
-    {
-        let _ = limiter;
-        LimiterBindGuard {}
-    }
-}
-
-impl Drop for LimiterBindGuard {
-    fn drop(&mut self) {
-        #[cfg(test)]
-        {
-            let previous = self.previous.take();
-            CURRENT_LIMITER.with(|slot| {
-                *slot.borrow_mut() = previous;
-            });
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn current_limiter<T>(f: impl FnOnce(&WalkLimiter) -> T) -> Option<T> {
-    CURRENT_LIMITER.with(|slot| slot.borrow().as_ref().map(|limiter| f(limiter)))
 }
 
 /// Bounded collector for per-path I/O errors.

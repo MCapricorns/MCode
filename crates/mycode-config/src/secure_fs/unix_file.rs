@@ -112,11 +112,6 @@ impl Transaction {
             temporary.flush().map_err(io_error)?;
             sync_file(&temporary)?;
             verify_private_regular(&temporary)?;
-            #[cfg(test)]
-            if FAIL_BEFORE_RENAME.with(|fail| fail.replace(false)) {
-                return Err(ConfigError::new(ConfigErrorKind::AtomicReplace)
-                    .with_io_kind(io::ErrorKind::Other));
-            }
             Ok(())
         })();
         if let Err(error) = prepared {
@@ -135,10 +130,6 @@ impl Transaction {
         }
         cleanup.disarm();
         verify_published(&self.parent, &self.name, &temporary)?;
-        #[cfg(test)]
-        if FAIL_PARENT_BARRIER.with(|fail| fail.replace(false)) {
-            return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::Other));
-        }
         unix::sync_directory(&self.parent)
     }
 }
@@ -472,28 +463,4 @@ impl Drop for TemporaryName<'_> {
             let _ = rfs::unlinkat(self.parent.as_fd(), &self.name, AtFlags::empty());
         }
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    static FAIL_BEFORE_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_PARENT_BARRIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-pub(in crate::secure_fs) fn make_permissive_for_test(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
-        .expect("permissive test mode");
-}
-
-#[cfg(test)]
-pub(in crate::secure_fs) fn fail_before_rename_for_test() {
-    FAIL_BEFORE_RENAME.with(|fail| fail.set(true));
-}
-
-#[cfg(test)]
-pub(in crate::secure_fs) fn fail_parent_barrier_for_test() {
-    FAIL_PARENT_BARRIER.with(|fail| fail.set(true));
 }

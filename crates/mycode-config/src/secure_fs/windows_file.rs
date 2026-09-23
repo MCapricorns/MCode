@@ -122,11 +122,6 @@ impl Transaction {
             temporary.file_mut().flush().map_err(io_error)?;
             flush_file(temporary.file())?;
             windows_acl::verify_fixed_descriptor(temporary.file())?;
-            #[cfg(test)]
-            if FAIL_BEFORE_RENAME.with(|fail| fail.replace(false)) {
-                return Err(ConfigError::new(ConfigErrorKind::AtomicReplace)
-                    .with_io_kind(io::ErrorKind::Other));
-            }
             Ok(())
         })();
         if let Err(error) = prepared {
@@ -140,10 +135,6 @@ impl Transaction {
         }
         temporary.disarm();
         verify_published(&self.parent, &self.name, temporary.file())?;
-        #[cfg(test)]
-        if FAIL_PARENT_BARRIER.with(|fail| fail.replace(false)) {
-            return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::Other));
-        }
         super::flush_directory(&self.parent)
     }
 }
@@ -522,38 +513,4 @@ pub(super) fn set_delete(file: &File) -> Result<(), ConfigError> {
         return Err(windows_open::map_ntstatus(status));
     }
     Ok(())
-}
-
-#[cfg(test)]
-thread_local! {
-    static FAIL_BEFORE_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_PARENT_BARRIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-pub(in crate::secure_fs) fn make_permissive_for_test(path: &Path) {
-    use std::fs::OpenOptions;
-    use std::os::windows::fs::OpenOptionsExt;
-
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
-
-    let sid = windows_acl::current_user_sid_string().expect("current SID");
-    let sddl = format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;WD)");
-    let file = OpenOptions::new()
-        .read(true)
-        .access_mode(GENERIC_READ | WRITE_DAC)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .expect("open test object for DACL update");
-    windows_acl::apply_sddl_dacl_for_tests(&file, &sddl).expect("permissive test DACL");
-}
-
-#[cfg(test)]
-pub(in crate::secure_fs) fn fail_before_rename_for_test() {
-    FAIL_BEFORE_RENAME.with(|fail| fail.set(true));
-}
-
-#[cfg(test)]
-pub(in crate::secure_fs) fn fail_parent_barrier_for_test() {
-    FAIL_PARENT_BARRIER.with(|fail| fail.set(true));
 }

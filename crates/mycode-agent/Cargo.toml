@@ -18,7 +18,5 @@ tokio.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
 
-[dev-dependencies]
-async-trait.workspace = true
-schemars.workspace = true
-tempfile.workspace = true
+[lints]
+workspace = true
