@@ -1,3 +1,0 @@
-# Workspace check: `cargo c-all` formats and lints every crate.
-[alias]
-c-all = "clippy --workspace --all-targets -- -D warnings"
