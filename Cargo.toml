@@ -26,7 +26,16 @@ async-trait = "0.1"
 schemars = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1.9"
-reqwest = { version = "0.13", features = ["stream"] }
+# OS TLS (schannel on Windows, Security.framework on macOS). reqwest's
+# default `rustls` feature also builds aws-lc-sys, a second full crypto
+# library, on top of the OS stack these product targets already have.
+reqwest = { version = "0.13", default-features = false, features = [
+    "charset",
+    "http2",
+    "native-tls",
+    "stream",
+    "system-proxy",
+] }
 futures-util = "0.3"
 bytes = "1"
 tokio-util = "0.7"
