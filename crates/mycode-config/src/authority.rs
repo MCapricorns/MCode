@@ -9,7 +9,6 @@ use std::fmt::{self, Display, Formatter};
 use semver::Version;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
-use serde_json::{Map, Value};
 
 use crate::{ConfigError, ConfigErrorKind};
 
@@ -186,10 +185,6 @@ impl Sha256Digest {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    pub(crate) fn into_string(self) -> String {
-        self.0
-    }
 }
 
 impl Display for Sha256Digest {
@@ -293,72 +288,6 @@ impl Serialize for TrustHighWater {
         state.serialize_field("manifestDigest", &self.manifest_digest)?;
         state.end()
     }
-}
-
-pub(crate) fn parse_active(value: Value) -> Result<ArtifactRef, ConfigError> {
-    let mut active = exact_object(value, &["version", "digest"])?;
-    let version = CanonicalVersion::parse(take_string(&mut active, "version")?)?;
-    let digest = Sha256Digest::parse(take_string(&mut active, "digest")?)?;
-    Ok(ArtifactRef::new(version, digest))
-}
-
-pub(crate) fn parse_trust_high_water(value: Value) -> Result<TrustHighWater, ConfigError> {
-    let mut trust = exact_object(value, &["sequence", "manifestDigest"])?;
-    let sequence = take_positive_u64(&mut trust, "sequence")?;
-    let digest = Sha256Digest::parse(take_string(&mut trust, "manifestDigest")?)?;
-    TrustHighWater::new(sequence, digest)
-}
-
-pub(crate) fn exact_object(
-    value: Value,
-    fields: &[&str],
-) -> Result<Map<String, Value>, ConfigError> {
-    let Value::Object(object) = value else {
-        return Err(authority_error());
-    };
-    if object.len() != fields.len() || !fields.iter().all(|field| object.contains_key(*field)) {
-        return Err(authority_error());
-    }
-    Ok(object)
-}
-
-pub(crate) fn take_string(
-    object: &mut Map<String, Value>,
-    field: &str,
-) -> Result<String, ConfigError> {
-    object
-        .remove(field)
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(authority_error)
-}
-
-pub(crate) fn take_u32(object: &mut Map<String, Value>, field: &str) -> Result<u32, ConfigError> {
-    object
-        .remove(field)
-        .and_then(|value| value.as_u64())
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(authority_error)
-}
-
-pub(crate) fn take_positive_revision(
-    object: &mut Map<String, Value>,
-    field: &str,
-) -> Result<AuthorityRevision, ConfigError> {
-    AuthorityRevision::new(take_positive_u64(object, field)?)
-}
-
-pub(crate) fn take_positive_u64(
-    object: &mut Map<String, Value>,
-    field: &str,
-) -> Result<u64, ConfigError> {
-    let value = object
-        .remove(field)
-        .and_then(|value| value.as_u64())
-        .ok_or_else(authority_error)?;
-    if value == 0 || value > MAX_AUTHORITY_REVISION {
-        return Err(authority_error());
-    }
-    Ok(value)
 }
 
 pub(crate) fn authority_error() -> ConfigError {
@@ -480,7 +409,6 @@ mod tests {
         let digest = Sha256Digest::parse(DIGEST).expect("digest");
         assert_eq!(digest.as_str(), DIGEST);
         assert_eq!(digest.to_string(), DIGEST);
-        assert_eq!(digest.clone().into_string(), DIGEST);
 
         let artifact = ArtifactRef::new(version.clone(), digest.clone());
         assert_eq!(artifact.version(), &version);

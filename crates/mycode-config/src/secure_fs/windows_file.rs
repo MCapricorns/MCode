@@ -157,7 +157,7 @@ impl Drop for Transaction {
 fn open_or_create_root(root: &Path) -> Result<File, ConfigError> {
     let descriptor = windows_acl::protected_descriptor()?;
     let expected = root.file_name().and_then(OsStr::to_str);
-    let opened = windows_open::create_owned_root(
+    let parent = windows_open::create_owned_root(
         root,
         expected,
         &descriptor,
@@ -168,7 +168,7 @@ fn open_or_create_root(root: &Path) -> Result<File, ConfigError> {
     let name = root
         .file_name()
         .ok_or_else(|| ConfigError::for_path(ConfigErrorKind::InvalidHome, root))?;
-    windows_open::open_owned_relative(&opened.parent, name)
+    windows_open::open_owned_relative(&parent, name)
 }
 
 fn open_existing_root(root: &Path) -> Result<Option<File>, ConfigError> {

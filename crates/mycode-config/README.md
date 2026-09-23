@@ -12,6 +12,7 @@ MYCode 的 home 布局与严格配置文档。产品路径不再使用 Pack/WASM
 ├─ secrets.json
 ├─ ui.json
 ├─ catalog-cache.json
+├─ agents/<role>.md
 ├─ sessions/<ses1-id>/{manifest.json,todos.json,compaction.json,…}
 ├─ checkpoints/<ses1-id>/
 └─ scratch/
@@ -20,6 +21,8 @@ MYCode 的 home 布局与严格配置文档。产品路径不再使用 Pack/WASM
 - `settings.json`：providers、web backends、MCP、agents、appearance。无密钥。
 - `secrets.json`：`provider-id`、`web-<id>`、`mcp-<id>`。
 - `ui.json`：最近项目、会话→项目路径、选中模型。
+- `agents/`：用户级 subagent 角色；项目级角色在 `<project>/.mycode/agents/`。
+- 系统提示资源来自 workspace 与 home 的 `AGENTS.md`/`MYCODE.md`，技能来自 `.agents` 树。
 - `session_relative(id, file)` 生成 `sessions/<id>/<file>`。
 - 未绑定项目时工具 cwd 是 `scratch/`，不是按会话 id 命名的目录。
 

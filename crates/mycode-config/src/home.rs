@@ -1,15 +1,14 @@
 //! Defines the relocatable, lexical MYCode home layout.
 //!
 //! [`HomeLayout`] resolves an absolute owned root from explicit or process
-//! environment values and constructs the top-level Plugin and nested Pack
-//! hierarchy. Resolution and path construction perform no filesystem I/O,
-//! never canonicalize or follow links, and do not depend on the current
+//! environment values. Resolution and path construction perform no filesystem
+//! I/O, never canonicalize or follow links, and do not depend on the current
 //! directory.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
-use crate::{ConfigError, ConfigErrorKind, TransactionId};
+use crate::{ConfigError, ConfigErrorKind};
 
 /// Names the environment variable that relocates the entire owned home tree.
 pub const MYCODE_HOME_ENV: &str = "MYCODE_HOME";
@@ -25,7 +24,7 @@ pub const SCRATCH_DIR: &str = "scratch";
 ///
 /// # Errors
 ///
-/// Returns [`ConfigErrorKind::AuthorityRejection`] when `session_id` or
+/// Returns [`ConfigErrorKind::AuthorityValidation`] when `session_id` or
 /// `file` is empty or contains a path separator.
 pub fn session_relative(session_id: &str, file: &str) -> Result<String, ConfigError> {
     if session_id.is_empty()
@@ -84,60 +83,6 @@ impl HomeEnv {
     }
 }
 
-/// Identifies one external top-level Plugin family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginFamily {
-    /// Provider capability Pack family.
-    Providers,
-    /// Web capability Pack family.
-    Web,
-    /// MCP capability Pack family.
-    Mcp,
-    /// Usage capability Pack family.
-    Usage,
-    /// Theme asset family. The UI runtime itself is first-party built-in;
-    /// this family only carries Theme Pack installation paths.
-    Ui,
-}
-
-impl PluginFamily {
-    /// Lists every external Plugin family in stable order.
-    pub const ALL: [Self; 5] = [Self::Providers, Self::Web, Self::Mcp, Self::Usage, Self::Ui];
-
-    /// Lists the families selected through singleton composition slots.
-    pub const SINGLETONS: [Self; 2] = [Self::Web, Self::Mcp];
-
-    /// Returns the canonical top-level Plugin ID.
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::Providers => "com.mycode.providers",
-            Self::Web => "com.mycode.web",
-            Self::Mcp => "com.mycode.mcp",
-            Self::Usage => "com.mycode.usage",
-            Self::Ui => "com.mycode.ui",
-        }
-    }
-
-    /// Returns the short directory name for this family.
-    #[must_use]
-    pub const fn directory_name(self) -> &'static str {
-        match self {
-            Self::Providers => "providers",
-            Self::Web => "web",
-            Self::Mcp => "mcp",
-            Self::Usage => "usage",
-            Self::Ui => "ui",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RootOrigin {
-    Explicit,
-    UserHome,
-}
-
 /// Constructs paths in one relocatable MYCode home.
 ///
 /// Every returned path is rooted below [`Self::root`]. The lowercase `.mycode`
@@ -147,7 +92,6 @@ enum RootOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeLayout {
     root: PathBuf,
-    origin: RootOrigin,
 }
 
 impl HomeLayout {
@@ -167,7 +111,7 @@ impl HomeLayout {
     /// all fallback values. Otherwise `HOME` is used, with `USERPROFILE` as a
     /// Windows-only fallback. An invalid higher-priority value fails closed.
     /// Resolution remains lexical even when the selected path is absent,
-    /// inaccessible, or names a link. Bootstrap performs native validation.
+    /// inaccessible, or names a link.
     ///
     /// # Errors
     ///
@@ -190,10 +134,7 @@ impl HomeLayout {
             Err(path) => return Err(invalid_home_path(&path)),
         };
         let root = user_home.join(MYCODE_DIR_NAME);
-        Ok(Self {
-            root,
-            origin: RootOrigin::UserHome,
-        })
+        Ok(Self { root })
     }
 
     /// Creates a layout from an already-resolved owned root.
@@ -213,10 +154,7 @@ impl HomeLayout {
                     .components()
                     .any(|component| matches!(component, Component::Normal(_))) =>
             {
-                Ok(Self {
-                    root,
-                    origin: RootOrigin::Explicit,
-                })
+                Ok(Self { root })
             }
             Ok(root) | Err(root) => Err(invalid_home_path(&root)),
         }
@@ -226,109 +164,6 @@ impl HomeLayout {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    /// Returns the root `config.json` path.
-    #[must_use]
-    pub fn config_json(&self) -> PathBuf {
-        self.root.join("config.json")
-    }
-
-    /// Returns the top-level Plugin container root.
-    #[must_use]
-    pub fn plugins_dir(&self) -> PathBuf {
-        self.root.join("plugins")
-    }
-
-    /// Returns one external top-level Plugin container.
-    #[must_use]
-    pub fn plugin_dir(&self, family: PluginFamily) -> PathBuf {
-        self.plugins_dir().join(family.directory_name())
-    }
-
-    /// Returns one Plugin's nested Pack root.
-    pub fn packs_dir(&self, family: PluginFamily) -> PathBuf {
-        self.plugin_dir(family).join("packs")
-    }
-
-    /// Returns one Pack directory nested in a MYCode-owned Plugin.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConfigErrorKind::PathEscape`] when `pack_id` is not a
-    /// portable lowercase ASCII identifier.
-    pub fn pack_dir(&self, family: PluginFamily, pack_id: &str) -> Result<PathBuf, ConfigError> {
-        validate_portable_id(pack_id)?;
-        Ok(self.packs_dir(family).join(pack_id))
-    }
-
-    /// Returns one Pack `installation.json` path.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConfigErrorKind::PathEscape`] when `pack_id` is invalid.
-    pub fn pack_installation_json(
-        &self,
-        family: PluginFamily,
-        pack_id: &str,
-    ) -> Result<PathBuf, ConfigError> {
-        Ok(self.pack_dir(family, pack_id)?.join("installation.json"))
-    }
-
-    /// Returns one Pack data directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConfigErrorKind::PathEscape`] when `pack_id` is invalid.
-    pub fn pack_data_dir(
-        &self,
-        family: PluginFamily,
-        pack_id: &str,
-    ) -> Result<PathBuf, ConfigError> {
-        Ok(self.pack_dir(family, pack_id)?.join("data"))
-    }
-
-    /// Returns one Pack versions directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConfigErrorKind::PathEscape`] when `pack_id` is invalid.
-    pub fn pack_versions_dir(
-        &self,
-        family: PluginFamily,
-        pack_id: &str,
-    ) -> Result<PathBuf, ConfigError> {
-        Ok(self.pack_dir(family, pack_id)?.join("versions"))
-    }
-
-    /// Returns the reserved Host-only directory.
-    #[must_use]
-    pub fn host_dir(&self) -> PathBuf {
-        self.plugins_dir().join(".host")
-    }
-
-    /// Returns the reserved Host-only credential store path.
-    #[must_use]
-    pub fn host_auth_json(&self) -> PathBuf {
-        self.host_dir().join("auth.json")
-    }
-
-    /// Returns the global Host-only staging lock path.
-    #[must_use]
-    pub fn host_staging_lock(&self) -> PathBuf {
-        self.plugins_dir().join(".staging.lock")
-    }
-
-    /// Returns the global Host-only staging root.
-    #[must_use]
-    pub fn host_staging_dir(&self) -> PathBuf {
-        self.plugins_dir().join(".staging")
-    }
-
-    /// Returns one Host-only transaction staging directory.
-    #[must_use]
-    pub fn transaction_staging_dir(&self, transaction_id: &TransactionId) -> PathBuf {
-        self.host_staging_dir().join(transaction_id.as_str())
     }
 
     /// Joins a controlled relative path below the owned root.
@@ -354,10 +189,6 @@ impl HomeLayout {
             joined.push(component);
         }
         Ok(joined)
-    }
-
-    pub(crate) fn expected_root_name(&self) -> Option<&'static str> {
-        (self.origin == RootOrigin::UserHome).then_some(MYCODE_DIR_NAME)
     }
 }
 
@@ -419,13 +250,6 @@ fn windows_drive_unc_or_verbatim_root(path: &Path) -> bool {
             | Component::RootDir
             | Component::Prefix(_) => false,
         })
-}
-
-fn validate_portable_id(value: &str) -> Result<(), ConfigError> {
-    if !is_valid_portable_id(value) {
-        return Err(ConfigError::new(ConfigErrorKind::PathEscape));
-    }
-    Ok(())
 }
 
 pub(crate) fn is_valid_portable_id(value: &str) -> bool {

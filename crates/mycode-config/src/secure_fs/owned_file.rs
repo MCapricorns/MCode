@@ -68,8 +68,8 @@ use fallback as platform;
 
 /// Creates only the owned directories named by `relative`.
 ///
-/// Every component is created no-follow and private. This is the Host-side
-/// substrate used by first-party durable stores that live below `plugins/`.
+/// Every component is created no-follow and private, so callers can
+/// materialize authority directories below the owned root on demand.
 ///
 /// # Errors
 ///
@@ -129,38 +129,16 @@ pub fn locked_update_owned_file(
     maximum_bytes: usize,
     update: impl FnOnce(Option<&[u8]>) -> Result<Vec<u8>, ConfigError>,
 ) -> Result<(), ConfigError> {
-    locked_update_owned_file_with(home, relative, maximum_bytes, update)
-}
-
-/// Runs one secret read-modify-replace callback under a persistent advisory lock.
-pub(crate) fn locked_update_secret_owned_file(
-    home: &HomeLayout,
-    relative: impl AsRef<Path>,
-    maximum_bytes: usize,
-    update: impl FnOnce(Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, ConfigError>,
-) -> Result<(), ConfigError> {
-    locked_update_owned_file_with(home, relative, maximum_bytes, update)
-}
-
-fn locked_update_owned_file_with<R>(
-    home: &HomeLayout,
-    relative: impl AsRef<Path>,
-    maximum_bytes: usize,
-    update: impl FnOnce(Option<&[u8]>) -> Result<R, ConfigError>,
-) -> Result<(), ConfigError>
-where
-    R: AsRef<[u8]>,
-{
     let path = OwnedPath::new(home, relative.as_ref())?;
     require_file_name(&path)?;
     let mut transaction = platform::Transaction::begin(&path.root, &path.components)?;
     transaction.require_private_lock()?;
     let current = transaction.read(maximum_bytes)?;
     let replacement = update(current.as_ref().map(|bytes| bytes.as_slice()))?;
-    if replacement.as_ref().len() > maximum_bytes {
+    if replacement.len() > maximum_bytes {
         return Err(ConfigError::new(ConfigErrorKind::Oversized));
     }
-    transaction.replace(replacement.as_ref())
+    transaction.replace(&replacement)
 }
 
 struct OwnedPath {
@@ -198,19 +176,18 @@ fn require_file_name(path: &OwnedPath) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
     use std::process::Command;
     use std::sync::{Arc, Barrier};
 
-    use zeroize::Zeroizing;
-
     use super::{
-        OwnedPath, ensure_owned_directory, locked_update_owned_file,
-        locked_update_secret_owned_file, platform, read_owned_file, replace_owned_file,
+        OwnedPath, ensure_owned_directory, locked_update_owned_file, platform, read_owned_file,
+        replace_owned_file,
     };
-    use crate::{
-        AccessControlEvidence, ConfigError, ConfigErrorKind, HomeLayout, OwnedKind,
-        probe_access_control,
-    };
+    use crate::{ConfigError, ConfigErrorKind, HomeLayout};
+
+    #[cfg(windows)]
+    use crate::secure_fs::windows::windows_acl::assert_exact_private_for_tests;
 
     fn layout() -> (tempfile::TempDir, HomeLayout) {
         let parent = tempfile::tempdir().expect("parent");
@@ -218,10 +195,15 @@ mod tests {
         (parent, layout)
     }
 
+    fn owned(layout: &HomeLayout, relative: &str) -> PathBuf {
+        layout.owned_join(relative).expect("owned path")
+    }
+
     #[test]
     fn missing_read_creates_nothing() {
         let (parent, layout) = layout();
-        let value = read_owned_file(&layout, "plugins/.host/auth.json", 64).expect("missing read");
+        let value =
+            read_owned_file(&layout, "sessions/ses-1/todos.json", 64).expect("missing read");
         assert!(value.is_none());
         assert_eq!(
             fs::read_dir(parent.path()).expect("parent listing").count(),
@@ -235,7 +217,7 @@ mod tests {
         fs::create_dir(parent.path().join("Home")).expect("root alias");
         let layout = HomeLayout::from_root(parent.path().join("home")).expect("layout");
 
-        let error = read_owned_file(&layout, "config.json", 64).expect_err("root alias");
+        let error = read_owned_file(&layout, "settings.json", 64).expect_err("root alias");
 
         assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
         let names = fs::read_dir(parent.path())
@@ -248,38 +230,39 @@ mod tests {
     #[test]
     fn mutation_creates_only_required_ancestors_and_persistent_lock() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "plugins/.host/auth.json", b"value").expect("replace");
+        replace_owned_file(&layout, "sessions/ses-1/todos.json", b"value").expect("replace");
 
-        assert_eq!(fs::read(layout.host_auth_json()).expect("target"), b"value");
-        let host = layout.host_dir();
-        let names = fs::read_dir(&host)
-            .expect("host listing")
+        assert_eq!(
+            fs::read(owned(&layout, "sessions/ses-1/todos.json")).expect("target"),
+            b"value"
+        );
+        let names = fs::read_dir(owned(&layout, "sessions/ses-1"))
+            .expect("session listing")
             .map(|entry| entry.expect("entry").file_name())
             .collect::<Vec<_>>();
         assert_eq!(names.len(), 2);
-        assert!(names.iter().any(|name| name == "auth.json"));
-        assert!(names.iter().any(|name| name == "auth.json.lock"));
+        assert!(names.iter().any(|name| name == "todos.json"));
+        assert!(names.iter().any(|name| name == "todos.json.lock"));
         assert_eq!(
             fs::read_dir(layout.root()).expect("root listing").count(),
             1
         );
         assert_eq!(
-            fs::read_dir(layout.plugins_dir())
-                .expect("plugins listing")
+            fs::read_dir(owned(&layout, "sessions"))
+                .expect("sessions listing")
                 .count(),
             1
         );
     }
 
     #[test]
-    fn root_file_mutation_does_not_create_eager_plugin_child() {
+    fn root_file_mutation_creates_only_the_target_and_lock() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"value").expect("replace");
+        replace_owned_file(&layout, "settings.json", b"value").expect("replace");
 
         assert!(layout.root().is_dir());
-        assert!(layout.config_json().is_file());
-        assert!(layout.root().join("config.json.lock").is_file());
-        assert!(!layout.plugins_dir().exists());
+        assert!(owned(&layout, "settings.json").is_file());
+        assert!(layout.root().join("settings.json.lock").is_file());
         assert_eq!(
             fs::read_dir(layout.root()).expect("root listing").count(),
             2
@@ -289,27 +272,27 @@ mod tests {
     #[test]
     fn directories_target_and_lock_have_exact_private_access() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "plugins/.host/auth.json", b"value").expect("replace");
+        replace_owned_file(&layout, "sessions/ses-1/todos.json", b"value").expect("replace");
 
         for directory in [
             layout.root().to_path_buf(),
-            layout.plugins_dir(),
-            layout.host_dir(),
+            owned(&layout, "sessions"),
+            owned(&layout, "sessions/ses-1"),
         ] {
-            assert_private_evidence(&directory, OwnedKind::Directory);
+            assert_private_evidence(&directory, true);
         }
-        assert_private_evidence(&layout.host_auth_json(), OwnedKind::File);
-        assert_private_evidence(&layout.host_dir().join("auth.json.lock"), OwnedKind::File);
+        assert_private_evidence(&owned(&layout, "sessions/ses-1/todos.json"), false);
+        assert_private_evidence(&owned(&layout, "sessions/ses-1/todos.json.lock"), false);
     }
 
     #[test]
     fn explicit_directory_creation_stops_at_requested_component() {
         let (_parent, layout) = layout();
-        ensure_owned_directory(&layout, "plugins/web/packs").expect("directory");
-        assert!(layout.root().join("plugins/web/packs").is_dir());
+        ensure_owned_directory(&layout, "sessions/ses-1").expect("directory");
+        assert!(owned(&layout, "sessions/ses-1").is_dir());
         assert_eq!(
-            fs::read_dir(layout.root().join("plugins/web/packs"))
-                .expect("packs listing")
+            fs::read_dir(owned(&layout, "sessions/ses-1"))
+                .expect("session listing")
                 .count(),
             0
         );
@@ -318,10 +301,10 @@ mod tests {
     #[test]
     fn bounded_reads_reject_oversized_content() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"12345").expect("replace");
-        let error = read_owned_file(&layout, "config.json", 4).expect_err("oversized");
+        replace_owned_file(&layout, "settings.json", b"12345").expect("replace");
+        let error = read_owned_file(&layout, "settings.json", 4).expect_err("oversized");
         assert_eq!(error.kind(), ConfigErrorKind::Oversized);
-        let bytes = read_owned_file(&layout, "config.json", 5).expect("bounded read");
+        let bytes = read_owned_file(&layout, "settings.json", 5).expect("bounded read");
         assert_eq!(
             bytes.as_deref().map(Vec::as_slice),
             Some(b"12345".as_slice())
@@ -331,58 +314,64 @@ mod tests {
     #[test]
     fn permissive_target_and_lock_are_replaced_or_tightened() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
-        platform::make_permissive_for_test(&layout.config_json());
-        platform::make_permissive_for_test(&layout.root().join("config.json.lock"));
-        let error = read_owned_file(&layout, "config.json", 64)
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
+        let target = owned(&layout, "settings.json");
+        let lock = layout.root().join("settings.json.lock");
+        platform::make_permissive_for_test(&target);
+        platform::make_permissive_for_test(&lock);
+        let error = read_owned_file(&layout, "settings.json", 64)
             .expect_err("permissive target read must fail closed");
         assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
 
-        replace_owned_file(&layout, "config.json", b"new").expect("private replacement");
+        replace_owned_file(&layout, "settings.json", b"new").expect("private replacement");
 
-        assert_eq!(fs::read(layout.config_json()).expect("target"), b"new");
-        assert_private_evidence(&layout.config_json(), OwnedKind::File);
-        assert_private_evidence(&layout.root().join("config.json.lock"), OwnedKind::File);
+        assert_eq!(fs::read(&target).expect("target"), b"new");
+        assert_private_evidence(&target, false);
+        assert_private_evidence(&lock, false);
     }
 
     #[test]
     fn locked_update_rejects_permissive_target_without_change() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
-        platform::make_permissive_for_test(&layout.config_json());
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
+        platform::make_permissive_for_test(&owned(&layout, "settings.json"));
 
-        let error = locked_update_owned_file(&layout, "config.json", 64, |_| Ok(b"new".to_vec()))
+        let error = locked_update_owned_file(&layout, "settings.json", 64, |_| Ok(b"new".to_vec()))
             .expect_err("permissive locked update must fail closed");
 
         assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
-        assert_eq!(fs::read(layout.config_json()).expect("target"), b"old");
+        assert_eq!(
+            fs::read(owned(&layout, "settings.json")).expect("target"),
+            b"old"
+        );
     }
 
     #[test]
     fn wrong_types_and_wrong_case_aliases_are_rejected() {
         let (_parent, layout) = layout();
-        ensure_owned_directory(&layout, "plugins/.host").expect("host directory");
-        fs::create_dir(layout.host_auth_json()).expect("wrong target type");
-        let error =
-            read_owned_file(&layout, "plugins/.host/auth.json", 64).expect_err("directory target");
+        ensure_owned_directory(&layout, "sessions/ses-1").expect("session directory");
+        let target = owned(&layout, "sessions/ses-1/todos.json");
+        fs::create_dir(&target).expect("wrong target type");
+        let error = read_owned_file(&layout, "sessions/ses-1/todos.json", 64)
+            .expect_err("directory target");
         assert_eq!(error.kind(), ConfigErrorKind::Io);
-        fs::remove_dir(layout.host_auth_json()).expect("remove wrong type");
+        fs::remove_dir(&target).expect("remove wrong type");
 
-        fs::write(layout.host_dir().join("Auth.JSON"), b"alias").expect("wrong-case alias");
-        let error =
-            read_owned_file(&layout, "plugins/.host/auth.json", 64).expect_err("wrong-case alias");
+        fs::write(owned(&layout, "sessions/ses-1/Todos.JSON"), b"alias").expect("wrong-case alias");
+        let error = read_owned_file(&layout, "sessions/ses-1/todos.json", 64)
+            .expect_err("wrong-case alias");
         assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
-        let names = fs::read_dir(layout.host_dir())
-            .expect("host listing")
+        let names = fs::read_dir(owned(&layout, "sessions/ses-1"))
+            .expect("session listing")
             .map(|entry| entry.expect("entry").file_name())
             .collect::<Vec<_>>();
-        assert!(names.iter().any(|name| name == "Auth.JSON"));
-        assert!(names.iter().all(|name| name != "auth.json"));
+        assert!(names.iter().any(|name| name == "Todos.JSON"));
+        assert!(names.iter().all(|name| name != "todos.json"));
 
         let (_alias_parent, alias_layout) = self::layout();
-        ensure_owned_directory(&alias_layout, "plugins").expect("plugins directory");
-        fs::create_dir(alias_layout.plugins_dir().join(".HOST")).expect("intermediate alias");
-        let error = read_owned_file(&alias_layout, "plugins/.host/auth.json", 64)
+        ensure_owned_directory(&alias_layout, "sessions").expect("sessions directory");
+        fs::create_dir(owned(&alias_layout, "sessions/SES-1")).expect("intermediate alias");
+        let error = read_owned_file(&alias_layout, "sessions/ses-1/todos.json", 64)
             .expect_err("wrong-case intermediate alias");
         assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
     }
@@ -399,10 +388,10 @@ mod tests {
         symlink(&real, &linked).expect("prefix link");
         let layout = HomeLayout::from_root(linked.join("home")).expect("layout");
 
-        replace_owned_file(&layout, "config.json", b"value").expect("replace through prefix");
+        replace_owned_file(&layout, "settings.json", b"value").expect("replace through prefix");
 
         assert_eq!(
-            fs::read(real.join("home/config.json")).expect("target"),
+            fs::read(real.join("home/settings.json")).expect("target"),
             b"value"
         );
     }
@@ -413,21 +402,22 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let (parent, layout) = layout();
-        ensure_owned_directory(&layout, "plugins").expect("plugins");
+        ensure_owned_directory(&layout, "sessions").expect("sessions");
         let outside = parent.path().join("outside");
         fs::create_dir(&outside).expect("outside");
-        symlink(&outside, layout.host_dir()).expect("intermediate link");
-        let error =
-            read_owned_file(&layout, "plugins/.host/auth.json", 64).expect_err("intermediate link");
+        let session = owned(&layout, "sessions/ses-1");
+        symlink(&outside, &session).expect("intermediate link");
+        let error = read_owned_file(&layout, "sessions/ses-1/todos.json", 64)
+            .expect_err("intermediate link");
         assert_eq!(error.kind(), ConfigErrorKind::LinkEscape);
-        fs::remove_file(layout.host_dir()).expect("remove link");
+        fs::remove_file(&session).expect("remove link");
 
-        ensure_owned_directory(&layout, "plugins/.host").expect("host");
-        let outside_file = outside.join("auth.json");
+        ensure_owned_directory(&layout, "sessions/ses-1").expect("session");
+        let outside_file = outside.join("todos.json");
         fs::write(&outside_file, b"outside").expect("outside file");
-        symlink(&outside_file, layout.host_auth_json()).expect("final link");
+        symlink(&outside_file, owned(&layout, "sessions/ses-1/todos.json")).expect("final link");
         let error =
-            read_owned_file(&layout, "plugins/.host/auth.json", 64).expect_err("final link");
+            read_owned_file(&layout, "sessions/ses-1/todos.json", 64).expect_err("final link");
         assert_eq!(error.kind(), ConfigErrorKind::LinkEscape);
     }
 
@@ -441,21 +431,17 @@ mod tests {
             return;
         }
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
-        chown(layout.config_json(), Some(65_534), None).expect("foreign owner fixture");
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
+        let target = owned(&layout, "settings.json");
+        chown(&target, Some(65_534), None).expect("foreign owner fixture");
 
-        let error = replace_owned_file(&layout, "config.json", b"new")
+        let error = replace_owned_file(&layout, "settings.json", b"new")
             .expect_err("foreign owner must fail");
 
         assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
+        assert_eq!(fs::read(&target).expect("preserved target"), b"old");
         assert_eq!(
-            fs::read(layout.config_json()).expect("preserved target"),
-            b"old"
-        );
-        assert_eq!(
-            fs::metadata(layout.config_json())
-                .expect("target metadata")
-                .uid(),
+            fs::metadata(&target).expect("target metadata").uid(),
             65_534
         );
     }
@@ -470,10 +456,10 @@ mod tests {
         junction::create(&real, &linked).expect("prefix junction");
         let layout = HomeLayout::from_root(linked.join("home")).expect("layout");
 
-        replace_owned_file(&layout, "config.json", b"value").expect("replace through prefix");
+        replace_owned_file(&layout, "settings.json", b"value").expect("replace through prefix");
 
         assert_eq!(
-            fs::read(real.join("home/config.json")).expect("target"),
+            fs::read(real.join("home/settings.json")).expect("target"),
             b"value"
         );
     }
@@ -482,21 +468,22 @@ mod tests {
     #[test]
     fn windows_intermediate_and_final_reparse_points_are_rejected() {
         let (parent, layout) = layout();
-        ensure_owned_directory(&layout, "plugins").expect("plugins");
+        ensure_owned_directory(&layout, "sessions").expect("sessions");
         let outside = parent.path().join("outside");
         fs::create_dir(&outside).expect("outside");
-        let host = layout.host_dir();
-        junction::create(&outside, &host).expect("intermediate junction");
-        let error = read_owned_file(&layout, "plugins/.host/auth.json", 64)
+        let session = owned(&layout, "sessions/ses-1");
+        junction::create(&outside, &session).expect("intermediate junction");
+        let error = read_owned_file(&layout, "sessions/ses-1/todos.json", 64)
             .expect_err("intermediate reparse");
         assert_eq!(error.kind(), ConfigErrorKind::LinkEscape);
-        junction::delete(&host).expect("remove junction reparse data");
-        fs::remove_dir(&host).expect("remove junction fixture directory");
+        junction::delete(&session).expect("remove junction reparse data");
+        fs::remove_dir(&session).expect("remove junction fixture directory");
 
-        ensure_owned_directory(&layout, "plugins/.host").expect("host");
-        junction::create(&outside, layout.host_auth_json()).expect("final junction");
+        ensure_owned_directory(&layout, "sessions/ses-1").expect("session");
+        junction::create(&outside, owned(&layout, "sessions/ses-1/todos.json"))
+            .expect("final junction");
         let error =
-            read_owned_file(&layout, "plugins/.host/auth.json", 64).expect_err("final reparse");
+            read_owned_file(&layout, "sessions/ses-1/todos.json", 64).expect_err("final reparse");
         assert_eq!(error.kind(), ConfigErrorKind::LinkEscape);
     }
 
@@ -540,7 +527,7 @@ mod tests {
     fn advisory_lock_excludes_a_cooperating_process() {
         let (_parent, layout) = layout();
         let path =
-            OwnedPath::new(&layout, std::path::Path::new("config.json")).expect("owned path");
+            OwnedPath::new(&layout, std::path::Path::new("settings.json")).expect("owned path");
         let transaction = platform::Transaction::begin(&path.root, &path.components)
             .expect("parent transaction lock");
         let status = Command::new(std::env::current_exe().expect("test executable"))
@@ -548,7 +535,7 @@ mod tests {
             .arg("--exact")
             .env(
                 "MYCODE_CONFIG_LOCK_TEST_PATH",
-                layout.root().join("config.json.lock"),
+                layout.root().join("settings.json.lock"),
             )
             .status()
             .expect("child test process");
@@ -576,32 +563,32 @@ mod tests {
     }
 
     #[test]
-    fn secret_locked_update_borrows_current_and_publishes_zeroizing_replacement() {
+    fn locked_update_borrows_current_and_publishes_replacement() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
 
-        locked_update_secret_owned_file(&layout, "config.json", 64, |current| {
+        locked_update_owned_file(&layout, "settings.json", 64, |current| {
             let current: Option<&[u8]> = current;
             assert_eq!(current, Some(b"old".as_slice()));
-            Ok(Zeroizing::new(b"new-secret".to_vec()))
+            Ok(b"new-value".to_vec())
         })
-        .expect("secret update");
+        .expect("locked update");
 
         assert_eq!(
-            read_owned_file(&layout, "config.json", 64)
+            read_owned_file(&layout, "settings.json", 64)
                 .expect("read replacement")
                 .as_deref()
                 .map(Vec::as_slice),
-            Some(b"new-secret".as_slice())
+            Some(b"new-value".as_slice())
         );
     }
 
     #[test]
     fn callback_failure_preserves_target_without_temporary_file() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
 
-        let error = locked_update_secret_owned_file(&layout, "config.json", 64, |_| {
+        let error = locked_update_owned_file(&layout, "settings.json", 64, |_| {
             Err(ConfigError::new(ConfigErrorKind::AuthorityValidation))
         })
         .expect_err("callback failure");
@@ -611,33 +598,22 @@ mod tests {
     }
 
     #[test]
-    fn oversized_ordinary_locked_replacement_preserves_target_without_temporary_file() {
+    fn oversized_locked_replacement_preserves_target_without_temporary_file() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
 
-        let error = locked_update_owned_file(&layout, "config.json", 4, |_| Ok(vec![b'x'; 5]))
-            .expect_err("oversized ordinary replacement");
-
-        assert_eq!(error.kind(), ConfigErrorKind::Oversized);
-        assert_preserved_without_temporary_file(&layout);
-    }
-
-    #[test]
-    fn oversized_secret_locked_replacement_preserves_target_without_temporary_file() {
-        let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
-
-        let error = locked_update_secret_owned_file(&layout, "config.json", 4, |_| {
-            Ok(Zeroizing::new(vec![b'x'; 5]))
-        })
-        .expect_err("oversized secret replacement");
+        let error = locked_update_owned_file(&layout, "settings.json", 4, |_| Ok(vec![b'x'; 5]))
+            .expect_err("oversized replacement");
 
         assert_eq!(error.kind(), ConfigErrorKind::Oversized);
         assert_preserved_without_temporary_file(&layout);
     }
 
     fn assert_preserved_without_temporary_file(layout: &HomeLayout) {
-        assert_eq!(fs::read(layout.config_json()).expect("target"), b"old");
+        assert_eq!(
+            fs::read(owned(layout, "settings.json")).expect("target"),
+            b"old"
+        );
         assert!(
             fs::read_dir(layout.root())
                 .expect("root listing")
@@ -649,14 +625,17 @@ mod tests {
     #[test]
     fn injected_pre_rename_failure_preserves_target_and_cleans_temp() {
         let (_parent, layout) = layout();
-        replace_owned_file(&layout, "config.json", b"old").expect("initial replace");
+        replace_owned_file(&layout, "settings.json", b"old").expect("initial replace");
         platform::fail_before_rename_for_test();
 
-        let error = replace_owned_file(&layout, "config.json", b"new")
+        let error = replace_owned_file(&layout, "settings.json", b"new")
             .expect_err("injected pre-rename failure");
 
         assert_eq!(error.kind(), ConfigErrorKind::AtomicReplace);
-        assert_eq!(fs::read(layout.config_json()).expect("target"), b"old");
+        assert_eq!(
+            fs::read(owned(&layout, "settings.json")).expect("target"),
+            b"old"
+        );
         let names = fs::read_dir(layout.root())
             .expect("root listing")
             .map(|entry| entry.expect("entry").file_name())
@@ -673,38 +652,31 @@ mod tests {
     fn injected_parent_durability_failure_is_propagated() {
         let (_parent, layout) = layout();
         platform::fail_parent_barrier_for_test();
-        let error = replace_owned_file(&layout, "config.json", b"new")
+        let error = replace_owned_file(&layout, "settings.json", b"new")
             .expect_err("parent durability failure");
         assert_eq!(error.kind(), ConfigErrorKind::Io);
     }
 
-    fn assert_private_evidence(path: &std::path::Path, kind: OwnedKind) {
-        #[cfg(unix)]
+    fn assert_private_evidence(path: &std::path::Path, directory: bool) {
+        let metadata = fs::metadata(path).expect("metadata");
         assert_eq!(
-            probe_access_control(path),
-            AccessControlEvidence::UnixMode {
-                kind,
-                mode: if kind == OwnedKind::Directory {
-                    0o700
-                } else {
-                    0o600
-                },
-            }
+            metadata.is_dir(),
+            directory,
+            "{} has the wrong final type",
+            path.display()
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                metadata.permissions().mode() & 0o777,
+                if directory { 0o700 } else { 0o600 },
+                "{} is not private",
+                path.display()
+            );
+        }
         #[cfg(windows)]
-        assert!(matches!(
-            probe_access_control(path),
-            AccessControlEvidence::WindowsProtectedDacl {
-                kind: actual_kind,
-                owner_allowed: true,
-                owner_current_user: true,
-                current_user: true,
-                system: true,
-                protected: true,
-                ace_count: 1 | 2,
-                extra_aces: 0,
-                ..
-            } if actual_kind == kind
-        ));
+        assert_exact_private_for_tests(path);
     }
 }

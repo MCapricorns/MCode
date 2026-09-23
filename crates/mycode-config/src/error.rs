@@ -22,18 +22,10 @@ pub enum ConfigErrorKind {
     AccessControl,
     /// A source file could not be opened, read, or inspected.
     Io,
-    /// The operating-system cryptographic random source failed.
-    Random,
     /// JSON input was not valid UTF-8.
     NonUtf8,
     /// A byte bound was exceeded.
     Oversized,
-    /// A JSON nesting-depth bound was exceeded.
-    TooDeep,
-    /// A JSON node-count bound was exceeded.
-    TooManyNodes,
-    /// An object contained a duplicate member name.
-    DuplicateKey,
     /// Input was not strict JSON, was partial, or had trailing content.
     InvalidJson,
     /// An owned authority document or value failed strict validation.
@@ -48,8 +40,6 @@ pub enum ConfigErrorKind {
     Lock,
     /// A temporary file could not replace the destination.
     AtomicReplace,
-    /// Recovery failed after durable staging deletion began.
-    RecoveryIndeterminate,
 }
 
 struct ConfigErrorInner {
@@ -115,11 +105,6 @@ impl ConfigError {
         self
     }
 
-    pub(crate) fn with_path(mut self, path: &Path) -> Self {
-        self.inner.path = Some(path.to_path_buf());
-        self
-    }
-
     /// Returns this failure's stable category.
     #[must_use]
     pub fn kind(&self) -> ConfigErrorKind {
@@ -156,12 +141,8 @@ impl ConfigError {
             ConfigErrorKind::LinkEscape => "owned path link traversal was rejected",
             ConfigErrorKind::AccessControl => "owned path access control failed",
             ConfigErrorKind::Io => "configuration file I/O failed",
-            ConfigErrorKind::Random => "operating-system random generation failed",
             ConfigErrorKind::NonUtf8 => "configuration JSON is not UTF-8",
             ConfigErrorKind::Oversized => "configuration size limit was exceeded",
-            ConfigErrorKind::TooDeep => "configuration nesting limit was exceeded",
-            ConfigErrorKind::TooManyNodes => "configuration node limit was exceeded",
-            ConfigErrorKind::DuplicateKey => "configuration JSON contains a duplicate key",
             ConfigErrorKind::InvalidJson => "configuration is not strict complete JSON",
             ConfigErrorKind::AuthorityValidation => "owned authority document is invalid",
             ConfigErrorKind::RevisionConflict => "owned authority revision conflict",
@@ -169,7 +150,6 @@ impl ConfigError {
             ConfigErrorKind::Serialization => "configuration serialization failed",
             ConfigErrorKind::Lock => "configuration advisory lock failed",
             ConfigErrorKind::AtomicReplace => "configuration file replacement failed",
-            ConfigErrorKind::RecoveryIndeterminate => "staging recovery outcome is indeterminate",
         };
         match &self.inner.detail {
             Some(detail) => format!("{summary}: {detail}"),

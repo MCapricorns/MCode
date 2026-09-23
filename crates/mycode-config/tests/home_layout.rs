@@ -2,83 +2,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use mycode_config::{
-    ConfigErrorKind, HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, PluginFamily,
-    SCRATCH_DIR, SESSIONS_DIR, TransactionId, project_folder_name, session_relative,
+    ConfigErrorKind, HomeEnv, HomeLayout, MYCODE_DIR_NAME, MYCODE_HOME_ENV, SCRATCH_DIR,
+    SESSIONS_DIR, project_folder_name, session_relative,
 };
-
-#[test]
-fn nested_top_level_plugin_hierarchy_is_exact() {
-    let root = absolute_dummy_path("hierarchy");
-    let layout = HomeLayout::from_root(&root).expect("valid root");
-
-    assert_eq!(layout.root(), root);
-    assert_eq!(layout.config_json(), root.join("config.json"));
-    assert_eq!(layout.plugins_dir(), root.join("plugins"));
-
-    let built_ins = [
-        (PluginFamily::Providers, "providers"),
-        (PluginFamily::Web, "web"),
-        (PluginFamily::Mcp, "mcp"),
-        (PluginFamily::Usage, "usage"),
-        (PluginFamily::Ui, "ui"),
-    ];
-    assert_eq!(PluginFamily::ALL, built_ins.map(|(family, _)| family));
-    for (family, directory_name) in built_ins {
-        assert_eq!(family.id(), format!("com.mycode.{directory_name}"));
-        assert_eq!(
-            layout.plugin_dir(family),
-            root.join("plugins").join(directory_name)
-        );
-    }
-
-    let plugin = root.join("plugins").join("providers");
-    let packs = plugin.join("packs");
-
-    let pack = packs.join("auth.json");
-    assert_eq!(layout.packs_dir(PluginFamily::Providers), packs);
-    assert_eq!(
-        layout
-            .pack_dir(PluginFamily::Providers, "auth.json")
-            .expect("pack"),
-        pack
-    );
-    assert_eq!(
-        layout
-            .pack_installation_json(PluginFamily::Providers, "auth.json")
-            .expect("pack installation"),
-        pack.join("installation.json")
-    );
-    assert_eq!(
-        layout
-            .pack_data_dir(PluginFamily::Providers, "auth.json")
-            .expect("pack data"),
-        pack.join("data")
-    );
-    assert_eq!(
-        layout
-            .pack_versions_dir(PluginFamily::Providers, "auth.json")
-            .expect("pack versions"),
-        pack.join("versions")
-    );
-
-    assert_eq!(layout.host_dir(), root.join("plugins").join(".host"));
-    assert_eq!(layout.host_auth_json(), layout.host_dir().join("auth.json"));
-    assert_eq!(
-        layout.host_staging_lock(),
-        root.join("plugins").join(".staging.lock")
-    );
-    assert_eq!(
-        layout.host_staging_dir(),
-        root.join("plugins").join(".staging")
-    );
-    let transaction_id = TransactionId::generate().expect("transaction ID");
-    assert_eq!(
-        layout.transaction_staging_dir(&transaction_id),
-        root.join("plugins")
-            .join(".staging")
-            .join(transaction_id.as_str())
-    );
-}
 
 #[test]
 fn path_construction_creates_nothing() {
@@ -86,20 +12,11 @@ fn path_construction_creates_nothing() {
     assert!(!root.exists(), "dummy root must start absent");
 
     let layout = HomeLayout::from_root(&root).expect("valid root");
-    let _ = layout.config_json();
-    let _ = layout.plugins_dir();
-    let _ = layout.plugin_dir(PluginFamily::Web);
-    let _ = layout.host_dir();
-    let _ = layout.host_auth_json();
-    let _ = layout.host_staging_lock();
-    let _ = layout.host_staging_dir();
     let _ = layout
-        .pack_dir(PluginFamily::Web, "pack.example")
-        .expect("pack");
-    let transaction_id = TransactionId::generate().expect("transaction ID");
-    let _ = layout.transaction_staging_dir(&transaction_id);
-    let _ = layout.owned_join("controlled/relative/path").expect("join");
+        .owned_join("sessions/ses-1/todos.json")
+        .expect("join");
 
+    assert_eq!(layout.root(), root);
     assert!(!root.exists(), "path construction must not create the root");
 }
 
@@ -149,7 +66,7 @@ fn environment_precedence_is_fail_closed() {
     let from_home = HomeLayout::from_env(HomeEnv {
         mycode_home: Some(OsString::new()),
         home: Some(user_home.clone().into_os_string()),
-        user_profile: Some(profile.clone().into_os_string()),
+        user_profile: Some(profile.into_os_string()),
     })
     .expect("empty override");
     assert_eq!(from_home.root(), user_home.join(MYCODE_DIR_NAME));
@@ -233,12 +150,15 @@ fn roots_are_absolute_normalized_and_cwd_independent() {
 
     let root = absolute_dummy_path("cwd-stable");
     let layout = HomeLayout::from_root(&root).expect("absolute root");
-    let expected_config = root.join("config.json");
+    let expected_session = root.join("sessions").join("ses-1");
     let original = std::env::current_dir().expect("current directory");
     let alternate = original.parent().expect("current directory has a parent");
     let _guard = CurrentDirGuard::enter(alternate);
     assert_eq!(layout.root(), root);
-    assert_eq!(layout.config_json(), expected_config);
+    assert_eq!(
+        layout.owned_join("sessions/ses-1").expect("session path"),
+        expected_session
+    );
 }
 
 #[cfg(windows)]
@@ -305,113 +225,6 @@ fn unix_filesystem_root_is_not_an_owned_home() {
 }
 
 #[test]
-fn pack_ids_retain_the_portable_grammar() {
-    let layout = HomeLayout::from_root(absolute_dummy_path("ids")).expect("layout");
-    let maximum = format!("a{}", "b".repeat(127));
-    assert_eq!(maximum.len(), 128);
-
-    for valid in [
-        "a",
-        "a0",
-        "a.b_c-d9",
-        "auth.json",
-        "com.mycode.providers",
-        &maximum,
-    ] {
-        assert!(
-            layout.pack_dir(PluginFamily::Web, valid).is_ok(),
-            "rejected {valid:?}"
-        );
-    }
-
-    let too_long = format!("a{}", "b".repeat(128));
-    for invalid in [
-        "",
-        "0abc",
-        "Aabc",
-        "abc.",
-        "abc-",
-        "abc_",
-        ".abc",
-        ".host",
-        ".staging",
-        "a/b",
-        "a\\b",
-        "a:b",
-        "a*b",
-        "a?b",
-        "a\0b",
-        "a\nb",
-        "a b",
-        "café",
-        "con",
-        "nul.json",
-        "com1",
-        "lpt9.cache",
-        "com\u{00B9}",
-        &too_long,
-    ] {
-        let pack_error = layout
-            .pack_dir(PluginFamily::Web, invalid)
-            .expect_err("invalid Pack ID");
-        assert_eq!(
-            pack_error.kind(),
-            ConfigErrorKind::PathEscape,
-            "{invalid:?}"
-        );
-    }
-
-    assert_eq!(
-        layout
-            .pack_dir(PluginFamily::Providers, "auth.json")
-            .expect("auth.json is a valid Pack ID"),
-        absolute_dummy_path("ids")
-            .join("plugins")
-            .join("providers")
-            .join("packs")
-            .join("auth.json")
-    );
-    assert_eq!(
-        layout.host_auth_json(),
-        absolute_dummy_path("ids")
-            .join("plugins")
-            .join(".host")
-            .join("auth.json")
-    );
-}
-
-#[test]
-fn generated_transaction_id_has_the_only_public_spelling() {
-    let transaction_id = TransactionId::generate().expect("transaction ID");
-    let spelling = transaction_id.as_str();
-
-    assert_eq!(spelling.len(), 36);
-    assert_eq!(&spelling[..4], "tx1-");
-    assert!(
-        spelling[4..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    );
-    assert_eq!(transaction_id.to_string(), spelling);
-    assert!(format!("{transaction_id:?}").contains(spelling));
-}
-
-#[test]
-fn generated_transaction_id_routes_directly_below_staging() {
-    let layout = HomeLayout::from_root(absolute_dummy_path("transaction-route")).expect("layout");
-    let transaction_id = TransactionId::generate().expect("transaction ID");
-    let staging = layout.host_staging_dir();
-    let transaction = layout.transaction_staging_dir(&transaction_id);
-
-    assert_eq!(transaction.parent(), Some(staging.as_path()));
-    assert_eq!(
-        transaction,
-        staging.join(transaction_id.as_str()),
-        "transaction path must use only the generated ID component"
-    );
-}
-
-#[test]
 fn owned_join_rejects_every_unsafe_component() {
     let root = absolute_dummy_path("owned-join");
     let layout = HomeLayout::from_root(&root).expect("layout");
@@ -464,9 +277,37 @@ fn path_error_display_is_value_free() {
 
     let escape = HomeLayout::from_root(absolute_dummy_path("display"))
         .expect("layout")
-        .pack_dir(PluginFamily::Providers, "private/value")
-        .expect_err("invalid ID");
+        .owned_join("private/../value")
+        .expect_err("invalid join");
+    assert_eq!(escape.kind(), ConfigErrorKind::PathEscape);
     assert!(!escape.to_string().contains("private"));
+}
+
+#[test]
+fn session_files_live_under_sessions_not_workspace() {
+    let path = session_relative("ses1-abc", "todos.json").expect("path");
+    assert_eq!(path, format!("{SESSIONS_DIR}/ses1-abc/todos.json"));
+    assert_eq!(SCRATCH_DIR, "scratch");
+    assert_eq!(SESSIONS_DIR, "sessions");
+
+    for (session_id, file) in [
+        ("", "todos.json"),
+        ("a/b", "todos.json"),
+        ("a\\b", "todos.json"),
+        ("ses1", ""),
+        ("ses1", "a/b"),
+        ("ses1", "a\\b"),
+    ] {
+        let error = session_relative(session_id, file)
+            .expect_err("session id and file must be single components");
+        assert_eq!(error.kind(), ConfigErrorKind::AuthorityValidation);
+    }
+
+    assert_eq!(project_folder_name("/work/MCode"), "MCode");
+    assert_eq!(project_folder_name("/tmp/web-app"), "web-app");
+    assert_eq!(project_folder_name("/tmp/trimmed "), "trimmed");
+    assert_eq!(project_folder_name("/"), "/");
+    assert_eq!(project_folder_name(""), "");
 }
 
 fn absolute_dummy_path(name: &str) -> PathBuf {
@@ -496,14 +337,4 @@ impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.original).expect("restore current directory");
     }
-}
-
-#[test]
-fn session_files_live_under_sessions_not_workspace() {
-    let path = session_relative("ses1-abc", "todos.json").expect("path");
-    assert_eq!(path, format!("{SESSIONS_DIR}/ses1-abc/todos.json"));
-    assert_eq!(SCRATCH_DIR, "scratch");
-    assert!(session_relative("a/b", "todos.json").is_err());
-    assert_eq!(project_folder_name("/work/MCode"), "MCode");
-    assert_eq!(project_folder_name("/tmp/web-app"), "web-app");
 }

@@ -188,8 +188,8 @@ pub(crate) fn read_resource(path: &Path) -> Result<String, ConfigError> {
 /// Renders discovered resources into ordered system prompt parts.
 ///
 /// Each contribution carries a header naming its source. Oversized or
-/// unreadable files are skipped; the total stays within
-/// [`MAX_TOTAL_PROMPT_CHARS`].
+/// unreadable files are skipped; the total stays within the bounded prompt
+/// budget.
 #[must_use]
 pub fn render_resource_prompt(files: &[ResourceFile]) -> Vec<String> {
     let mut parts = Vec::new();

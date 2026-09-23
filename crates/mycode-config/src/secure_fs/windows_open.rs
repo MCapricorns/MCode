@@ -73,17 +73,13 @@ struct NativeOpenedDirectory {
     created: bool,
 }
 
-/// Parent prefix handle plus the owned-root handle opened relative to it.
-pub(super) struct OpenedRoot {
-    pub(super) parent: File,
-    pub(super) root: File,
-}
-
 #[cfg(test)]
 pub(super) fn open_existing_directory_nofollow(path: &Path) -> Result<File, ConfigError> {
     open_path_directory(path, DIRECTORY_READ_ACCESS)
 }
 
+/// Opens the trailing component without following it, for evidence probes.
+#[cfg(test)]
 pub(super) fn open_existing_object_nofollow(path: &Path) -> Result<File, ConfigError> {
     if !path.is_absolute() {
         return Err(ConfigError::for_path(ConfigErrorKind::InvalidHome, path));
@@ -112,23 +108,11 @@ pub(super) fn open_existing_object_nofollow(path: &Path) -> Result<File, ConfigE
     Ok(file)
 }
 
-pub(super) fn open_existing_owned_root(root: &Path) -> Result<OpenedRoot, ConfigError> {
-    if !has_normal_component(root) {
-        return Err(ConfigError::for_path(ConfigErrorKind::InvalidHome, root));
-    }
-    let parent_path = root
-        .parent()
-        .ok_or_else(|| ConfigError::for_path(ConfigErrorKind::InvalidHome, root))?;
-    let name = root
-        .file_name()
-        .ok_or_else(|| ConfigError::for_path(ConfigErrorKind::InvalidHome, root))?;
-    let parent = open_path_directory_follow(parent_path, DIRECTORY_READ_ACCESS)?;
-    verify_exact_root_spelling(&parent, name)?;
-    let root = open_owned_relative_exact(&parent, name)?;
-    verify_exact_root_spelling(&parent, name)?;
-    Ok(OpenedRoot { parent, root })
-}
-
+/// Creates or repairs the owned root and returns its parent handle.
+///
+/// The root directory is opened relative to the parent with the exact
+/// protected DACL applied, secured, and — when newly created — synced; the
+/// returned parent lets callers reopen the root with full owned access.
 pub(super) fn create_owned_root(
     root: &Path,
     expected_root_name: Option<&str>,
@@ -136,7 +120,7 @@ pub(super) fn create_owned_root(
     mut secure_final: impl FnMut(&File) -> Result<(), ConfigError>,
     mut verify_created: impl FnMut(&File) -> Result<(), ConfigError>,
     mut sync_created: impl FnMut(&File, &File) -> Result<(), ConfigError>,
-) -> Result<OpenedRoot, ConfigError> {
+) -> Result<File, ConfigError> {
     if !has_normal_component(root) {
         return Err(ConfigError::for_path(ConfigErrorKind::InvalidHome, root));
     }
@@ -168,10 +152,7 @@ pub(super) fn create_owned_root(
         sync_created(&opened.file, &parent)?;
     }
     reject_wrong_case_root(&parent, expected_root_name)?;
-    Ok(OpenedRoot {
-        parent,
-        root: opened.file,
-    })
+    Ok(parent)
 }
 
 pub(super) fn create_owned_child(
@@ -193,22 +174,8 @@ pub(super) fn open_owned_relative(parent: &File, name: &OsStr) -> Result<File, C
     Ok(opened.file)
 }
 
-pub(super) fn open_owned_relative_exact(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
-    open_relative_directory_exact(parent, name, OWNED_DIRECTORY_ACCESS)
-}
-
-pub(super) fn open_relative_directory_exact(
-    parent: &File,
-    name: &OsStr,
-    access: u32,
-) -> Result<File, ConfigError> {
-    require_exact_child(parent, name)?;
-    let opened = nt_open_directory(parent, name, access, FILE_OPEN, None, false)?;
-    reject_reparse_or_wrong_type(&opened.file)?;
-    require_exact_child(parent, name)?;
-    Ok(opened.file)
-}
-
+/// Opens a regular file only under its exact spelling, for case-alias tests.
+#[cfg(test)]
 pub(super) fn open_relative_file_exact(
     parent: &File,
     name: &OsStr,
@@ -221,17 +188,13 @@ pub(super) fn open_relative_file_exact(
     Ok(opened.file)
 }
 
+#[cfg(test)]
 fn require_exact_child(parent: &File, name: &OsStr) -> Result<(), ConfigError> {
     if !exact_child_exists(parent, name)? {
         return Err(ConfigError::new(ConfigErrorKind::AuthorityValidation)
             .with_io_kind(io::ErrorKind::NotFound));
     }
     Ok(())
-}
-
-pub(super) fn open_dacl_relative(parent: &File, name: &OsStr) -> Result<File, ConfigError> {
-    let opened = open_relative_directory(parent, name, DIRECTORY_DACL_ACCESS, FILE_OPEN, None)?;
-    Ok(opened.file)
 }
 
 pub(super) fn open_relative_file(
@@ -440,6 +403,8 @@ fn nt_open_file(
     })
 }
 
+/// Reports whether one child exists under its exact spelling, for tests.
+#[cfg(test)]
 pub(super) fn exact_child_exists(parent: &File, expected: &OsStr) -> Result<bool, ConfigError> {
     let mut exact = false;
     query_directory_names(parent, |name| {
@@ -521,24 +486,6 @@ fn reject_wrong_case_root(
     Ok(())
 }
 
-pub(super) fn verify_exact_root_spelling(
-    parent: &File,
-    expected: &OsStr,
-) -> Result<(), ConfigError> {
-    let mut exact = false;
-    let wrong_case = query_directory_names(parent, |name| {
-        if name == expected {
-            exact = true;
-            return Ok(None);
-        }
-        Ok(ordinal_names_equal_ignore_case(&name, expected)?.then_some(()))
-    })?;
-    if wrong_case.is_some() || !exact {
-        return Err(ConfigError::new(ConfigErrorKind::InvalidHome));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 fn open_path_directory(path: &Path, access: u32) -> Result<File, ConfigError> {
     open_path_directory_access(path, access, false, true)
@@ -604,6 +551,7 @@ fn reject_reparse_or_wrong_type(file: &File) -> Result<(), ConfigError> {
     reject_non_directory(attributes)
 }
 
+#[cfg(test)]
 fn reject_reparse(file: &File) -> Result<(), ConfigError> {
     if file_attributes(file)? & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(ConfigError::new(ConfigErrorKind::LinkEscape));

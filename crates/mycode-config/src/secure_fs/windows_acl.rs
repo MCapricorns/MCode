@@ -21,18 +21,29 @@ use windows_sys::Win32::Security::{
     TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle,
-    READ_CONTROL, ReOpenFile, WRITE_DAC, WRITE_OWNER,
+    FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    ReOpenFile, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-use super::super::{AccessControlEvidence, OwnedKind};
 use crate::{ConfigError, ConfigErrorKind};
 
 const SDDL_REVISION_1: u32 = 1;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const SYSTEM_SID: &str = "S-1-5-18";
+
+/// Owner and DACL facts extracted from one opened object.
+#[derive(Debug)]
+struct AclEvidence {
+    owner_allowed: bool,
+    owner_current_user: bool,
+    owner_system: bool,
+    current_user: bool,
+    system: bool,
+    protected: bool,
+    ace_count: u32,
+    extra_aces: u32,
+}
 
 pub(super) struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 
@@ -110,28 +121,9 @@ fn descriptor_from_sddl(sddl: &str) -> Result<SecurityDescriptor, ConfigError> {
     Ok(SecurityDescriptor(descriptor))
 }
 
-pub(super) fn require_allowed_owner(file: &File) -> Result<(), ConfigError> {
-    if matches!(
-        inspect_handle(file)?,
-        AccessControlEvidence::WindowsProtectedDacl {
-            owner_allowed: true,
-            ..
-        }
-    ) {
-        Ok(())
-    } else {
-        Err(ConfigError::new(ConfigErrorKind::AccessControl))
-    }
-}
-
 pub(super) fn require_current_owner(file: &File) -> Result<(), ConfigError> {
-    if matches!(
-        inspect_handle(file)?,
-        AccessControlEvidence::WindowsProtectedDacl {
-            owner_current_user: true,
-            ..
-        }
-    ) {
+    let current_sid = current_user_sid_string()?;
+    if inspect_handle_with_sid(file, &current_sid)?.owner_current_user {
         Ok(())
     } else {
         Err(ConfigError::new(ConfigErrorKind::AccessControl))
@@ -144,22 +136,17 @@ pub(super) fn secure_existing_object(file: &File) -> Result<(), ConfigError> {
     if is_exact_fixed_descriptor(&existing, &current_sid) {
         return Ok(());
     }
-    let (owner_current_user, owner_system) = match existing {
-        AccessControlEvidence::WindowsProtectedDacl {
-            owner_current_user,
-            owner_system,
-            owner_allowed: true,
-            ..
-        } => (owner_current_user, owner_system),
-        _ => return Err(ConfigError::new(ConfigErrorKind::AccessControl)),
-    };
+    if !existing.owner_allowed {
+        return Err(ConfigError::new(ConfigErrorKind::AccessControl));
+    }
+    let owner_current_user = existing.owner_current_user;
 
     let descriptor = protected_descriptor()?;
     let (owner, dacl) = descriptor_owner_and_dacl(&descriptor)?;
     let reopened;
     let target = if owner_current_user {
         file
-    } else if owner_system {
+    } else if existing.owner_system {
         reopened = reopen_for_owner_change(file)?;
         &reopened
     } else {
@@ -225,31 +212,17 @@ pub(super) fn verify_fixed_descriptor(file: &File) -> Result<(), ConfigError> {
     }
 }
 
-fn is_exact_fixed_descriptor(evidence: &AccessControlEvidence, current_sid: &str) -> bool {
-    matches!(
-        evidence,
-        AccessControlEvidence::WindowsProtectedDacl {
-            owner_allowed: true,
-            owner_current_user: true,
-            current_user: true,
-            system: true,
-            protected: true,
-            extra_aces: 0,
-            ace_count,
-            ..
-        } if *ace_count == expected_ace_count(current_sid)
-    )
+fn is_exact_fixed_descriptor(evidence: &AclEvidence, current_sid: &str) -> bool {
+    evidence.owner_allowed
+        && evidence.owner_current_user
+        && evidence.current_user
+        && evidence.system
+        && evidence.protected
+        && evidence.extra_aces == 0
+        && evidence.ace_count == expected_ace_count(current_sid)
 }
 
-pub(super) fn inspect_handle(file: &File) -> Result<AccessControlEvidence, ConfigError> {
-    let current_sid = current_user_sid_string()?;
-    inspect_handle_with_sid(file, &current_sid)
-}
-
-fn inspect_handle_with_sid(
-    file: &File,
-    current_sid: &str,
-) -> Result<AccessControlEvidence, ConfigError> {
+fn inspect_handle_with_sid(file: &File, current_sid: &str) -> Result<AclEvidence, ConfigError> {
     let mut owner = null_mut();
     let mut dacl: *mut ACL = null_mut();
     let mut raw_descriptor: PSECURITY_DESCRIPTOR = null_mut();
@@ -274,7 +247,7 @@ fn inspect_handle_with_sid(
         return Err(ConfigError::new(ConfigErrorKind::AccessControl));
     }
     let descriptor = SecurityDescriptor(raw_descriptor);
-    inspect_descriptor(&descriptor, owner, dacl, current_sid, object_kind(file)?)
+    inspect_descriptor(&descriptor, owner, dacl, current_sid)
 }
 
 fn inspect_descriptor(
@@ -282,8 +255,7 @@ fn inspect_descriptor(
     owner: *mut core::ffi::c_void,
     dacl: *mut ACL,
     current_sid: &str,
-    kind: OwnedKind,
-) -> Result<AccessControlEvidence, ConfigError> {
+) -> Result<AclEvidence, ConfigError> {
     let mut control: SECURITY_DESCRIPTOR_CONTROL = 0;
     let mut revision = 0u32;
     // SAFETY: `descriptor` owns a live valid security descriptor.
@@ -297,8 +269,7 @@ fn inspect_descriptor(
     let owner_current_user = owner_text.as_deref() == Some(current_sid);
     let owner_system = owner_text.as_deref() == Some(SYSTEM_SID);
     let ace_evidence = inspect_aces(dacl, current_sid);
-    Ok(AccessControlEvidence::WindowsProtectedDacl {
-        kind,
+    Ok(AclEvidence {
         owner_allowed: owner_current_user || owner_system,
         owner_current_user,
         owner_system,
@@ -488,33 +459,24 @@ fn sid_string(sid: *mut core::ffi::c_void) -> Option<String> {
     }
 }
 
-fn object_kind(file: &File) -> Result<OwnedKind, ConfigError> {
-    let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `file` is live and `information` is writable output storage.
-    let queried = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
-    if queried == 0 {
-        let error = io::Error::last_os_error();
-        return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(error.kind()));
-    }
-    Ok(
-        if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-            OwnedKind::Directory
-        } else {
-            OwnedKind::File
-        },
-    )
-}
-
 fn expected_ace_count(current_sid: &str) -> u32 {
     if current_sid == SYSTEM_SID { 1 } else { 2 }
 }
 
-pub(super) fn unavailable_reason(error: &ConfigError) -> super::NativeUnavailableReason {
-    if error.io_kind() == Some(io::ErrorKind::PermissionDenied) {
-        super::NativeUnavailableReason::InsufficientPrivilege
-    } else {
-        super::NativeUnavailableReason::QueryFailed
-    }
+/// Asserts that one path carries the exact fixed descriptor of owned objects.
+///
+/// This is the test-only successor of the removed public evidence probe: it
+/// opens the trailing component without following it and checks the same
+/// facts the verifier enforces.
+#[cfg(test)]
+pub(in crate::secure_fs) fn assert_exact_private_for_tests(path: &std::path::Path) {
+    let file = super::windows_open::open_existing_object_nofollow(path).expect("open owned object");
+    let current_sid = current_user_sid_string().expect("current SID");
+    let evidence = inspect_handle_with_sid(&file, &current_sid).expect("inspect DACL evidence");
+    assert!(
+        is_exact_fixed_descriptor(&evidence, &current_sid),
+        "expected the exact protected DACL, found {evidence:?}"
+    );
 }
 
 #[cfg(test)]
@@ -557,11 +519,10 @@ pub(super) fn apply_sddl_dacl_for_tests(file: &File, sddl: &str) -> Result<(), C
 mod tests {
     use super::{
         SYSTEM_SID, current_user_sid_string, descriptor_from_sddl, descriptor_owner_and_dacl,
-        inspect_descriptor, protected_sddl,
+        inspect_descriptor, is_exact_fixed_descriptor, protected_sddl,
     };
-    use crate::{AccessControlEvidence, OwnedKind};
 
-    fn evidence(sddl: &str) -> AccessControlEvidence {
+    fn evidence(sddl: &str) -> super::AclEvidence {
         let descriptor = descriptor_from_sddl(sddl).expect("synthetic descriptor");
         let (owner, dacl) = descriptor_owner_and_dacl(&descriptor).expect("owner and DACL");
         inspect_descriptor(
@@ -569,49 +530,34 @@ mod tests {
             owner,
             dacl,
             &current_user_sid_string().expect("current SID"),
-            OwnedKind::Directory,
         )
         .expect("evidence")
-    }
-
-    fn assert_not_exact(sddl: &str) {
-        assert!(matches!(
-            evidence(sddl),
-            AccessControlEvidence::WindowsProtectedDacl {
-                current_user: false,
-                ..
-            } | AccessControlEvidence::WindowsProtectedDacl {
-                extra_aces: 1..,
-                ..
-            }
-        ));
     }
 
     #[test]
     fn verifier_rejects_gr_inherited_extra_and_deny_aces() {
         let sid = current_user_sid_string().expect("current SID");
-        assert_not_exact(&format!("O:{sid}D:P(A;;GR;;;{sid})(A;;FA;;;SY)"));
-        assert_not_exact(&format!("O:{sid}D:P(A;CI;FA;;;{sid})(A;;FA;;;SY)"));
-        assert_not_exact(&format!(
-            "O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;WD)"
-        ));
-        assert_not_exact(&format!(
-            "O:{sid}D:P(D;;GR;;;WD)(A;;FA;;;{sid})(A;;FA;;;SY)"
-        ));
+        for sddl in [
+            format!("O:{sid}D:P(A;;GR;;;{sid})(A;;FA;;;SY)"),
+            format!("O:{sid}D:P(A;CI;FA;;;{sid})(A;;FA;;;SY)"),
+            format!("O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;WD)"),
+            format!("O:{sid}D:P(D;;GR;;;WD)(A;;FA;;;{sid})(A;;FA;;;SY)"),
+        ] {
+            let inspected = evidence(&sddl);
+            assert!(
+                !is_exact_fixed_descriptor(&inspected, &sid),
+                "verifier accepted a widened DACL: {sddl}"
+            );
+        }
     }
 
     #[test]
     fn unrelated_owner_is_rejected() {
         let sid = current_user_sid_string().expect("current SID");
-        assert!(matches!(
-            evidence(&format!("O:BAD:P(A;;FA;;;{sid})(A;;FA;;;SY)")),
-            AccessControlEvidence::WindowsProtectedDacl {
-                owner_allowed: false,
-                owner_current_user: false,
-                owner_system: false,
-                ..
-            }
-        ));
+        let inspected = evidence(&format!("O:BAD:P(A;;FA;;;{sid})(A;;FA;;;SY)"));
+        assert!(!inspected.owner_allowed);
+        assert!(!inspected.owner_current_user);
+        assert!(!inspected.owner_system);
     }
 
     #[test]
@@ -620,15 +566,10 @@ mod tests {
         if sid == SYSTEM_SID {
             return;
         }
-        assert!(matches!(
-            evidence("O:SYD:P(A;;FA;;;SY)"),
-            AccessControlEvidence::WindowsProtectedDacl {
-                owner_allowed: true,
-                owner_current_user: false,
-                owner_system: true,
-                ..
-            }
-        ));
+        let inspected = evidence("O:SYD:P(A;;FA;;;SY)");
+        assert!(inspected.owner_allowed);
+        assert!(!inspected.owner_current_user);
+        assert!(inspected.owner_system);
     }
 
     #[test]
