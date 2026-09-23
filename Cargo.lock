@@ -3754,16 +3754,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "junction"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "160f2eade097f30263b548aae5deb12ad349c909baa710fa24b92c9090b2e006"
-dependencies = [
- "scopeguard",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4227,19 +4217,16 @@ dependencies = [
 
 [[package]]
 name = "mycode-agent"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
- "async-trait",
  "futures-util",
  "getrandom 0.4.3",
  "mycode-config",
  "mycode-core",
  "mycode-tools",
- "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -4247,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "async-trait",
  "jsonschema",
@@ -4261,7 +4248,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -4270,16 +4256,14 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "blake3",
  "getrandom 0.4.3",
- "junction",
  "rustix",
  "semver",
  "serde",
  "serde_json",
- "tempfile",
  "uuid",
  "windows-sys 0.61.2",
  "zeroize",
@@ -4287,7 +4271,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "async-trait",
  "serde",
@@ -4300,7 +4284,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "gpui-kit",
  "mycode-app",
@@ -4313,7 +4297,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4323,14 +4307,13 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
 name = "mycode-tools"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "aho-corasick",
  "async-trait",
@@ -4342,7 +4325,6 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "jsonschema",
- "junction",
  "libc",
  "memchr",
  "mycode-core",
@@ -4352,7 +4334,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
