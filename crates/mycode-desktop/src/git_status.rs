@@ -6,6 +6,24 @@
 use std::path::Path;
 use std::process::Command;
 
+/// `git` with no console window. The desktop process has no console, so a
+/// plain spawn of `git.exe` allocates a black window on Windows.
+fn git_command() -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // CREATE_NO_WINDOW: do not allocate a console for this child.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = Command::new("git");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("git")
+    }
+}
+
 /// One dirty path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GitFile {
@@ -33,7 +51,7 @@ impl GitSnapshot {
 
 /// `git status --porcelain=v1 -b` for one directory.
 pub(crate) fn read_status(root: &Path) -> GitSnapshot {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args(["status", "--porcelain=v1", "-b"])
@@ -75,7 +93,7 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
 
 /// Unified diff for one path. Untracked files have no HEAD diff.
 pub(crate) fn read_diff(root: &Path, path: &str) -> String {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args(["diff", "--", path])

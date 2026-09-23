@@ -415,6 +415,49 @@ impl Workspace {
         self.open_isolated_project(project, cx);
     }
 
+    /// Makes one workspace folder the open chat's working directory.
+    ///
+    /// The folder stays a member of this workspace. The chat is not parked
+    /// and no second session is started.
+    pub(crate) fn on_focus_workspace_folder(&mut self, project: &str, cx: &mut Context<Self>) {
+        let project = project.trim();
+        if project.is_empty() {
+            return;
+        }
+        self.focused_project = Some(project.to_owned());
+        self.apply_action(DesktopAction::WorkspaceRootAdded(project.to_owned()), cx);
+        self.apply_action(DesktopAction::ProjectOpened(project.to_owned()), cx);
+        let Some(session_id) = self
+            .vm
+            .active
+            .as_ref()
+            .map(|conversation| conversation.session_id.clone())
+        else {
+            self.pending_project = Some(project.to_owned());
+            self.dispatch(BridgeCommand::CreateSession, cx);
+            self.refresh_skills(cx);
+            self.persist_ui_state(cx);
+            return;
+        };
+        self.apply_action(
+            DesktopAction::WorkspaceFolderFocused {
+                session_id: session_id.clone(),
+                project: project.to_owned(),
+            },
+            cx,
+        );
+        self.dispatch(
+            BridgeCommand::SetProjectDir {
+                session_id: session_id.clone(),
+                path: Some(project.to_owned()),
+            },
+            cx,
+        );
+        self.dispatch(BridgeCommand::ListResources { session_id }, cx);
+        self.refresh_skills(cx);
+        self.persist_ui_state(cx);
+    }
+
     /// Enters `project` without moving any other session onto it.
     ///
     /// The open chat is left alone when it already belongs here. An empty

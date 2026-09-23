@@ -1,5 +1,4 @@
-//! The floating ask card: structured questions stay on top of the transcript
-//! until answered.
+//! Structured questions, docked with the todos above the composer.
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
@@ -22,31 +21,17 @@ pub(crate) fn render_ask_panel(
     let theme = cx.theme();
     let desk = Desk::of(theme);
     div()
-        .id("ask-layer")
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
+        .id("ask-inline")
         .px_4()
-        .pb(px(72.))
-        .child(
-            div()
-                .id("ask-scrim")
-                .absolute()
-                .inset_0()
-                .bg(skin::scrim(theme)),
-        )
+        .pt_2()
         .child(
             div()
                 .id("ask-card")
-                .relative()
                 .w_full()
-                .max_w(px(460.))
                 .flex()
                 .flex_col()
                 .gap_3()
-                .p_4()
+                .p_3()
                 .rounded(px(14.))
                 .border_1()
                 .border_color(skin::glass_border(theme))
@@ -88,7 +73,7 @@ pub(crate) fn render_ask_panel(
                                             .flex()
                                             .flex_row()
                                             .flex_wrap()
-                                            .gap_1()
+                                            .gap_2()
                                             .children(choices.iter().enumerate().map(
                                                 |(choice_index, choice)| {
                                                     let answer = choice.clone();

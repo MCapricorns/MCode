@@ -130,6 +130,13 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
+    /// Stop one running subagent without ending the parent turn.
+    CancelSubagent {
+        /// Session identity spelling.
+        session_id: String,
+        /// Provider call id of the `task` tool.
+        call_id: String,
+    },
     /// List project files matching the composer's `@` fragment.
     SearchProjectFiles {
         /// Session whose bound project is searched.
@@ -407,6 +414,8 @@ pub enum BridgeReply {
     ChatStarted(Result<(), String>),
     /// Chat cancel acceptance; the turn unwinds with a `cancelled` event.
     ChatCancelled(Result<(), String>),
+    /// One subagent cancel was delivered. The parent turn keeps running.
+    SubagentCancelled(Result<(), String>),
     /// File matches for the composer's `@` mention.
     ProjectFiles(Result<Vec<String>, String>),
     /// MCP tools listing for one server. The server id rides the reply even

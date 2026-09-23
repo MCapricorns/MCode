@@ -4,8 +4,26 @@
 // keep the console so eprintln diagnostics stay visible.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::borrow::Cow;
+
 use mycode_config::{HomeEnv, HomeLayout};
 use mycode_desktop::workspace;
+
+/// Kit icons plus the embedded application mark used in the title bar.
+struct BrandAssets;
+
+impl gpui_kit::AssetSource for BrandAssets {
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
+        if path == "brand/icon.ico" {
+            return Ok(Some(Cow::Borrowed(include_bytes!("../assets/icon.ico"))));
+        }
+        gpui_kit::assets::AllAssets.load(path)
+    }
+
+    fn list(&self, path: &str) -> gpui_kit::Result<Vec<gpui_kit::SharedString>> {
+        gpui_kit::assets::AllAssets.list(path)
+    }
+}
 
 fn main() {
     // Remove staging directories left behind by earlier self-updates.
@@ -18,7 +36,7 @@ fn main() {
         }
     };
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(BrandAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             workspace::open_window(home, cx);

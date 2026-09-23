@@ -4,14 +4,18 @@ use std::fmt::Write;
 
 use mycode_tools::ToolRegistry;
 
-const IDENTITY: &str = "You are MYCode Agent, a terminal coding agent that completes software-engineering tasks using the available tools.";
+const IDENTITY: &str =
+    "You are MYCode Agent. Complete the task with the tools listed below. Do not invent tools.";
 
-const RULES: [&str; 4] = [
-    "Read existing content before changing it.",
-    "Prefer `read/write/edit/find/grep` over `exec/shell` for file and search work.",
-    "Use `exec` for one direct program with explicit arguments and no shell parsing.",
-    "Use `shell` only for pipelines, redirection, expansion, or a compound script.",
-];
+/// Tool-use contract. Only names tools this process can actually call.
+const TOOL_CALLING: &str = "\
+<tool_calling>
+- Independent calls in one response run together. Do not wait between them.
+- Read existing content before changing it.
+- Prefer `read`, `write`, `edit`, `find`, and `grep` for files and search.
+- Use `exec` for one program with explicit arguments and no shell parsing.
+- Use `shell` only for pipelines, redirection, expansion, or a compound script. Never use it to talk to the user.
+</tool_calling>";
 
 /// Builds the compact default prompt from the currently registered tools.
 pub fn build_system_prompt(tools: &ToolRegistry) -> String {
@@ -39,10 +43,8 @@ pub fn build_system_prompt(tools: &ToolRegistry) -> String {
         }
     }
 
-    prompt.push_str("\n\nRules:");
-    for (index, rule) in RULES.iter().enumerate() {
-        write!(prompt, "\n{}. {rule}", index + 1).expect("writing to a String cannot fail");
-    }
+    prompt.push_str("\n\n");
+    prompt.push_str(TOOL_CALLING);
     prompt
 }
 
@@ -116,15 +118,17 @@ mod tests {
         let prompt = build_system_prompt(&registry(false));
         assert_eq!(
             prompt,
-            "You are MYCode Agent, a terminal coding agent that completes software-engineering tasks using the available tools.\n\n\
+            "You are MYCode Agent. Complete the task with the tools listed below. Do not invent tools.\n\n\
 Available tools:\n\
 - alpha: inspect alpha inputs.\n\
 - zeta\n\n\
-Rules:\n\
-1. Read existing content before changing it.\n\
-2. Prefer `read/write/edit/find/grep` over `exec/shell` for file and search work.\n\
-3. Use `exec` for one direct program with explicit arguments and no shell parsing.\n\
-4. Use `shell` only for pipelines, redirection, expansion, or a compound script."
+<tool_calling>\n\
+- Independent calls in one response run together. Do not wait between them.\n\
+- Read existing content before changing it.\n\
+- Prefer `read`, `write`, `edit`, `find`, and `grep` for files and search.\n\
+- Use `exec` for one program with explicit arguments and no shell parsing.\n\
+- Use `shell` only for pipelines, redirection, expansion, or a compound script. Never use it to talk to the user.\n\
+</tool_calling>"
         );
         assert_eq!(prompt.lines().next(), Some(IDENTITY));
         assert_eq!(build_system_prompt(&registry(false)), prompt);
@@ -138,14 +142,14 @@ Rules:\n\
             .split_once("Available tools:\n")
             .unwrap()
             .1
-            .split_once("\n\nRules:")
+            .split_once("\n\n<tool_calling>")
             .unwrap()
             .0;
         let with_list = with
             .split_once("Available tools:\n")
             .unwrap()
             .1
-            .split_once("\n\nRules:")
+            .split_once("\n\n<tool_calling>")
             .unwrap()
             .0;
 
@@ -167,7 +171,7 @@ Rules:\n\
             .split_once("Available tools:\n")
             .unwrap()
             .1
-            .split_once("\n\nRules:")
+            .split_once("\n\n<tool_calling>")
             .unwrap()
             .0;
         let listed_names: Vec<&str> = list
@@ -184,16 +188,13 @@ Rules:\n\
     }
 
     #[test]
-    fn prompt_has_exactly_the_four_required_rules() {
+    fn tool_calling_names_only_real_file_and_process_tools() {
         let prompt = build_system_prompt(&registry(true));
-        let rules: Vec<&str> = prompt.split_once("Rules:\n").unwrap().1.lines().collect();
-        assert_eq!(
-            rules,
-            RULES
-                .iter()
-                .enumerate()
-                .map(|(index, rule)| format!("{}. {rule}", index + 1))
-                .collect::<Vec<_>>()
-        );
+        let contract = prompt.split_once("<tool_calling>\n").unwrap().1;
+        assert!(contract.contains("read"));
+        assert!(contract.contains("exec"));
+        assert!(contract.contains("shell"));
+        assert!(contract.contains("run together"));
+        assert!(!contract.contains("bash"));
     }
 }

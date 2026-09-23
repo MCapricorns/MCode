@@ -253,6 +253,8 @@ async fn run_chat_turn(
                     home.clone(),
                     cwd.clone(),
                     &settings,
+                    session_id.to_owned(),
+                    state.subagent_cancels.clone(),
                 ),
             ))));
         }
@@ -313,14 +315,8 @@ async fn run_chat_turn(
     let history = crate::compaction::compact_history(&compact_scope, history).await;
 
     let resources = mycode_config::discover_resources(home, &cwd);
-    let mut system_prompt =
-        String::from("You are MYCode, a coding agent. Answer concisely and explain what you did.");
-    system_prompt.push_str(
-        "\n\nFile work MUST use the native tools: `find` and `grep` to locate \
-files and code, `read` to inspect them, `write` and `edit` to change them. \
-Use `shell` only when a task genuinely needs a process (build, test, git, \
-package installs) — never to search, read, or write files.\n\
-Use `web_search` then `fetch_content` for current web facts (Querit or AnySearch).",
+    let mut system_prompt = String::from(
+        "You are MYCode, a coding agent. Complete the user's request with the tools you have.",
     );
     for part in mycode_config::render_resource_prompt(&resources) {
         system_prompt.push_str(
@@ -340,24 +336,30 @@ Use `web_search` then `fetch_content` for current web facts (Querit or AnySearch
     let hidden_skills = skills.len().saturating_sub(32);
     skills.truncate(32);
     if let Some(mut catalog) = mycode_config::render_skill_catalog(&skills) {
-        if hidden_skills > 0 {
-            catalog.push_str(&format!(
-                "\n- and {hidden_skills} more; read the matching SKILL.md by path"
-            ));
+        if hidden_skills > 0
+            && let Some(close) = catalog.rfind("\n</skills>")
+        {
+            catalog.insert_str(
+                close,
+                &format!("\n- and {hidden_skills} more; read the matching SKILL.md by path"),
+            );
         }
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&catalog);
     }
-    if mcp_catalog.is_some() {
-        system_prompt.push_str(
-            "\n\nMCP tools are connected but not inlined. Call `search_tool` with the \
-tool name, then `use_tool` with arguments that match the returned \
-inputSchema. Never guess parameters.",
-        );
+    if let Some(catalog) = mcp_catalog.as_ref() {
+        system_prompt.push_str(&format!(
+            "\n\n<mcp>\nConnected tools: {}.\n\
+Built-in tools are called directly. For a connected tool, call `search_tool` \
+with its exact name, then `use_tool` with the returned inputSchema. Do not \
+guess parameters. Do not wait for the user to name the tool. When the user \
+also wants a subagent, emit `search_tool` in the same response as `task`.\n\
+</mcp>",
+            catalog.index()
+        ));
     }
     system_prompt.push_str(
-        "\n\nFor current web facts, call `web_search`, then `fetch_content` on the \
-URLs you will cite. Snippets are not evidence.",
+        "\n\nFor current facts, call `web_search`, then `fetch_content` on the URLs you will cite. Snippets are not evidence.",
     );
     let extra_roots = workspace_extra_roots(home, &cwd);
     if !extra_roots.is_empty() {

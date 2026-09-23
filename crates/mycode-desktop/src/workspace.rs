@@ -48,7 +48,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
     options.window_min_size = Some(size(px(960.), px(560.)));
     if let Some(titlebar) = options.titlebar.as_mut() {
-        titlebar.title = Some("MYCode".into());
+        titlebar.title = Some("MYCode Harness".into());
     }
     cx.open_window(options, |window, cx| {
         // Paint the Desk palette before first layout: `init` leaves the stock
@@ -81,6 +81,8 @@ pub struct Workspace {
     /// no input holds focus.
     focus_handle: gpui_kit::FocusHandle,
     composer: Entity<TextareaState>,
+    /// Whether the composer placeholder is the in-turn steer hint.
+    pub(crate) composer_steer: bool,
     ua_input: Option<Entity<InputState>>,
     ua_sync_pending: bool,
     provider_form: Option<Entity<ProviderForm>>,
@@ -146,6 +148,7 @@ impl Workspace {
             bridge,
             focus_handle,
             composer,
+            composer_steer: false,
             ua_input: None,
             ua_sync_pending: false,
             provider_form: None,
@@ -499,6 +502,32 @@ impl Workspace {
 
     /// Aborts the in-flight turn; the bridge answers with a `cancelled`
     /// failure event that resets the sending state.
+    /// Stops one running subagent. The parent turn and the other children stay.
+    pub(crate) fn on_cancel_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
+        let Some(session_id) = self
+            .vm
+            .active
+            .as_ref()
+            .map(|conversation| conversation.session_id.clone())
+        else {
+            return;
+        };
+        if call_id.is_empty() {
+            return;
+        }
+        self.apply_action(
+            DesktopAction::SubagentDismissed(call_id.to_owned()),
+            cx,
+        );
+        self.dispatch(
+            BridgeCommand::CancelSubagent {
+                session_id,
+                call_id: call_id.to_owned(),
+            },
+            cx,
+        );
+    }
+
     pub(crate) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
         let Some(conversation) = self.vm.active.as_ref() else {
             return;

@@ -190,6 +190,11 @@ impl McpCatalog {
         }))
     }
 
+    /// Comma-separated names injected into the system prompt.
+    pub(crate) fn index(&self) -> &str {
+        &self.names
+    }
+
     fn get(&self, name: &str) -> Option<&Arc<DynamicMcpTool>> {
         self.by_name.get(name)
     }

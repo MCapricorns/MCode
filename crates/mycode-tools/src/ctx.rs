@@ -20,6 +20,8 @@ pub struct ToolCtx {
     /// Cooperative cancellation; long-running tools should poll it and
     /// abort early.
     pub cancel: CancellationToken,
+    /// Provider call id for this invocation, when the dispatcher has one.
+    pub call_id: String,
     /// Ready grep/find root bound at dispatch preflight, if any.
     ///
     /// Present only after a successful prepare. Execution takes that root
@@ -38,6 +40,7 @@ impl ToolCtx {
         Self {
             cwd: cwd.into(),
             cancel: CancellationToken::new(),
+            call_id: String::new(),
             prepared_search: None,
             prepared_file: None,
         }
@@ -46,6 +49,12 @@ impl ToolCtx {
     /// Replace the cancellation token (builder style).
     pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = cancel;
+        self
+    }
+
+    /// Record the provider call id (builder style).
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = call_id.into();
         self
     }
 

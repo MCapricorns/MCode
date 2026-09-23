@@ -180,7 +180,7 @@ pub struct SettingsState {
     pub mcp_servers: Vec<mycode_config::McpServerSettings>,
     /// Appearance theme: `light` or `dark`.
     pub theme: String,
-    /// Appearance palette: slate, ocean, forest, dusk, or sand.
+    /// Appearance palette: slate, ocean, forest, dusk, sand, rose, ink, or moss.
     pub palette: String,
     /// Requested reasoning effort from the selected model's catalog options;
     /// `None` keeps the provider default.
@@ -670,6 +670,8 @@ pub enum DesktopAction {
     QueuedMessagePromoted(usize),
     /// Opens or closes the subagent detail window.
     SubagentWindowChanged(Option<String>),
+    /// The user closed one running subagent from its row.
+    SubagentDismissed(String),
     /// The user sent a prompt; show a working status before the first token.
     TurnArmed,
     /// Incremental assistant text from the active model turn.
@@ -725,10 +727,21 @@ pub enum DesktopAction {
     /// A project directory was bound to the open session.
     ProjectOpened(String),
     /// A session was bound to a project in the durable map.
+    ///
+    /// The first folder sticks. A later bind to a different folder is ignored
+    /// so opening another directory cannot move a chat that already has one.
     SessionProjectBound {
         /// Session identity spelling.
         session_id: String,
         /// Project directory path.
+        project: String,
+    },
+    /// The open chat's working directory moved to another folder in this
+    /// workspace. The other folders stay members of the same workspace.
+    WorkspaceFolderFocused {
+        /// Session identity spelling.
+        session_id: String,
+        /// Folder that becomes the session working directory.
         project: String,
     },
     /// The active project filter changed (sidebar project switcher).

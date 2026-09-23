@@ -151,6 +151,15 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::SubagentWindowChanged(call_id) => {
             state.subagent_window = call_id;
         }
+        DesktopAction::SubagentDismissed(call_id) => {
+            if let Some(job) = live_job_mut(state, &call_id) {
+                job.done = true;
+                job.step = "cancelled".to_owned();
+            }
+            if state.subagent_window.as_deref() == Some(call_id.as_str()) {
+                state.subagent_window = None;
+            }
+        }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.head = head;
@@ -192,13 +201,18 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             name,
             message,
         } => {
-            let status = if name.is_empty() {
-                message.clone()
+            apply_live_job_progress(state, &call_id, &name, &message);
+            let running = state.live_jobs.iter().filter(|job| !job.done).count();
+            let status = if running > 1 {
+                format!("{running} subagents")
+            } else if name == "task" || message.starts_with("task|") {
+                live_job_status(state, &call_id)
+            } else if name.is_empty() {
+                message
             } else {
                 format!("{name}: {message}")
             };
             set_streaming_status(state, &status);
-            apply_live_job_progress(state, &call_id, &name, &message);
         }
         DesktopAction::ToolResultAppended(entry) => {
             if let Some(call_id) = entry.call_id.as_deref() {
@@ -591,16 +605,18 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 .find(|(existing, _)| existing == &session_id)
                 .is_some_and(|(_, existing)| !super::same_project_path(existing, &project));
             if !locked {
-                state
-                    .session_projects
-                    .retain(|(existing, _)| existing != &session_id);
-                state
-                    .session_projects
-                    .insert(0, (session_id, project.clone()));
-                state
-                    .session_projects
-                    .truncate(mycode_config::MAX_SESSION_PROJECTS);
+                bind_session_project(state, session_id, project);
             }
+        }
+        DesktopAction::WorkspaceFolderFocused {
+            session_id,
+            project,
+        } => {
+            if project.trim().is_empty() {
+                return;
+            }
+            state.project_dir = Some(project.clone());
+            bind_session_project(state, session_id, project);
         }
         DesktopAction::ActiveProjectChanged(project) => {
             state.project_dir = project;
@@ -813,6 +829,16 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.shell_kind_menu_open = false;
     state.mention = None;
     was_open
+}
+
+fn bind_session_project(state: &mut WorkspaceState, session_id: String, project: String) {
+    state
+        .session_projects
+        .retain(|(existing, _)| existing != &session_id);
+    state.session_projects.insert(0, (session_id, project));
+    state
+        .session_projects
+        .truncate(mycode_config::MAX_SESSION_PROJECTS);
 }
 
 fn tool_call_label(name: &str, target: &str) -> String {
@@ -1143,6 +1169,28 @@ fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a 
         .live_jobs
         .iter_mut()
         .find(|job| job.call_id == call_id)
+}
+
+fn live_job_status(state: &WorkspaceState, call_id: &str) -> String {
+    let job = if call_id.is_empty() {
+        state.live_jobs.iter().rev().find(|job| !job.done)
+    } else {
+        state.live_jobs.iter().find(|job| job.call_id == call_id)
+    };
+    let Some(job) = job else {
+        return "subagent".to_owned();
+    };
+    let who = if job.role.is_empty() {
+        "subagent"
+    } else {
+        job.role.as_str()
+    };
+    let detail = if matches!(job.step.as_str(), "queued" | "starting") && !job.label.is_empty() {
+        job.label.as_str()
+    } else {
+        job.step.as_str()
+    };
+    format!("{who} · {detail}")
 }
 
 fn finish_live_job(state: &mut WorkspaceState, call_id: &str) {

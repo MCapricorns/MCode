@@ -529,6 +529,14 @@ fn task_progress_fills_the_subagent_panel() {
     assert_eq!(state.live_jobs[0].label, "audit the parser");
     assert_eq!(state.live_jobs[0].step, "running read");
     assert!(!state.live_jobs[0].done);
+    assert_eq!(
+        state
+            .active
+            .as_ref()
+            .and_then(|conversation| conversation.streaming.as_ref())
+            .map(|streaming| streaming.status.as_str()),
+        Some("scout · running read")
+    );
     reduce(
         &mut state,
         DesktopAction::ToolResultAppended(ConversationEntry {
@@ -974,6 +982,29 @@ fn session_project_bound_is_what_groups_this_project() {
         Some(project),
         "a session does not move to a second folder"
     );
+
+    reduce(
+        &mut state,
+        DesktopAction::WorkspaceRootAdded(project.to_owned()),
+    );
+    reduce(
+        &mut state,
+        DesktopAction::WorkspaceRootAdded(other.to_owned()),
+    );
+    reduce(
+        &mut state,
+        DesktopAction::WorkspaceFolderFocused {
+            session_id: "ses-a".to_owned(),
+            project: other.to_owned(),
+        },
+    );
+    assert_eq!(
+        project_of_session(&state.session_projects, "ses-a"),
+        Some(other),
+        "focusing a workspace folder moves the open chat"
+    );
+    assert!(state.workspace_roots.iter().any(|root| root == project));
+    assert_eq!(state.project_dir.as_deref(), Some(other));
 }
 
 #[test]

@@ -75,7 +75,9 @@ impl Default for UsageSettings {
 }
 
 /// Palette ids the desktop can paint. Slate is the default.
-pub const VALID_PALETTES: [&str; 5] = ["slate", "ocean", "forest", "dusk", "sand"];
+pub const VALID_PALETTES: [&str; 8] = [
+    "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss",
+];
 
 fn default_palette() -> String {
     "slate".to_owned()
@@ -87,7 +89,7 @@ fn default_palette() -> String {
 pub struct AppearanceSettings {
     /// `light` or `dark`.
     pub theme: String,
-    /// `slate`, `ocean`, `forest`, `dusk`, or `sand`.
+    /// `slate`, `ocean`, `forest`, `dusk`, `sand`, `rose`, `ink`, or `moss`.
     #[serde(default = "default_palette")]
     pub palette: String,
 }
@@ -214,7 +216,7 @@ impl AppSettings {
         }
         if !VALID_PALETTES.contains(&self.appearance.palette.as_str()) {
             return Err(invalid(
-                "appearance.palette: must be slate, ocean, forest, dusk, or sand",
+                "appearance.palette: must be slate, ocean, forest, dusk, sand, rose, ink, or moss",
             ));
         }
         self.validate_subagent_roles()?;

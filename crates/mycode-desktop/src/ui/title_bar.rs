@@ -12,7 +12,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, WindowControlArea, div, px,
+    StatefulInteractiveElement, Styled, Window, WindowControlArea, div, img, px,
 };
 
 use super::skin;
@@ -112,14 +112,21 @@ fn drag_region(
                 }
             }))
         })
-        .child(app_mark(&theme))
         .child(
             div()
                 .flex_shrink_0()
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::BOLD)
-                .text_color(theme.foreground)
-                .child("MYCode"),
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(img("brand/icon.ico").size(px(16.)))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::BOLD)
+                        .text_color(theme.foreground)
+                        .child("MYCode Harness"),
+                ),
         )
         .child(
             div()
@@ -129,21 +136,6 @@ fn drag_region(
                 .text_color(theme.muted_foreground)
                 .child(subtitle),
         )
-}
-
-fn app_mark(theme: &gpui_kit::component::theme::Theme) -> impl IntoElement {
-    div()
-        .flex_shrink_0()
-        .size(px(18.))
-        .rounded(px(4.))
-        .bg(theme.primary)
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::BOLD)
-        .text_color(theme.primary_foreground)
-        .child("M")
 }
 
 struct TitleDrag {

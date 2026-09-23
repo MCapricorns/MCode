@@ -344,6 +344,10 @@ impl Workspace {
             // The turn unwinds over the event channel; the reply itself
             // carries no state.
             BridgeReply::ChatCancelled(_) => {}
+            BridgeReply::SubagentCancelled(Err(message)) => {
+                self.push_toast(message, crate::workspace::ToastKind::Info, cx);
+            }
+            BridgeReply::SubagentCancelled(Ok(())) => {}
             BridgeReply::McpTools {
                 server_id,
                 outcome: Ok(tools),

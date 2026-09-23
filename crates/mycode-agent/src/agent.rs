@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex};
 
 use mycode_core::MycodeError;
 use mycode_core::events::{AgentEvent, TurnOutcome};
-use mycode_core::message::{ContentBlock, Message, StopReason, ToolCall};
+use mycode_core::message::{ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
 use tokio_util::sync::CancellationToken;
 
 use crate::env::TurnEnv;
@@ -478,45 +478,25 @@ async fn double_loop(
                 }
                 has_tool_calls = true;
             } else {
-                // Consecutive `task` calls in one response run together.
-                // Every other tool stays in order so an abort can still
-                // answer the calls that never started.
-                let mut index = 0;
-                while index < calls.len() {
-                    if token.is_cancelled() {
-                        // Abort mid-dispatch of a multi-call response.
-                        // The assistant message carrying *all* the calls
-                        // is already in history. Every announced tool call
-                        // must have a corresponding ToolResult before the
-                        // next request, so write cancellation results for
-                        // the undispatched remainder before unwinding (pi
-                        // parity).
-                        for call in &calls[index..] {
-                            let message = turn::fail_cancelled_call(env, call);
-                            turn::push_message(env, state, Message::ToolResult(message));
-                        }
-                        aborted = true;
-                        break 'outer;
-                    }
-                    if is_concurrent_task(&calls[index]) {
-                        let start = index;
-                        while index < calls.len() && is_concurrent_task(&calls[index]) {
-                            index += 1;
-                        }
-                        let results = futures_util::future::join_all(
-                            calls[start..index]
-                                .iter()
-                                .map(|call| turn::dispatch_tool_call(env, token, call)),
-                        )
-                        .await;
-                        for message in results {
-                            turn::push_message(env, state, Message::ToolResult(message));
-                        }
-                    } else {
-                        let message = turn::dispatch_tool_call(env, token, &calls[index]).await;
+                // `task` calls overlap everything else in this response, so a
+                // scout and an MCP lookup requested together actually run
+                // together. Non-task tools stay in order (`search_tool` before
+                // `use_tool`). Results are written back in call order.
+                if token.is_cancelled() {
+                    for call in &calls {
+                        let message = turn::fail_cancelled_call(env, call);
                         turn::push_message(env, state, Message::ToolResult(message));
-                        index += 1;
                     }
+                    aborted = true;
+                    break 'outer;
+                }
+                let results = dispatch_response_calls(env, token, &calls).await;
+                for message in results {
+                    turn::push_message(env, state, Message::ToolResult(message));
+                }
+                if token.is_cancelled() {
+                    aborted = true;
+                    break 'outer;
                 }
                 has_tool_calls = true;
             }
@@ -562,4 +542,58 @@ async fn double_loop(
 /// semaphore still caps how many children actually run.
 fn is_concurrent_task(call: &ToolCall) -> bool {
     call.name == "task"
+}
+
+/// Runs one response's tool calls.
+///
+/// Every `task` starts immediately. The other calls run in their original
+/// order at the same time, so an MCP lookup is not stuck behind a child.
+/// Each call still gets one result, placed back in the model's call order.
+async fn dispatch_response_calls(
+    env: &TurnEnv<'_>,
+    token: &CancellationToken,
+    calls: &[ToolCall],
+) -> Vec<ToolResultMessage> {
+    let task_indexes: Vec<usize> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| is_concurrent_task(call))
+        .map(|(index, _)| index)
+        .collect();
+    let other_indexes: Vec<usize> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| !is_concurrent_task(call))
+        .map(|(index, _)| index)
+        .collect();
+    let tasks = async {
+        let futures = task_indexes
+            .iter()
+            .map(|index| turn::dispatch_tool_call(env, token, &calls[*index]));
+        futures_util::future::join_all(futures).await
+    };
+    let others = async {
+        let mut messages = Vec::with_capacity(other_indexes.len());
+        for index in &other_indexes {
+            if token.is_cancelled() {
+                messages.push(turn::fail_cancelled_call(env, &calls[*index]));
+            } else {
+                messages.push(turn::dispatch_tool_call(env, token, &calls[*index]).await);
+            }
+        }
+        messages
+    };
+    let (task_messages, other_messages) = tokio::join!(tasks, others);
+    let mut slots: Vec<Option<ToolResultMessage>> = Vec::with_capacity(calls.len());
+    slots.resize_with(calls.len(), || None);
+    for (index, message) in task_indexes.into_iter().zip(task_messages) {
+        slots[index] = Some(message);
+    }
+    for (index, message) in other_indexes.into_iter().zip(other_messages) {
+        slots[index] = Some(message);
+    }
+    slots
+        .into_iter()
+        .map(|message| message.expect("every call was dispatched"))
+        .collect()
 }

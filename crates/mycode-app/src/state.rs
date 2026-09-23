@@ -32,6 +32,8 @@ pub(crate) struct CoreState {
     pub(crate) copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
     /// Live turn cancellation tokens by session id; Escape targets these.
     pub(crate) turn_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
+    /// One token per running subagent, keyed by `session_id:call_id`.
+    pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl CoreState {
@@ -57,6 +59,7 @@ impl CoreState {
             projects: Arc::new(Mutex::new(projects)),
             copilot: Arc::new(tokio::sync::Mutex::new(None)),
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
+            subagent_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

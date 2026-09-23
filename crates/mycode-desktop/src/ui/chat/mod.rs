@@ -17,11 +17,9 @@ use crate::ui::skin;
 use crate::view_model::{ConversationEntry, EntryKind, transcript_start};
 use crate::workspace::Workspace;
 
-pub(super) use ask::render_ask_panel;
-
 pub(super) fn render_chat(
     workspace: &mut Workspace,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     // Entries render straight from state: cloning the whole transcript per
@@ -29,6 +27,7 @@ pub(super) fn render_chat(
     // message text again. The borrow is scoped so the welcome and composer
     // builders can still take `&mut Workspace`.
     let sending = workspace.vm().sending;
+    let live_jobs = workspace.vm().live_jobs.clone();
     let extra = workspace.vm().transcript_extra;
     let (show_welcome, hidden, entry_elements, streaming_element) = {
         let active = workspace.vm().active.as_ref();
@@ -47,7 +46,17 @@ pub(super) fn render_chat(
                     elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
                 }
                 TranscriptItem::Tool { call, result } => {
-                    elements.push(transcript::render_tool_block(call, result, cx.theme()));
+                    let step = live_jobs.iter().find_map(|job| {
+                        (call.call_id.as_deref() == Some(job.call_id.as_str())
+                            && !job.step.is_empty())
+                        .then_some(job.step.as_str())
+                    });
+                    elements.push(transcript::render_tool_block(
+                        call,
+                        result,
+                        step,
+                        cx.theme(),
+                    ));
                 }
                 TranscriptItem::Entry(entry) => {
                     elements.push(transcript::render_entry(entry, cx.theme()));
@@ -56,7 +65,8 @@ pub(super) fn render_chat(
         }
         let streaming_element = streaming
             .map(|streaming| {
-                transcript::render_streaming_entry(streaming, cx.theme()).into_any_element()
+                transcript::render_streaming_entry(streaming, &live_jobs, cx.theme(), cx)
+                    .into_any_element()
             })
             .or_else(|| {
                 sending.then(|| {
@@ -65,7 +75,9 @@ pub(super) fn render_chat(
                             status: "Waiting for the model".to_owned(),
                             ..crate::view_model::StreamingReply::default()
                         },
+                        &live_jobs,
                         cx.theme(),
+                        cx,
                     )
                     .into_any_element()
                 })
@@ -128,7 +140,10 @@ pub(super) fn render_chat(
                 && !workspace.vm().todo_rows.is_empty(),
             |this| this.child(super::todos::render_todo_inline(workspace, cx)),
         )
-        .child(composer::render_composer(workspace, _window, cx))
+        .when(workspace.vm().pending_ask.is_some(), |this| {
+            this.child(ask::render_ask_panel(workspace, window, cx))
+        })
+        .child(composer::render_composer(workspace, window, cx))
         .into_any_element()
 }
 

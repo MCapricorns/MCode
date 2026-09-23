@@ -1,10 +1,12 @@
-//! The composer card: textarea, chip row (project, model, thinking), the
-//! follow-up queue, and the send/stop controls.
+//! The composer card: a Cursor-style prompt row.
+//!
+//! While a turn is running the arrow slot is Stop: it ends the whole turn,
+//! including every subagent. Text sent during that turn is a steer to the
+//! main model and does not cancel the children.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Textarea;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -41,6 +43,17 @@ pub(super) fn render_composer(
     } else {
         None
     };
+    if workspace.composer_steer != sending {
+        workspace.composer_steer = sending;
+        let placeholder = if sending {
+            "Steer without interrupting"
+        } else {
+            "Message MYCode"
+        };
+        composer.update(cx, |state, cx| {
+            state.set_placeholder(placeholder, window, cx);
+        });
+    }
     let theme = cx.theme();
     let session_project = workspace
         .vm()
@@ -91,38 +104,35 @@ pub(super) fn render_composer(
                         .id("composer-input")
                         .flex()
                         .flex_row()
+                        .items_center()
                         .w_full()
                         .min_w_0()
-                        .overflow_hidden()
-                        .text_sm()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("composer-plus")
+                                .size(px(28.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .cursor_pointer()
+                                .text_color(theme.muted_foreground)
+                                .hover(|this| this.bg(theme.secondary_hover))
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_open_project_dialog(cx);
+                                }))
+                                .child(Icon::new(IconName::Plus).small()),
+                        )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .overflow_hidden()
-                                .min_h(px(44.))
+                                .min_h(px(36.))
+                                .text_sm()
                                 .child(Textarea::new(&composer).appearance(false).bordered(false)),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("composer-chip-row")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .pt_1()
-                        .when(!has_project, |this| {
-                            this.child(composer_text_button(
-                                "project",
-                                project_chip_label,
-                                false,
-                                |workspace, _window, cx| {
-                                    workspace.on_open_project_dialog(cx);
-                                },
-                                cx,
-                            ))
-                        })
+                        )
                         .child(composer_text_button(
                             "model",
                             model_label,
@@ -145,50 +155,87 @@ pub(super) fn render_composer(
                                 cx,
                             ))
                         })
-                        .child(div().flex_1().min_w_0())
-                        .when(sending && has_draft, |this| {
+                        .child(composer_round_button(sending, has_session, has_draft, has_queue, cx)),
+                )
+                .child(
+                    div()
+                        .id("composer-chip-row")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .pt_1()
+                        .child(composer_text_button(
+                            "project",
+                            project_chip_label,
+                            false,
+                            |workspace, _window, cx| {
+                                workspace.on_open_project_dialog(cx);
+                            },
+                            cx,
+                        ))
+                        .when(!has_project, |this| {
                             this.child(
-                                Button::new("queue")
-                                    .icon(IconName::List)
-                                    .label("Queue")
-                                    .primary()
-                                    .rounded(px(3.))
-                                    .flex_shrink_0()
-                                    .on_click(cx.listener(|workspace, _, window, cx| {
-                                        workspace.on_send(window, cx);
-                                    })),
-                            )
-                        })
-                        .when(!sending, |this| {
-                            this.child(
-                                Button::new("send")
-                                    .icon(IconName::ArrowUp)
-                                    .primary()
-                                    .rounded(px(3.))
-                                    .flex_shrink_0()
-                                    .disabled(!has_session || (!has_draft && !has_queue))
-                                    .on_click(cx.listener(|workspace, _, window, cx| {
-                                        workspace.on_send(window, cx);
-                                    })),
-                            )
-                        })
-                        .when(sending, |this| {
-                            this.child(
-                                Button::new("stop")
-                                    .icon(IconName::X)
-                                    .danger()
-                                    .rounded(px(3.))
-                                    .flex_shrink_0()
-                                    .on_click(cx.listener(|workspace, _, _, cx| {
-                                        workspace.on_cancel_chat(cx);
-                                    })),
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("No folder"),
                             )
                         }),
                 ),
         )
 }
 
-/// Quiet text button in the composer footer. OpenCode uses a label, not a chip.
+/// Arrow while idle, stop square while a turn is running.
+///
+/// Stop ends the whole turn and every subagent. It sits where the send
+/// arrow sits.
+fn composer_round_button(
+    sending: bool,
+    has_session: bool,
+    has_draft: bool,
+    has_queue: bool,
+    cx: &Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let can_send = has_session && (has_draft || has_queue);
+    div()
+        .id(if sending {
+            "composer-stop"
+        } else {
+            "composer-send"
+        })
+        .size(px(28.))
+        .flex_shrink_0()
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(sending || can_send, |this| this.cursor_pointer())
+        .when(sending, |this| {
+            this.bg(theme.foreground).text_color(theme.background)
+        })
+        .when(!sending, |this| {
+            this.bg(theme.primary)
+                .text_color(theme.primary_foreground)
+                .when(!can_send, |this| this.opacity(0.4))
+        })
+        .on_click(cx.listener(move |workspace, _, window, cx| {
+            if sending {
+                workspace.on_cancel_chat(cx);
+            } else if can_send {
+                workspace.on_send(window, cx);
+            }
+        }))
+        .when(sending, |this| {
+            this.child(div().size(px(10.)).rounded(px(2.)).bg(theme.background))
+        })
+        .when(!sending, |this| {
+            this.child(Icon::new(IconName::ArrowUp).small())
+        })
+}
+
+/// Quiet text button in the composer footer.
 fn composer_text_button(
     id: &str,
     label: SharedString,

@@ -1,4 +1,4 @@
-//! Right panel: the model this session is using, and its token counts.
+//! Right panel: live subagent progress, the working tree, and model usage.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -37,9 +37,115 @@ pub(super) fn render_context_panel(
                 .flex()
                 .flex_col()
                 .gap_4()
+                .when(
+                    crate::view_model::task_surface_visible(workspace.vm())
+                        && !workspace.vm().live_jobs.is_empty(),
+                    |this| this.child(render_subagents(workspace, cx)),
+                )
                 .child(render_changes(workspace, cx))
                 .child(render_model_usage(workspace, cx)),
         )
+}
+
+fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    let desk = super::desk::Desk::of(theme);
+    let jobs = workspace.vm().live_jobs.clone();
+    let running = jobs.iter().filter(|job| !job.done).count();
+    let summary = if running == 0 {
+        format!("{} done", jobs.len())
+    } else {
+        format!("{running} running")
+    };
+    div()
+        .id("subagents")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(div().text_sm().child("Subagents"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(summary),
+                ),
+        )
+        .children(jobs.into_iter().enumerate().map(|(index, job)| {
+            let call_id = job.call_id.clone();
+            let role = if job.role.is_empty() {
+                "task".to_owned()
+            } else {
+                job.role.clone()
+            };
+            let title = if job.label.is_empty() {
+                role.clone()
+            } else {
+                job.label.clone()
+            };
+            let step = if job.step.is_empty() {
+                "starting".to_owned()
+            } else {
+                job.step.clone()
+            };
+            let color = if job.done { desk.green } else { desk.amber };
+            let chip = if job.done { "done".to_owned() } else { role };
+            div()
+                .id(format!("subagent-{index}"))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_2()
+                .py(px(8.))
+                .rounded(super::skin::radius_control())
+                .bg(super::skin::frost_card(theme))
+                .border_1()
+                .border_color(super::skin::glass_border(theme))
+                .when(job.done, |card| card.opacity(0.6))
+                .cursor_pointer()
+                .hover(|card| card.bg(super::skin::frost_hover(theme)))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    workspace.on_open_subagent(&call_id, cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .min_w_0()
+                        .child(super::lamp(color))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .truncate()
+                                .text_color(theme.foreground)
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(color)
+                                .child(chip),
+                        ),
+                )
+                .child(
+                    div()
+                        .pl(px(15.))
+                        .text_xs()
+                        .truncate()
+                        .text_color(theme.muted_foreground)
+                        .child(step),
+                )
+        }))
 }
 
 fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
@@ -371,10 +477,10 @@ pub(super) fn render_subagent_window(
     div()
         .id("subagent-window-layer")
         .absolute()
-        .top(px(72.))
-        .right(px(276.))
-        .w(px(340.))
-        .max_h(px(420.))
+        .top(px(44.))
+        .right(px(16.))
+        .w(px(320.))
+        .h(px(280.))
         .flex()
         .flex_col()
         .rounded(px(12.))
@@ -383,7 +489,6 @@ pub(super) fn render_subagent_window(
         .bg(theme.popover)
         .shadow_lg()
         .overflow_hidden()
-        .occlude()
         .child(
             div()
                 .px_3()

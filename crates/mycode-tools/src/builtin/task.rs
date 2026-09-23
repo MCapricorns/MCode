@@ -51,6 +51,7 @@ pub trait TaskHost: Send + Sync + 'static {
         request: SubagentRequest,
         progress: &ToolStream,
         cancel: &tokio_util::sync::CancellationToken,
+        call_id: &str,
     ) -> Result<String, ToolError>;
 }
 
@@ -96,7 +97,8 @@ impl Tool for TaskTool {
 
     fn description(&self) -> &str {
         "Delegate one scoped unit of work to a named subagent role. \
-         Independent `task` calls in the same response run at the same time. \
+         Independent `task` calls in the same response run at the same time, \
+         and they overlap `search_tool` / `use_tool` emitted in that same response. \
          `scout` is read-only reconnaissance; `artisan` makes the primary \
          change; `steward` does residual cleanup; `sentinel` reviews a \
          finished diff. Custom roles from agents/*.md are also valid. \
@@ -105,9 +107,9 @@ impl Tool for TaskTool {
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "task: pick a role (`scout`/`artisan`/`steward`/`sentinel`) and \
-             send a self-contained brief. Several independent task calls in \
-             one response run together; do not wait between them.",
+            "task: dispatch a listed role with a self-contained brief. \
+             Independent task calls in one response run together, and they \
+             overlap search_tool / use_tool from that same response.",
         )
     }
 
@@ -148,7 +150,10 @@ impl Tool for TaskTool {
             description,
             isolation: args.isolation,
         };
-        let answer = self.host.run_subagent(request, out, &ctx.cancel).await?;
+        let answer = self
+            .host
+            .run_subagent(request, out, &ctx.cancel, &ctx.call_id)
+            .await?;
         let answer = answer
             .chars()
             .take(MAX_TASK_ANSWER_CHARS)
@@ -182,6 +187,7 @@ mod tests {
             request: SubagentRequest,
             _progress: &ToolStream,
             _cancel: &tokio_util::sync::CancellationToken,
+            _call_id: &str,
         ) -> Result<String, ToolError> {
             Ok(format!("done: {}", request.description))
         }

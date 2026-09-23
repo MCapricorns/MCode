@@ -96,6 +96,27 @@ pub(crate) fn run_core(
                     tokio::spawn(task);
                     let _ = with_reply.reply.send(BridgeReply::ChatStarted(Ok(())));
                 }
+                BridgeCommand::CancelSubagent {
+                    session_id,
+                    call_id,
+                } => {
+                    let key = format!("{session_id}:{call_id}");
+                    let reply = with_reply.reply;
+                    let cancels = state.subagent_cancels.clone();
+                    tokio::spawn(async move {
+                        let outcome = match cancels.lock() {
+                            Ok(mut map) => match map.remove(&key) {
+                                Some(token) => {
+                                    token.cancel();
+                                    Ok(())
+                                }
+                                None => Err("that subagent is not running".to_owned()),
+                            },
+                            Err(_) => Err("subagent registry locked".to_owned()),
+                        };
+                        let _ = reply.send(BridgeReply::SubagentCancelled(outcome));
+                    });
+                }
                 BridgeCommand::CancelChat { session_id } => {
                     let reply = with_reply.reply;
                     let cancels = state.turn_cancels.clone();
@@ -211,6 +232,7 @@ fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply {
         BridgeCommand::DownloadUpdate { .. } => BridgeReply::UpdateDownloaded(Err(message)),
         BridgeCommand::StartOAuthSignIn { .. } => BridgeReply::CopilotSignInStarted(Err(message)),
         BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
+        BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(message)),
     }
 }
 
@@ -293,6 +315,9 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
         BridgeCommand::CancelChat { .. } => {
             BridgeReply::ChatCancelled(Err("chat cancels run as concurrent tasks".to_owned()))
         }
+        BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(
+            "subagent cancels run as concurrent tasks".to_owned(),
+        )),
         BridgeCommand::SearchProjectFiles { session_id, query } => {
             let root = state.project_dir(session_id);
             let query = query.clone();

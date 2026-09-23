@@ -121,9 +121,6 @@ pub fn render_root(
                 && crate::view_model::task_surface_visible(workspace.vm()),
             |this| this.child(context::render_subagent_window(workspace, cx)),
         )
-        .when(workspace.vm().pending_ask.is_some(), |this| {
-            this.child(chat::render_ask_panel(workspace, window, cx))
-        })
         .when(workspace.project_picker.is_some(), |this| {
             this.child(project_picker::render(workspace, cx))
         })

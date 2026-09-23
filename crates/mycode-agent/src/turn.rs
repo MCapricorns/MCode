@@ -266,7 +266,9 @@ pub(crate) async fn dispatch_tool_call(
     // dispatcher pushes the returned terminal result onto the tool stream
     // (first terminal wins, so a self-terminating tool
     // keeps its own result).
-    let mut ctx = ToolCtx::new(env.cwd.clone()).with_cancel(token.clone());
+    let mut ctx = ToolCtx::new(env.cwd.clone())
+        .with_cancel(token.clone())
+        .with_call_id(call.id.clone());
     if let Some(search) = prepared.search {
         ctx = ctx.with_prepared_search(search);
     }

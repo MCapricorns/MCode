@@ -1,4 +1,4 @@
-//! Session to-do list, shown as a quiet checklist above the composer.
+//! Session todos, shown as a quiet checklist above the composer.
 //! Completed items are dropped before they reach this surface.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -24,7 +24,7 @@ pub(super) fn render_todo_inline(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(format!("To-dos  {}", rows.len())),
+                .child(format!("todos  {}", rows.len())),
         )
         .children(
             rows.into_iter()

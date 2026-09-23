@@ -1,9 +1,8 @@
-//! Workspace sidebar: folder roots on top, sessions underneath.
+//! Workspace sidebar: one workspace, several folders, one session list.
 //!
-//! A workspace can hold several directories at once (a web app and its API,
-//! for example). The open chat keeps one working directory. The other roots
-//! stay available as absolute paths. Sessions are a flat list, not a second
-//! copy of every folder the user has ever opened.
+//! The folders are members of a single workspace, the way projects sit in a
+//! solution. Chats belong to the workspace. The selected folder is the
+//! working directory; the others stay visible to tools as absolute paths.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::Button;
@@ -77,32 +76,25 @@ fn workspace_roots(
     cwd: Option<&str>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
-    let groups: Vec<(String, Vec<SessionSummary>)> = roots
-        .iter()
-        .map(|root| {
-            let rows = sessions
+    let in_workspace = |session: &SessionSummary| -> bool {
+        match bindings
+            .iter()
+            .find_map(|(id, path)| (id == &session.session_id).then_some(path.as_str()))
+        {
+            Some(path) => roots
                 .iter()
-                .filter(|session| {
-                    bindings.iter().any(|(id, path)| {
-                        id == &session.session_id
-                            && crate::view_model::same_project_path(path, root)
-                    })
-                })
-                .cloned()
-                .collect();
-            (root.clone(), rows)
-        })
+                .any(|root| crate::view_model::same_project_path(path, root)),
+            None => true,
+        }
+    };
+    let workspace_sessions: Vec<SessionSummary> = sessions
+        .iter()
+        .filter(|session| in_workspace(session))
+        .cloned()
         .collect();
     let other: Vec<SessionSummary> = sessions
         .iter()
-        .filter(|session| {
-            !bindings.iter().any(|(id, path)| {
-                id == &session.session_id
-                    && roots
-                        .iter()
-                        .any(|root| crate::view_model::same_project_path(path, root))
-            })
-        })
+        .filter(|session| !in_workspace(session))
         .cloned()
         .collect();
     div()
@@ -122,26 +114,31 @@ fn workspace_roots(
                     .py_1()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Add the folders this workspace should see. Each chat keeps its own folder."),
+                    .child("Add the folders this workspace should see. Chats can use all of them."),
             )
         })
-        .children(groups.into_iter().enumerate().map(|(index, (root, rows))| {
-            let root_for_rows = root.clone();
-            div()
-                .id(format!("workspace-group-{index}"))
-                .flex()
-                .flex_col()
-                .gap(px(1.))
-                .child(root_row(index, &root, cwd, cx))
-                .children(rows.into_iter().map(|summary| {
-                    div().pl_3().child(session_row(
-                        &summary,
-                        Some(root_for_rows.as_str()),
-                        Some(root_for_rows.as_str()),
-                        cx,
-                    ))
-                }))
-        }))
+        .children(
+            roots
+                .iter()
+                .enumerate()
+                .map(|(index, root)| root_row(index, root, cwd, cx)),
+        )
+        .when(!workspace_sessions.is_empty(), |this| {
+            this.child(
+                div()
+                    .px_2()
+                    .pt_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Sessions"),
+            )
+            .children(workspace_sessions.iter().map(|summary| {
+                let project = bindings
+                    .iter()
+                    .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
+                session_row(summary, project, cwd, cx)
+            }))
+        })
         .when(!other.is_empty(), |this| {
             this.child(
                 div()
@@ -199,10 +196,10 @@ fn root_row(
         .group("workspace-root")
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap_2()
         .px_2()
-        .h(px(32.))
+        .py(px(6.))
         .rounded(skin::radius_control())
         .when(is_cwd, |this| this.bg(skin::frost_accent(theme)))
         .cursor_pointer()
@@ -210,31 +207,51 @@ fn root_row(
         .on_click({
             let path = path.clone();
             cx.listener(move |workspace, _, _, cx| {
-                workspace.on_open_recent(&path, cx);
+                workspace.on_focus_workspace_folder(&path, cx);
             })
         })
-        .child(
-            Icon::new(IconName::Folder)
-                .xsmall()
-                .flex_shrink_0()
-                .text_color(if is_cwd {
-                    theme.primary
-                } else {
-                    theme.muted_foreground
-                }),
-        )
+        .child(div().mt(px(3.)).flex_shrink_0().child(
+            Icon::new(IconName::Folder).xsmall().text_color(if is_cwd {
+                theme.primary
+            } else {
+                theme.muted_foreground
+            }),
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
+                .gap(px(1.))
                 .child(
                     div()
-                        .text_sm()
-                        .truncate()
-                        .text_color(theme.foreground)
-                        .child(label),
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .min_h(px(20.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .truncate()
+                                .text_color(theme.foreground)
+                                .child(label),
+                        )
+                        .when(!is_cwd, |row| {
+                            let remove = path.clone();
+                            row.child(super::hover_delete_button(
+                                format!("workspace-root-remove-{index}"),
+                                IconName::X,
+                                "workspace-root",
+                                cx.listener(move |workspace, _, _, cx| {
+                                    workspace.on_remove_workspace_root(&remove, cx);
+                                }),
+                                cx,
+                            ))
+                        }),
                 )
                 .child(
                     div()
@@ -246,23 +263,6 @@ fn root_row(
                         .child(path.clone()),
                 ),
         )
-        .when(!is_cwd, |this| {
-            let remove = path.clone();
-            this.child(
-                div()
-                    .id(format!("workspace-root-remove-{index}"))
-                    .flex_shrink_0()
-                    .px_1()
-                    .cursor_pointer()
-                    .text_color(theme.muted_foreground)
-                    .hover(|row| row.text_color(theme.danger))
-                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                        cx.stop_propagation();
-                        workspace.on_remove_workspace_root(&remove, cx);
-                    }))
-                    .child(Icon::new(IconName::X).xsmall()),
-            )
-        })
 }
 
 fn session_row(
