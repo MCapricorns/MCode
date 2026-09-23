@@ -94,23 +94,6 @@ pub(super) fn render_model_menu(
                 .collect()
         })
         .unwrap_or_default();
-    let suggested: Vec<(String, String)> = {
-        let flat: Vec<(String, String)> = grouped
-            .iter()
-            .flat_map(|(id, _, models)| models.iter().map(|model| (id.clone(), model.clone())))
-            .collect();
-        let ranked =
-            crate::view_model::suggested_model_ids(flat.iter().map(|(_, model)| model.clone()));
-        ranked
-            .into_iter()
-            .filter_map(|model| {
-                flat.iter()
-                    .find(|(_, id)| *id == model)
-                    .map(|(provider, model)| (provider.clone(), model.clone()))
-            })
-            .collect()
-    };
-
     let browse = workspace
         .vm()
         .model_menu_browse
@@ -122,32 +105,13 @@ pub(super) fn render_model_menu(
             "No enabled providers. Add one in Settings, Models.",
         ));
     }
-    if !suggested.is_empty() {
-        rows.push(ModelMenuRow::Header {
-            label: "Suggested".to_owned(),
-            divider: false,
-        });
-        rows.extend(suggested.iter().take(8).map(|(provider, id)| {
-            let detail = grouped
-                .iter()
-                .find(|(group_id, _, _)| group_id == provider)
-                .map(|(_, name, _)| name.clone());
-            ModelMenuRow::Model {
-                provider: provider.clone(),
-                selected: selected_provider.as_deref() == Some(provider.as_str())
-                    && selected_model.as_deref() == Some(id.as_str()),
-                id: id.clone(),
-                detail,
-            }
-        }));
-    }
-    if let Some((provider, name, models)) = grouped
+    if let Some((provider, _name, models)) = grouped
         .iter()
         .find(|(id, _, _)| browse.as_deref() == Some(id.as_str()))
     {
         rows.push(ModelMenuRow::Header {
-            label: name.clone(),
-            divider: !suggested.is_empty(),
+            label: "Models".to_owned(),
+            divider: false,
         });
         rows.extend(models.iter().map(|id| ModelMenuRow::Model {
             provider: provider.clone(),
@@ -157,15 +121,19 @@ pub(super) fn render_model_menu(
             detail: None,
         }));
     }
-    if grouped.len() > 1 {
+    let others: Vec<_> = grouped
+        .iter()
+        .filter(|(id, _, _)| browse.as_deref() != Some(id.as_str()))
+        .collect();
+    if !others.is_empty() {
         rows.push(ModelMenuRow::Header {
-            label: "Providers".to_owned(),
+            label: "Switch provider".to_owned(),
             divider: true,
         });
-        rows.extend(grouped.iter().map(|(id, name, _)| ModelMenuRow::Provider {
+        rows.extend(others.iter().map(|(id, name, _)| ModelMenuRow::Provider {
             id: id.clone(),
             name: name.clone(),
-            current: browse.as_deref() == Some(id.as_str()),
+            current: false,
         }));
     }
 
@@ -175,9 +143,13 @@ pub(super) fn render_model_menu(
         .w_full()
         .px_4()
         .pb_1()
+        .flex()
+        .flex_row()
+        .justify_end()
         .child(
             popover_panel("model-menu", theme)
-                .w(px(320.))
+                .w(px(280.))
+                .flex_none()
                 .max_h(px(360.))
                 .overflow_y_scroll()
                 .p_1()
@@ -202,9 +174,13 @@ pub(super) fn render_thinking_menu(
         .w_full()
         .px_4()
         .pb_1()
+        .flex()
+        .flex_row()
+        .justify_end()
         .child(
             popover_panel("thinking-menu", theme)
                 .w(px(220.))
+                .flex_none()
                 .p_1()
                 .flex()
                 .flex_col()

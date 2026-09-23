@@ -2,7 +2,7 @@
 //! custom backend rows, and the add-backend form.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
@@ -10,7 +10,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Styled, Window, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::widgets::{labeled_field, row_header, settings_card};
@@ -18,6 +18,17 @@ use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
 pub(super) fn render_web_section(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    match workspace.vm().web_subview {
+        crate::view_model::WebSubview::List => render_web_list(workspace, window, cx),
+        crate::view_model::WebSubview::Custom => render_web_custom_page(workspace, window, cx),
+    }
+}
+
+fn render_web_list(
     workspace: &mut Workspace,
     window: &mut Window,
     cx: &mut Context<Workspace>,
@@ -44,6 +55,7 @@ pub(super) fn render_web_section(
                     endpoint: backend.endpoint.clone(),
                     enabled: backend.enabled,
                     keyed: keyed.iter().any(|id| id == &format!("web-{}", backend.id)),
+                    replacing: workspace.web_key_replacing(&backend.id),
                     index,
                 },
                 key_input,
@@ -67,7 +79,6 @@ pub(super) fn render_web_section(
             )
         })
         .collect();
-    let backend_form_element = render_backend_form(workspace, window, cx);
     let theme = cx.theme();
     let custom_empty = custom_rows.is_empty();
     div()
@@ -79,9 +90,9 @@ pub(super) fn render_web_section(
             "web",
             "Web search",
             Some(
-                "Querit and AnySearch are ready: paste the API key and turn one on. \
-                 Authorization is sent as Bearer automatically — do not type Bearer yourself. \
-                 Environment variables QUERIT_API_KEY / ANYSEARCH_API_KEY also work.",
+                "Querit and AnySearch are ready. A stored key stays in the vault and \
+                 shows as a lock. Authorization is sent as Bearer — do not type Bearer \
+                 yourself. QUERIT_API_KEY / ANYSEARCH_API_KEY also work.",
             ),
             theme,
             vendor_rows,
@@ -107,9 +118,48 @@ pub(super) fn render_web_section(
                     })
                     .children(custom_rows)
                     .into_any_element(),
-                backend_form_element,
+                div()
+                    .id("add-web-backend-row")
+                    .flex()
+                    .flex_row()
+                    .pt_1()
+                    .child(
+                        Button::new("add-custom-backend")
+                            .icon(IconName::Plus)
+                            .label("Add custom backend\u{2026}")
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace
+                                    .on_show_web_subview(crate::view_model::WebSubview::Custom, cx);
+                            })),
+                    )
+                    .into_any_element(),
             ],
         ))
+        .into_any_element()
+}
+
+fn render_web_custom_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = render_backend_form(workspace, window, cx);
+    div()
+        .id("web-custom-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(super::subview_header(
+            "Add custom backend",
+            Some("Querit-compatible or AnySearch-compatible host"),
+            |workspace, cx| {
+                workspace.on_show_web_subview(crate::view_model::WebSubview::List, cx);
+            },
+            cx,
+        ))
+        .child(form)
         .into_any_element()
 }
 
@@ -119,6 +169,7 @@ struct VendorBackend {
     endpoint: String,
     enabled: bool,
     keyed: bool,
+    replacing: bool,
     index: usize,
 }
 
@@ -133,8 +184,10 @@ fn vendor_backend_row(
         endpoint,
         enabled,
         keyed,
+        replacing,
         index,
     } = backend;
+    let show_field = !keyed || replacing;
     let theme = cx.theme();
     let title = match kind.as_str() {
         "querit" => "Querit",
@@ -161,11 +214,25 @@ fn vendor_backend_row(
                         .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(title.to_owned()),
                 )
-                .child(Icon::new(IconName::KeyRound).small().text_color(if keyed {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                })),
+                .when(keyed && !replacing, |this| {
+                    let id = id.clone();
+                    this.child(
+                        div()
+                            .id(format!("web-key-lock-{id}"))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(22.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_color(theme.success)
+                            .hover(|this| this.bg(theme.secondary))
+                            .child(Icon::new(IconName::Lock).small())
+                            .on_click(cx.listener(move |workspace, _, window, cx| {
+                                workspace.on_replace_web_key(&id, window, cx);
+                            })),
+                    )
+                }),
         )
         .child(
             div()
@@ -203,32 +270,34 @@ fn vendor_backend_row(
                         })),
                 ),
         )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(28.))
-                        .child(Input::new(&key_input)),
-                )
-                .child(
-                    Button::new(format!("web-key-save-{id}"))
-                        .label("Save key")
-                        .small()
-                        .outline()
-                        .on_click({
-                            let id = id.clone();
-                            cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_save_web_key(&id, cx);
-                            })
-                        }),
-                ),
-        )
+        .when(show_field, |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(28.))
+                            .child(Input::new(&key_input)),
+                    )
+                    .child(
+                        Button::new(format!("web-key-save-{id}"))
+                            .label("Save key")
+                            .small()
+                            .outline()
+                            .on_click({
+                                let id = id.clone();
+                                cx.listener(move |workspace, _, window, cx| {
+                                    workspace.on_save_web_key(&id, window, cx);
+                                })
+                            }),
+                    ),
+            )
+        })
         .into_any_element()
 }
 

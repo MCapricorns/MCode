@@ -287,6 +287,7 @@ impl Workspace {
             }),
             cx,
         );
+        self.on_show_web_subview(crate::view_model::WebSubview::List, cx);
     }
 
     pub(crate) fn on_remove_backend(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -309,11 +310,18 @@ impl Workspace {
             .clone()
     }
 
-    pub(crate) fn on_save_web_key(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn on_save_web_key(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(input) = self.web_key_inputs.get(id).cloned() else {
             return;
         };
         let api_key = mycode_config::normalize_api_key(&input.read(cx).value());
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.web_key_replace.remove(id);
         self.dispatch(
             BridgeCommand::SaveProviderKey {
                 provider_id: format!("web-{id}"),
@@ -321,6 +329,25 @@ impl Workspace {
             },
             cx,
         );
+    }
+
+    pub(crate) fn web_key_replacing(&self, id: &str) -> bool {
+        self.web_key_replace.contains(id)
+    }
+
+    /// Opens an empty field so a stored web key can be replaced. The stored
+    /// secret is never copied into the field.
+    pub(crate) fn on_replace_web_key(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = self.web_key_inputs.get(id).cloned() {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        self.web_key_replace.insert(id.to_owned());
+        cx.notify();
     }
 
     // ---- MCP servers ----
@@ -397,6 +424,7 @@ impl Workspace {
                 cx,
             );
         }
+        self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
     }
 
     pub(crate) fn mcp_json_input(
@@ -420,6 +448,7 @@ impl Workspace {
             return;
         };
         let raw = input.read(cx).value().to_string();
+        let mut added = 0usize;
         let imported = match mycode_config::parse_mcp_import(&raw) {
             Ok(imported) => imported,
             Err(message) => {
@@ -454,6 +483,7 @@ impl Workspace {
             existing.push(server_id.clone());
             let api_key = row.api_key.clone();
             self.apply_action(DesktopAction::SettingsMcpAdded(row.server), cx);
+            added += 1;
             if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
                 self.dispatch(
                     BridgeCommand::SaveProviderKey {
@@ -463,6 +493,9 @@ impl Workspace {
                     cx,
                 );
             }
+        }
+        if added > 0 {
+            self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
         }
     }
 

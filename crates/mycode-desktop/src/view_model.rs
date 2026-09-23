@@ -291,6 +291,30 @@ pub enum ModelsSubview {
     Custom,
 }
 
+/// The Web search settings sub-page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WebSubview {
+    /// Vendor rows and custom backends, keys hidden behind a lock.
+    #[default]
+    List,
+    /// The custom backend form.
+    Custom,
+}
+
+/// The MCP settings sub-page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum McpSubview {
+    /// Configured servers plus the add buttons.
+    #[default]
+    List,
+    /// Built-in servers that are not configured yet.
+    Catalog,
+    /// Paste a Claude Desktop / Cursor mcp.json.
+    Json,
+    /// The custom stdio or HTTP server form.
+    Custom,
+}
+
 /// One settings navigation section (the secondary menu).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SettingsSection {
@@ -519,6 +543,10 @@ pub struct WorkspaceState {
     pub preset_model_menu_open: bool,
     /// The Models settings sub-page.
     pub models_subview: ModelsSubview,
+    /// The Web search settings sub-page.
+    pub web_subview: WebSubview,
+    /// The MCP settings sub-page.
+    pub mcp_subview: McpSubview,
     /// Whether the custom provider form's protocol dropdown is open.
     pub provider_kind_menu_open: bool,
     /// Whether the custom MCP form's transport dropdown is open.
@@ -771,6 +799,10 @@ pub enum DesktopAction {
     PresetModelMenuToggled(bool),
     /// The Models settings sub-page changed.
     ShowModelsSubview(ModelsSubview),
+    /// The Web search settings sub-page changed.
+    ShowWebSubview(WebSubview),
+    /// The MCP settings sub-page changed.
+    ShowMcpSubview(McpSubview),
     /// The custom provider form's protocol dropdown opened or closed.
     ProviderKindMenuToggled(bool),
     /// The custom MCP form's transport dropdown opened or closed.

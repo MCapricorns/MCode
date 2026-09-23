@@ -1,6 +1,7 @@
 //! The MCP settings page: configured server rows, the built-in catalog, JSON
 //! import, and the custom add-server form (plus its pure row builder).
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState, Textarea};
 use gpui_kit::component::switch::Switch;
@@ -23,6 +24,15 @@ pub(super) fn render_mcp_section(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    match workspace.vm().mcp_subview {
+        crate::view_model::McpSubview::List => render_mcp_list(workspace, cx),
+        crate::view_model::McpSubview::Catalog => render_mcp_catalog_page(workspace, window, cx),
+        crate::view_model::McpSubview::Json => render_mcp_json_page(workspace, window, cx),
+        crate::view_model::McpSubview::Custom => render_mcp_custom_page(workspace, window, cx),
+    }
+}
+
+fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
     let Some(settings) = workspace.vm().settings.clone() else {
         return div().into_any_element();
     };
@@ -59,31 +69,17 @@ pub(super) fn render_mcp_section(
             }
         })
         .collect();
-    let builtin_servers = mycode_config::builtin_mcp_servers();
-    let catalog_rows: Vec<(String, String)> = builtin_servers
-        .iter()
-        .filter(|server| {
-            !settings
-                .mcp_servers
-                .iter()
-                .any(|configured| configured.id == server.id)
-        })
-        .map(|server| (server.id.clone(), server.transport.clone()))
-        .collect();
-    // &mut Context work first.
-    let catalog_row_elements: Vec<AnyElement> = catalog_rows
-        .iter()
-        .map(|(id, transport)| builtin_catalog_row(id, transport, cx))
-        .collect();
-    let mcp_form_element = render_mcp_form(workspace, window, cx);
-    let key_input = workspace.mcp_key_input(window, cx);
-    let json_input = workspace.mcp_json_input(window, cx);
+    let has_catalog = mycode_config::builtin_mcp_servers().iter().any(|server| {
+        !settings
+            .mcp_servers
+            .iter()
+            .any(|configured| configured.id == server.id)
+    });
     let mcp_row_elements: Vec<AnyElement> =
         mcp_rows.into_iter().map(|row| mcp_row(row, cx)).collect();
 
     let theme = cx.theme();
     let mcp_empty = mcp_row_elements.is_empty();
-    let has_catalog = !catalog_row_elements.is_empty();
     div()
         .id("mcp-section")
         .flex()
@@ -93,9 +89,9 @@ pub(super) fn render_mcp_section(
             "mcp",
             "MCP servers",
             Some(
-                "Stdio or Streamable-HTTP tool servers. Enabled servers connect once, \
-                 stay connected across turns, and their tools join the agent's toolset. \
-                 Use Probe to connect now and see the tools a server offers.",
+                "Stdio or Streamable-HTTP tool servers. A stored key shows as a lock \
+                 and is never written back into a field. Enabled servers connect once \
+                 and their tools join the agent.",
             ),
             theme,
             vec![
@@ -105,45 +101,153 @@ pub(super) fn render_mcp_section(
                     })
                     .children(mcp_row_elements)
                     .into_any_element(),
+                div()
+                    .id("add-mcp-row")
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .pt_1()
+                    .when(has_catalog, |this| {
+                        this.child(
+                            Button::new("mcp-open-catalog")
+                                .icon(IconName::Plus)
+                                .label("Add from catalog\u{2026}")
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    workspace.on_show_mcp_subview(
+                                        crate::view_model::McpSubview::Catalog,
+                                        cx,
+                                    );
+                                })),
+                        )
+                    })
+                    .child(
+                        Button::new("mcp-open-json")
+                            .icon(IconName::File)
+                            .label("Import JSON\u{2026}")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace
+                                    .on_show_mcp_subview(crate::view_model::McpSubview::Json, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("mcp-open-custom")
+                            .icon(IconName::Terminal)
+                            .label("Add custom server\u{2026}")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace
+                                    .on_show_mcp_subview(crate::view_model::McpSubview::Custom, cx);
+                            })),
+                    )
+                    .into_any_element(),
             ],
         ))
-        .when(has_catalog, |this| {
-            this.child(settings_card(
-                "mcp-catalog",
-                "Built-in catalog",
-                Some("Paste a key for the server you need, then Add."),
-                theme,
-                vec![
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .children(catalog_row_elements)
-                        .child(
-                            div()
-                                .id("mcp-key-row")
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .pt_2()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .opacity(0.6)
-                                        .child("Key for the built-in server above"),
-                                )
-                                .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
-                        )
-                        .into_any_element(),
-                ],
-            ))
+        .into_any_element()
+}
+
+fn render_mcp_catalog_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let Some(settings) = workspace.vm().settings.clone() else {
+        return div().into_any_element();
+    };
+    let catalog_rows: Vec<(String, String)> = mycode_config::builtin_mcp_servers()
+        .into_iter()
+        .filter(|server| {
+            !settings
+                .mcp_servers
+                .iter()
+                .any(|configured| configured.id == server.id)
         })
+        .map(|server| (server.id, server.transport))
+        .collect();
+    let catalog_row_elements: Vec<AnyElement> = catalog_rows
+        .iter()
+        .map(|(id, transport)| builtin_catalog_row(id, transport, cx))
+        .collect();
+    let key_input = workspace.mcp_key_input(window, cx);
+    let header = super::subview_header(
+        "Add from catalog",
+        Some("Paste a new key, then Add. A stored key is not shown here."),
+        |workspace, cx| {
+            workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
+        },
+        cx,
+    );
+    let theme = cx.theme();
+    div()
+        .id("mcp-catalog-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(header)
+        .child(settings_card(
+            "mcp-catalog",
+            "Built-in servers",
+            Some("The key field starts empty. Bearer is added on the wire."),
+            theme,
+            vec![
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(catalog_row_elements)
+                    .child(
+                        div()
+                            .id("mcp-key-row")
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .pt_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .opacity(0.6)
+                                    .child("Key for the server you add"),
+                            )
+                            .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
+                    )
+                    .into_any_element(),
+            ],
+        ))
+        .into_any_element()
+}
+
+fn render_mcp_json_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let json_input = workspace.mcp_json_input(window, cx);
+    let header = super::subview_header(
+        "Import JSON",
+        Some("Claude Desktop or Cursor mcp.json"),
+        |workspace, cx| {
+            workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
+        },
+        cx,
+    );
+    let theme = cx.theme();
+    div()
+        .id("mcp-json-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(header)
         .child(settings_card(
             "mcp-import",
-            "Import JSON",
+            "Paste a config",
             Some(
-                "Paste a Claude Desktop / Cursor mcp.json, a servers map, or one server object. \
-                 Authorization headers are stored as the API key; Bearer is added on the wire.",
+                "A servers map or one server object. Authorization headers are stored \
+                 as the API key and are not shown again.",
             ),
             theme,
             vec![
@@ -155,20 +259,36 @@ pub(super) fn render_mcp_section(
                 Button::new("mcp-import-json")
                     .label("Import pasted JSON")
                     .small()
-                    .outline()
+                    .primary()
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.on_import_mcp_json(cx);
                     }))
                     .into_any_element(),
             ],
         ))
-        .child(settings_card(
-            "mcp-add",
+        .into_any_element()
+}
+
+fn render_mcp_custom_page(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let form = render_mcp_form(workspace, window, cx);
+    div()
+        .id("mcp-custom-page")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(super::subview_header(
             "Add custom server",
-            Some("A stdio command or an https endpoint speaking Streamable HTTP."),
-            theme,
-            vec![mcp_form_element],
+            Some("stdio command or Streamable HTTP"),
+            |workspace, cx| {
+                workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
+            },
+            cx,
         ))
+        .child(form)
         .into_any_element()
 }
 
@@ -199,11 +319,6 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
     } = row;
     let theme = cx.theme();
     let desk = Desk::of(theme);
-    let key_note = match (transport.as_str(), keyed) {
-        ("http", true) => " \u{b7} key stored",
-        ("http", false) => " \u{b7} no key",
-        _ => "",
-    };
     let tool_chips: Vec<AnyElement> = tools
         .as_deref()
         .unwrap_or_default()
@@ -269,11 +384,25 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                                 .text_xs()
                                 .opacity(0.6)
                                 .whitespace_normal()
-                                .child(format!("{transport} \u{b7} {target}{key_note}")),
+                                .child(format!("{transport} \u{b7} {target}")),
                         )
                         .when_some(tools_summary, |this, summary| {
                             this.child(div().text_xs().text_color(desk.green).child(summary))
                         }),
+                )
+                .child(
+                    div()
+                        .id(format!("mcp-key-lock-{id}"))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(22.))
+                        .text_color(if keyed {
+                            theme.success
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(Icon::new(IconName::Lock).small()),
                 )
                 .child(
                     Switch::new(format!("mcp-toggle-{id}"))
@@ -352,12 +481,9 @@ fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -
                             .into_iter()
                             .find(|server| server.id == id)
                             .expect("catalog entry");
-                        let key = workspace
-                            .mcp_key_input(window, cx)
-                            .read(cx)
-                            .value()
-                            .trim()
-                            .to_owned();
+                        let input = workspace.mcp_key_input(window, cx);
+                        let key = input.read(cx).value().trim().to_owned();
+                        input.update(cx, |state, cx| state.set_value("", window, cx));
                         workspace.on_add_builtin_mcp(server, &key, cx);
                     })
                 }),

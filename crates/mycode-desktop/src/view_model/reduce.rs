@@ -778,6 +778,11 @@ pub fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.provider_kind_menu_open = false;
             state.mcp_transport_menu_open = false;
         }
+        DesktopAction::ShowWebSubview(view) => state.web_subview = view,
+        DesktopAction::ShowMcpSubview(view) => {
+            state.mcp_subview = view;
+            state.mcp_transport_menu_open = false;
+        }
         DesktopAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
         DesktopAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         DesktopAction::ShellKindMenuToggled(open) => state.shell_kind_menu_open = open,

@@ -1,6 +1,6 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -19,11 +19,29 @@ mod projects;
 mod settings_editor;
 mod updates_data;
 
-/// Window chrome bounds for the first window.
-const WINDOW_BOUNDS: Bounds<Pixels> = Bounds {
-    origin: gpui_kit::point(px(80.), px(48.)),
-    size: size(px(1520.), px(960.)),
-};
+/// Preferred first-window size. The origin is computed from the primary
+/// display so the window opens in the middle of the usable area.
+const WINDOW_SIZE: gpui_kit::Size<Pixels> = size(px(1520.), px(960.));
+
+/// Centers the preferred size on the primary display's usable area, shrinking
+/// it when the screen is smaller than that size.
+fn startup_bounds(cx: &App) -> Bounds<Pixels> {
+    let Some(display) = cx.primary_display() else {
+        return Bounds {
+            origin: gpui_kit::point(px(80.), px(48.)),
+            size: WINDOW_SIZE,
+        };
+    };
+    let screen = display.visible_bounds();
+    let width = fit_edge(screen.size.width, WINDOW_SIZE.width, px(960.));
+    let height = fit_edge(screen.size.height, WINDOW_SIZE.height, px(560.));
+    Bounds::centered_at(screen.center(), size(width, height))
+}
+
+fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
+    let room = (available - px(64.)).max(floor.min(available));
+    desired.min(room)
+}
 
 /// Poll cadence for streaming chat events from the core thread.
 const EVENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -45,7 +63,7 @@ pub fn open_window(home: HomeLayout, cx: &mut App) {
     // Open as a regular window at the default bounds: the maximize-on-open
     // workaround for gpui's stale-scale sizing is retired by user request
     // (DPI edge cases accepted); the user can maximize manually.
-    options.window_bounds = Some(WindowBounds::Windowed(WINDOW_BOUNDS));
+    options.window_bounds = Some(WindowBounds::Windowed(startup_bounds(cx)));
     options.window_min_size = Some(size(px(960.), px(560.)));
     if let Some(titlebar) = options.titlebar.as_mut() {
         titlebar.title = Some("MYCode Harness".into());
@@ -91,6 +109,9 @@ pub struct Workspace {
     mcp_key_input: Option<Entity<InputState>>,
     mcp_json_input: Option<Entity<TextareaState>>,
     web_key_inputs: HashMap<String, Entity<InputState>>,
+    /// Vendor ids whose empty replace-key field is open. A stored key is
+    /// never written back into the field.
+    web_key_replace: HashSet<String>,
     preset_key_input: Option<Entity<InputState>>,
     preset_search_input: Option<Entity<InputState>>,
     ask_input: Option<Entity<InputState>>,
@@ -157,6 +178,7 @@ impl Workspace {
             mcp_key_input: None,
             mcp_json_input: None,
             web_key_inputs: HashMap::new(),
+            web_key_replace: HashSet::new(),
             preset_key_input: None,
             preset_search_input: None,
             ask_input: None,
@@ -390,6 +412,24 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.apply_action(DesktopAction::ShowModelsSubview(view), cx);
+    }
+
+    /// Switches the Web search settings sub-page.
+    pub(crate) fn on_show_web_subview(
+        &mut self,
+        view: crate::view_model::WebSubview,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_action(DesktopAction::ShowWebSubview(view), cx);
+    }
+
+    /// Switches the MCP settings sub-page.
+    pub(crate) fn on_show_mcp_subview(
+        &mut self,
+        view: crate::view_model::McpSubview,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_action(DesktopAction::ShowMcpSubview(view), cx);
     }
 
     pub(crate) fn on_toggle_provider_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {

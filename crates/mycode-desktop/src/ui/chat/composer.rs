@@ -368,9 +368,9 @@ fn model_button_label(vm: &WorkspaceState) -> String {
 
 fn thinking_button_label(vm: &WorkspaceState) -> String {
     match selected_reasoning_level(vm) {
-        "default" => "Default".to_owned(),
-        "off" => "Off".to_owned(),
-        "on" => "On".to_owned(),
+        "default" => "Thinking".to_owned(),
+        "off" => "Thinking off".to_owned(),
+        "on" => "Thinking on".to_owned(),
         "minimal" => "Minimal".to_owned(),
         "low" => "Low".to_owned(),
         "medium" => "Medium".to_owned(),

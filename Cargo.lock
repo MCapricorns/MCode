@@ -4274,7 +4274,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-agent"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -4294,7 +4294,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "jsonschema",
@@ -4317,7 +4317,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.23.1",
  "blake3",
@@ -4336,7 +4336,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "serde",
@@ -4349,7 +4349,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "gpui-kit",
  "mycode-app",
@@ -4362,7 +4362,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4379,7 +4379,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-tools"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aho-corasick",
  "async-trait",

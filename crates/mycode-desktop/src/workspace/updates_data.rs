@@ -96,6 +96,7 @@ impl Workspace {
                 cx,
             );
         }
+        self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
     }
 
     pub(crate) fn ask_input(
@@ -180,6 +181,28 @@ impl Workspace {
         {
             self.apply_action(
                 DesktopAction::ShowModelsSubview(crate::view_model::ModelsSubview::List),
+                cx,
+            );
+            dismissed = true;
+        }
+        if !dismissed
+            && self.vm.view == MainView::Settings
+            && self.vm.settings_section == crate::view_model::SettingsSection::Web
+            && self.vm.web_subview != crate::view_model::WebSubview::List
+        {
+            self.apply_action(
+                DesktopAction::ShowWebSubview(crate::view_model::WebSubview::List),
+                cx,
+            );
+            dismissed = true;
+        }
+        if !dismissed
+            && self.vm.view == MainView::Settings
+            && self.vm.settings_section == crate::view_model::SettingsSection::Mcp
+            && self.vm.mcp_subview != crate::view_model::McpSubview::List
+        {
+            self.apply_action(
+                DesktopAction::ShowMcpSubview(crate::view_model::McpSubview::List),
                 cx,
             );
             dismissed = true;

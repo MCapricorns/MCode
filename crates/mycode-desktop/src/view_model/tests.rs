@@ -697,6 +697,19 @@ fn models_subview_switches_reset_transient_form_state() {
     );
     assert_eq!(state.models_subview, ModelsSubview::Custom);
 
+    reduce(
+        &mut state,
+        DesktopAction::ShowWebSubview(crate::view_model::WebSubview::Custom),
+    );
+    assert_eq!(state.web_subview, crate::view_model::WebSubview::Custom);
+    state.mcp_transport_menu_open = true;
+    reduce(
+        &mut state,
+        DesktopAction::ShowMcpSubview(crate::view_model::McpSubview::Json),
+    );
+    assert_eq!(state.mcp_subview, crate::view_model::McpSubview::Json);
+    assert!(!state.mcp_transport_menu_open);
+
     reduce(&mut state, DesktopAction::ProviderKindMenuToggled(true));
     assert!(state.provider_kind_menu_open);
     reduce(&mut state, DesktopAction::McpTransportMenuToggled(true));
