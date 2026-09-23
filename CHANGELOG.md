@@ -22,7 +22,7 @@
 - Querit 网页检索的 `crawlTimeout` 改为按秒发送。
 - 深浅主题下选中的文本保持可读。
 
-## [0.4.5] - 2026-09-23
+## 0.4.5 - 2026-09-23
 
 ### Changed
 
@@ -34,4 +34,3 @@
 
 [Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.4.7...HEAD
 [0.4.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.4.7
-[0.4.5]: https://github.com/MCapricorns/mycode/releases/tag/v0.4.5
