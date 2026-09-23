@@ -39,7 +39,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::argv::windows_command_line_utf16;
-use super::resolve::{PinnedImage, identity_of, rehash_image_cancellable};
+use super::resolve::{PinnedImage, identity_of, rehash_image_cancellable, verify_pinned_digest};
 use super::spawn::{SpawnFailure, SpawnFailureKind, SpawnGate, finish_pending_spawn_cleanup};
 use crate::builtin::process::{
     ProcessTree, WindowsJob, combine_teardown_results, current_process_is_in_job,
@@ -111,16 +111,7 @@ pub(super) fn spawn_windows(
     env: &[(OsString, OsString)],
     gate: &SpawnGate,
 ) -> Result<(WindowsChild, ProcessTree, PinnedImage), SpawnFailure> {
-    let digest = rehash_image_cancellable(&mut pinned.file, || gate.check_pending())?;
-    if digest != pinned.digest {
-        return Err(ToolError::Execution(
-            "pinned executable digest changed before launch \
-             (a same-account writer rewrote the file; this is outside the security boundary)"
-                .into(),
-        )
-        .into());
-    }
-    gate.check_pending()?;
+    verify_pinned_digest(&mut pinned, gate)?;
 
     let parent_job = current_process_is_in_job().map_err(|err| {
         ToolError::Execution(format!("failed to query the host's Job membership: {err}"))

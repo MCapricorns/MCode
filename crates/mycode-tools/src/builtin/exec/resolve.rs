@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::ResolveError;
 use super::env::is_searchable_path_entry;
 use super::image::{ImageKind, classify_image, read_pe_tail};
+use super::spawn::{SpawnFailure, SpawnGate};
 use crate::builtin::fs_search::lexical_normalize;
 use crate::tool::ToolError;
 
@@ -294,6 +295,28 @@ where
         ToolError::Execution(format!("failed to rewind the pinned executable: {err}"))
     })?;
     hash_file_cancellable(file, &mut check_cancelled)
+}
+
+/// Re-hashes the pinned image and rejects a pre-launch digest change.
+///
+/// Shared prelude of every platform spawn: the digest pinned during
+/// resolution must still match immediately before launch, and the gate must
+/// stay pending-free across the rehash.
+pub(super) fn verify_pinned_digest(
+    pinned: &mut PinnedImage,
+    gate: &SpawnGate,
+) -> Result<(), SpawnFailure> {
+    let digest = rehash_image_cancellable(&mut pinned.file, || gate.check_pending())?;
+    if digest != pinned.digest {
+        return Err(ToolError::Execution(
+            "pinned executable digest changed before launch \
+             (a same-account writer rewrote the file; this is outside the security boundary)"
+                .into(),
+        )
+        .into());
+    }
+    gate.check_pending()?;
+    Ok(())
 }
 
 pub(super) fn check_cancelled(cancel: &CancellationToken) -> Result<(), ToolError> {

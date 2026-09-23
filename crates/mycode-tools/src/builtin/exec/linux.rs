@@ -19,10 +19,11 @@ use std::ptr;
 
 use tokio::process::{Child, Command};
 
-use super::resolve::{PinnedImage, rehash_image_cancellable};
+use super::resolve::{PinnedImage, verify_pinned_digest};
 use super::spawn::{
     SpawnFailure, SpawnGate, finish_pending_spawn_cleanup, wait_tokio_child_blocking,
 };
+use super::unix::{build_cstring_vec, build_env_cstrings};
 use crate::builtin::process::{ExecutionLease, ProcessTree};
 use crate::tool::ToolError;
 
@@ -72,16 +73,7 @@ fn spawn_linux_with_enroller<F>(
 where
     F: FnOnce(&Child) -> std::io::Result<ProcessTree>,
 {
-    let digest = rehash_image_cancellable(&mut pinned.file, || gate.check_pending())?;
-    if digest != pinned.digest {
-        return Err(ToolError::Execution(
-            "pinned executable digest changed before launch \
-             (a same-account writer rewrote the file; this is outside the security boundary)"
-                .into(),
-        )
-        .into());
-    }
-    gate.check_pending()?;
+    verify_pinned_digest(&mut pinned, gate)?;
 
     let argv = ExecvePointerTable::new(build_cstring_vec(argv0, args)?);
     let env = ExecvePointerTable::new(build_env_cstrings(env)?);
@@ -284,34 +276,6 @@ fn mark_nonstandard_fds_cloexec() -> std::io::Result<()> {
     } else {
         Ok(())
     }
-}
-
-fn build_cstring_vec(argv0: &str, args: &[String]) -> Result<Vec<CString>, ToolError> {
-    let mut out = Vec::with_capacity(args.len() + 1);
-    out.push(
-        CString::new(argv0)
-            .map_err(|_| ToolError::InvalidArgs("program path contains an interior NUL".into()))?,
-    );
-    for arg in args {
-        out.push(
-            CString::new(arg.as_str())
-                .map_err(|_| ToolError::InvalidArgs("argument contains an interior NUL".into()))?,
-        );
-    }
-    Ok(out)
-}
-
-fn build_env_cstrings(env: &[(OsString, OsString)]) -> Result<Vec<CString>, ToolError> {
-    let mut out = Vec::new();
-    for (key, value) in env {
-        let mut pair = key.clone();
-        pair.push("=");
-        pair.push(value);
-        out.push(CString::new(pair.as_encoded_bytes()).map_err(|_| {
-            ToolError::InvalidArgs("environment value contains an interior NUL".into())
-        })?);
-    }
-    Ok(out)
 }
 
 /// Owns immutable C strings and their NUL-terminated pointer table.

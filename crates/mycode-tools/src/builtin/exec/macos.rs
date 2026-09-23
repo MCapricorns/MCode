@@ -31,10 +31,11 @@ use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, ReadBuf};
 
-use super::resolve::{PinnedImage, rehash_image_cancellable};
+use super::resolve::{PinnedImage, rehash_image_cancellable, verify_pinned_digest};
 use super::spawn::{
     ExecutionMetadata, LoadedArchitecture, SpawnFailure, SpawnGate, finish_pending_spawn_cleanup,
 };
+use super::unix::{build_cstring_vec, build_env_cstrings};
 use crate::builtin::process::{ExecutionLease, ProcessTree};
 use crate::tool::ToolError;
 
@@ -363,16 +364,7 @@ pub(super) fn spawn_macos(
     ),
     SpawnFailure,
 > {
-    let digest = rehash_image_cancellable(&mut pinned.file, || gate.check_pending())?;
-    if digest != pinned.digest {
-        return Err(ToolError::Execution(
-            "pinned executable digest changed before launch \
-             (a same-account writer rewrote the file; this is outside the security boundary)"
-                .into(),
-        )
-        .into());
-    }
-    gate.check_pending()?;
+    verify_pinned_digest(&mut pinned, gate)?;
 
     let cwd_fd = normalize_spawn_source(open_cwd(cwd)?, "working directory")?;
     let (stdout_read, stdout_write) = cloexec_pipe()?;
@@ -882,34 +874,6 @@ fn check_posix(rc: libc::c_int, what: &str) -> Result<(), ToolError> {
             io::Error::from_raw_os_error(rc)
         )))
     }
-}
-
-fn build_cstring_vec(argv0: &str, args: &[String]) -> Result<Vec<CString>, ToolError> {
-    let mut out = Vec::with_capacity(args.len() + 1);
-    out.push(
-        CString::new(argv0)
-            .map_err(|_| ToolError::InvalidArgs("program path contains an interior NUL".into()))?,
-    );
-    for arg in args {
-        out.push(
-            CString::new(arg.as_str())
-                .map_err(|_| ToolError::InvalidArgs("argument contains an interior NUL".into()))?,
-        );
-    }
-    Ok(out)
-}
-
-fn build_env_cstrings(env: &[(OsString, OsString)]) -> Result<Vec<CString>, ToolError> {
-    let mut out = Vec::new();
-    for (key, value) in env {
-        let mut pair = key.clone();
-        pair.push("=");
-        pair.push(value);
-        out.push(CString::new(pair.as_encoded_bytes()).map_err(|_| {
-            ToolError::InvalidArgs("environment value contains an interior NUL".into())
-        })?);
-    }
-    Ok(out)
 }
 
 fn pointers(entries: &[CString]) -> Vec<*mut libc::c_char> {

@@ -23,6 +23,11 @@ mod macos;
 mod prepare;
 mod resolve;
 mod spawn;
+#[cfg(any(
+    all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+mod unix;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod windows;
 
