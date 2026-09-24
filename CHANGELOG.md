@@ -3,6 +3,13 @@
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
 发布说明在发版时手写，与本文件相互独立。
 
+## [0.5.1] - 2026-09-24
+
+### Changed
+
+- Windows 平台 shell 只支持 PowerShell 7（pwsh）与 Git bash：侦查顺序为 pwsh、回退 Git bash，不再使用 Windows PowerShell 5.1 与 cmd；设置页类型下拉只剩 pwsh/bash，浏览选择其它可执行文件会被拒绝；旧设置里存的 powershell/cmd 会在启动时自动丢弃并重新侦查，不会导致加载失败。
+- 改动面板的 git status 轮询改用只读方式（`--no-optional-locks`），不再抢占 `.git/index.lock` 或回写索引；快照连续不变时轮询间隔从 2 秒退避到 4/8 秒，一有改动或切换目录立即回到 2 秒。
+
 ## [0.5.0] - 2026-09-24
 
 ### Added
@@ -49,6 +56,7 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.1
 [0.5.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.0
 [0.4.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.4.7
