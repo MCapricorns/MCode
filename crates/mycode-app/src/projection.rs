@@ -54,12 +54,24 @@ pub(crate) fn project_replayed_entry(event: &SessionEvent, payload: &[u8]) -> Co
 
 pub(crate) fn project_usage(event_id: &str, payload: &[u8]) -> ConversationEntry {
     let value: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
+    let provider = value["provider"].as_str().unwrap_or_default();
     let model = value["model"].as_str().unwrap_or("unknown");
     let input = value["input"].as_u64().unwrap_or_default();
     let output = value["output"].as_u64().unwrap_or_default();
     let cache = value["cache"].as_u64();
     let elapsed_ms = value["elapsed_ms"].as_u64().unwrap_or_default();
-    let mut text = format!("{model}: {input} in / {output} out");
+    // The spelling doubles as the rebuild input: the desktop replays these
+    // rows to restore per-model totals, so the key must be `provider/model`
+    // and the cache count must survive the projection.
+    let key = if provider.is_empty() {
+        model.to_owned()
+    } else {
+        format!("{provider}/{model}")
+    };
+    let mut text = format!("{key}: {input} in / {output} out");
+    if let Some(cache) = cache {
+        text.push_str(&format!(" \u{b7} cache {cache}"));
+    }
     if elapsed_ms > 0 {
         let per_second = output as f64 / (elapsed_ms as f64 / 1000.0);
         text.push_str(&format!(" \u{b7} {per_second:.0} tok/s"));

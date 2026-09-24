@@ -52,7 +52,7 @@ pub use protocol::{
     MAX_STREAMING_CHARS, SessionEventId, SessionId, SessionSummary, StreamingReply,
 };
 pub use updates::{PreparedUpdate, UpdateOffer};
-pub use updates::{apply_and_restart, cleanup_stale_stages, current_version};
+pub use updates::{apply_and_restart, brief_error, cleanup_stale_stages, current_version};
 
 use std::path::PathBuf;
 use std::sync::Arc;

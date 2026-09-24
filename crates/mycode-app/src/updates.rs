@@ -97,14 +97,16 @@ pub async fn latest_release(client: &reqwest::Client) -> Result<Option<UpdateOff
         .header("accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|error| format!("update check failed: {error}"))?;
+        .map_err(|error| format!("update check failed: {}", brief_error(&error.to_string())))?;
     if classify_release_status(response.status())?.is_none() {
         return Ok(None);
     }
-    let release: ReleaseJson = response
-        .json()
-        .await
-        .map_err(|error| format!("update response malformed: {error}"))?;
+    let release: ReleaseJson = response.json().await.map_err(|error| {
+        format!(
+            "update response malformed: {}",
+            brief_error(&error.to_string())
+        )
+    })?;
     let Some(offer) = resolve_asset(&release.tag_name, &release.html_url, &release.assets) else {
         return Ok(None);
     };
@@ -112,6 +114,21 @@ pub async fn latest_release(client: &reqwest::Client) -> Result<Option<UpdateOff
         return Ok(None);
     }
     Ok(Some(offer))
+}
+
+/// First line of a transport error, bounded, so reqwest's full error chain
+/// (URL,TLS, and retry diagnostics) cannot stretch a toast across the screen.
+pub fn brief_error(message: &str) -> String {
+    let first = message.lines().next().unwrap_or(message);
+    let mut chars = first.chars();
+    let mut brief = String::new();
+    for char in chars.by_ref().take(160) {
+        brief.push(char);
+    }
+    if chars.next().is_some() {
+        brief.push('\u{2026}');
+    }
+    brief
 }
 
 /// Classifies one fetched release-check status: `Ok(None)` short-circuits as
@@ -211,7 +228,7 @@ async fn fetch_to_file(
         .get(url)
         .send()
         .await
-        .map_err(|error| format!("download failed: {error}"))?;
+        .map_err(|error| format!("download failed: {}", brief_error(&error.to_string())))?;
     if !response.status().is_success() {
         return Err(format!("download returned {}", response.status()));
     }
