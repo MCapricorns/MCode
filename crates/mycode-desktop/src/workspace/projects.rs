@@ -1,6 +1,8 @@
 //! Project- and session-shaped workspace handlers: the mention/skill
 //! pipeline, message recall, session switching, and the project bindings
 //! that drive the sidebar grouping.
+use gpui_kit::AppContext as _;
+use gpui_kit::component::input::InputState;
 use gpui_kit::{Context, Window};
 
 use mycode_app::{BranchId, BridgeCommand, SessionId};
@@ -215,12 +217,133 @@ impl Workspace {
         {
             self.apply_action(DesktopAction::SessionDeleted, cx);
         }
+        // Drop the remembered bindings optimistically: the core forgets them
+        // too, and a later UI-state save must not resurrect stale ids.
+        self.apply_action(
+            DesktopAction::SessionBindingsForgotten(session_id.to_owned()),
+            cx,
+        );
         self.dispatch(
             BridgeCommand::DeleteSession {
                 session_id: session_id.to_owned(),
             },
             cx,
         );
+    }
+
+    /// Opens or closes the sidebar workspace switcher.
+    pub(crate) fn on_toggle_workspace_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::WorkspaceMenuToggled(open), cx);
+    }
+
+    /// Creates a fresh named workspace and switches the sidebar to it.
+    pub(crate) fn on_create_workspace(&mut self, cx: &mut Context<Self>) {
+        // The serial skips names already taken so each new workspace is
+        // distinguishable in the switcher.
+        let mut serial = self.vm.workspaces.len() + 1;
+        let name = loop {
+            let candidate = format!("{} {serial}", crate::i18n::t("Workspace", "工区"));
+            if self
+                .vm
+                .workspaces
+                .iter()
+                .all(|workspace| workspace.name != candidate)
+            {
+                break candidate;
+            }
+            serial += 1;
+        };
+        let workspace = mycode_config::WorkspaceDef::generate(&name, Vec::new());
+        self.apply_action(DesktopAction::WorkspaceCreated(workspace), cx);
+        self.apply_action(DesktopAction::WorkspaceMenuToggled(false), cx);
+        self.persist_ui_state(cx);
+    }
+
+    /// Switches the sidebar to another workspace.
+    pub(crate) fn on_switch_workspace(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::WorkspaceSwitched(id.to_owned()), cx);
+        self.apply_action(DesktopAction::WorkspaceMenuToggled(false), cx);
+        self.refresh_skills(cx);
+        self.persist_ui_state(cx);
+    }
+
+    /// Turns the workspace menu into a rename editor for the active
+    /// workspace.
+    pub(crate) fn on_start_workspace_rename(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current) =
+            crate::view_model::active_workspace(&self.vm).map(|workspace| workspace.name.clone())
+        else {
+            return;
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(current));
+        self.workspace_rename_input = Some(input);
+        self.apply_action(DesktopAction::WorkspaceRenameToggled(true), cx);
+    }
+
+    /// Commits the rename editor's text as the active workspace's name.
+    pub(crate) fn on_confirm_workspace_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = self.workspace_rename_input.take() else {
+            return;
+        };
+        let name = input.read(cx).value().trim().to_string();
+        if !name.is_empty() {
+            self.apply_action(DesktopAction::WorkspaceRenamed(name), cx);
+        }
+        self.apply_action(DesktopAction::WorkspaceRenameToggled(false), cx);
+        self.persist_ui_state(cx);
+    }
+
+    /// Abandons the rename editor.
+    pub(crate) fn on_cancel_workspace_rename(&mut self, cx: &mut Context<Self>) {
+        self.workspace_rename_input = None;
+        self.apply_action(DesktopAction::WorkspaceRenameToggled(false), cx);
+    }
+
+    /// Removes a workspace. Its sessions move to the first survivor.
+    pub(crate) fn on_delete_workspace(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.vm.workspaces.len() < 2 {
+            self.push_toast(
+                crate::i18n::t("Keep at least one workspace", "至少保留一个工区"),
+                crate::workspace::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+        self.apply_action(DesktopAction::WorkspaceRemoved(id.to_owned()), cx);
+        self.apply_action(DesktopAction::WorkspaceMenuToggled(false), cx);
+        self.refresh_skills(cx);
+        self.persist_ui_state(cx);
+    }
+
+    /// Binds one session to the workspace the sidebar shows. New sessions
+    /// call this at creation; opening an unbound legacy session adopts the
+    /// workspace it was opened from.
+    pub(super) fn bind_session_workspace(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        let Some(workspace_id) =
+            crate::view_model::active_workspace(&self.vm).map(|workspace| workspace.id.clone())
+        else {
+            return;
+        };
+        if self
+            .vm
+            .session_workspaces
+            .iter()
+            .any(|(existing, _)| existing == session_id)
+        {
+            return;
+        }
+        self.apply_action(
+            DesktopAction::SessionWorkspaceBound {
+                session_id: session_id.to_owned(),
+                workspace_id,
+            },
+            cx,
+        );
+        self.persist_ui_state(cx);
     }
 
     /// Adds one folder to the workspace without moving a chat that already
@@ -288,6 +411,9 @@ impl Workspace {
     pub(super) fn request_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
         self.suppress_open = false;
         self.pending_open = Some(session_id.to_owned());
+        // Opening adopts an unbound (pre-workspace) session into the
+        // workspace it was opened from; bound sessions are untouched.
+        self.bind_session_workspace(session_id, cx);
         if let Some(session_id) = SessionId::parse(session_id) {
             self.dispatch(BridgeCommand::OpenSession(session_id), cx);
         }
@@ -296,6 +422,11 @@ impl Workspace {
     /// Makes the sidebar and tool directory follow one session's project.
     /// Other chats keep their own bindings, so several projects can stay open.
     pub(super) fn follow_session_project(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        // The sidebar shows the workspace this chat belongs to.
+        if let Some(owner) = crate::view_model::workspace_of_session(&self.vm, session_id) {
+            let id = owner.id.clone();
+            self.apply_action(DesktopAction::WorkspaceSwitched(id), cx);
+        }
         let Some(project) = self
             .vm
             .session_projects
@@ -598,7 +729,12 @@ impl Workspace {
             selected_provider: self.vm.selected_provider.clone(),
             selected_model: self.vm.selected_model.clone(),
             session_projects: self.vm.session_projects.clone(),
+            // The legacy root list mirrors the active workspace so a
+            // downgrade build still shows a sensible folder set.
             workspace_roots: self.vm.workspace_roots.clone(),
+            workspaces: self.vm.workspaces.clone(),
+            session_workspaces: self.vm.session_workspaces.clone(),
+            active_workspace: self.vm.active_workspace.clone(),
         };
         self.dispatch(BridgeCommand::SaveUiState { state }, cx);
     }

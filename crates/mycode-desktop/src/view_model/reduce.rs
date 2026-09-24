@@ -26,7 +26,11 @@ use self::jobs::{finish_live_job, tool_progress, tool_started};
 use self::models::{
     active_preset_changed, ensure_model_selection, model_selected, provider_selected,
 };
-use self::projects::{bind_session_project, session_project_bound, workspace_root_added};
+use self::projects::{
+    bind_session_project, session_bindings_forgotten, session_project_bound,
+    session_workspace_bound, sync_workspace_roots, workspace_created, workspace_removed,
+    workspace_renamed, workspace_root_added, workspace_root_removed, workspace_switched,
+};
 use self::streaming::{append_streaming, set_streaming_status};
 use self::usage::rebuild_session_usage;
 
@@ -558,17 +562,17 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             selected_provider,
             selected_model,
             session_projects,
-            workspace_roots,
+            workspaces,
+            session_workspaces,
+            active_workspace: active,
         } => {
             state.recents = recents;
             state.project_dir = last_project.filter(|path| !path.trim().is_empty());
             state.session_projects = session_projects;
-            state.workspace_roots = workspace_roots;
-            if state.workspace_roots.is_empty()
-                && let Some(project) = state.project_dir.clone()
-            {
-                state.workspace_roots.push(project);
-            }
+            state.workspaces = workspaces;
+            state.session_workspaces = session_workspaces;
+            state.active_workspace = active;
+            sync_workspace_roots(state);
             state.auto_update = auto_update;
             if selected_provider.is_some() {
                 state.selected_provider = selected_provider;
@@ -576,11 +580,27 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             }
             ensure_model_selection(state);
         }
+        DesktopAction::WorkspaceMenuToggled(open) => {
+            state.workspace_menu_open = open;
+            if !open {
+                state.workspace_rename_open = false;
+            }
+        }
+        DesktopAction::WorkspaceRenameToggled(open) => state.workspace_rename_open = open,
+        DesktopAction::WorkspaceCreated(workspace) => workspace_created(state, workspace),
+        DesktopAction::WorkspaceSwitched(id) => workspace_switched(state, id),
+        DesktopAction::WorkspaceRenamed(name) => workspace_renamed(state, name),
+        DesktopAction::WorkspaceRemoved(id) => workspace_removed(state, id),
+        DesktopAction::SessionWorkspaceBound {
+            session_id,
+            workspace_id,
+        } => session_workspace_bound(state, session_id, workspace_id),
+        DesktopAction::SessionBindingsForgotten(session_id) => {
+            session_bindings_forgotten(state, session_id)
+        }
         DesktopAction::WorkspaceRootAdded(project) => workspace_root_added(state, project),
         DesktopAction::WorkspaceRootRemoved(project) => {
-            state
-                .workspace_roots
-                .retain(|existing| !super::same_project_path(existing, &project));
+            workspace_root_removed(state, project);
         }
         DesktopAction::ProjectOpened(project) => {
             state.project_dir = Some(project.clone());
@@ -723,6 +743,7 @@ fn edit_settings(state: &mut WorkspaceState, edit: impl FnOnce(&mut SettingsStat
 /// whether anything was open, so Escape can tell a dismissal from a no-op.
 pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     let was_open = state.project_menu_open
+        || state.workspace_menu_open
         || state.model_menu_open
         || state.reasoning_menu_open
         || state.subagent_menu.is_some()
@@ -733,6 +754,8 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.language_menu_open
         || state.mention.is_some();
     state.project_menu_open = false;
+    state.workspace_menu_open = false;
+    state.workspace_rename_open = false;
     state.model_menu_open = false;
     state.reasoning_menu_open = false;
     state.subagent_menu = None;

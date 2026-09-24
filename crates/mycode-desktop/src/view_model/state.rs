@@ -112,6 +112,11 @@ pub(crate) struct WorkspaceState {
     pub settings_section: SettingsSection,
     /// Whether the sidebar project switcher dropdown is open.
     pub project_menu_open: bool,
+    /// Whether the sidebar workspace switcher dropdown is open.
+    pub workspace_menu_open: bool,
+    /// Whether the workspace switcher is in rename mode for the active
+    /// workspace.
+    pub workspace_rename_open: bool,
     /// The resolved provider catalog.
     pub catalog: Option<Arc<mycode_providers::catalog::CatalogDocument>>,
     /// Unix seconds of the catalog's last successful cloud fetch.
@@ -123,7 +128,15 @@ pub(crate) struct WorkspaceState {
     /// Session-to-project bindings (session id, project path), most recent
     /// first. Restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
-    /// Folders in the open workspace, most recently added first.
+    /// Named workspaces; the sidebar shows one at a time.
+    pub workspaces: Vec<mycode_config::WorkspaceDef>,
+    /// Session-to-workspace bindings (session id, workspace id). A session
+    /// missing here belongs to the first workspace (upgrade window only).
+    pub session_workspaces: Vec<(String, String)>,
+    /// The workspace the sidebar currently shows.
+    pub active_workspace: Option<String>,
+    /// Folders in the open workspace, most recently added first. Mirrors the
+    /// active workspace's folders so unrelated UI keeps one source.
     pub workspace_roots: Vec<String>,
     /// Whether update checks run automatically.
     pub auto_update: bool,
@@ -370,9 +383,36 @@ pub enum DesktopAction {
         selected_model: Option<String>,
         /// Session-to-project bindings.
         session_projects: Vec<(String, String)>,
-        /// Workspace folder roots.
-        workspace_roots: Vec<String>,
+        /// Named workspaces.
+        workspaces: Vec<mycode_config::WorkspaceDef>,
+        /// Session-to-workspace bindings.
+        session_workspaces: Vec<(String, String)>,
+        /// The workspace the sidebar shows.
+        active_workspace: Option<String>,
     },
+    /// The sidebar workspace switcher opened or closed.
+    WorkspaceMenuToggled(bool),
+    /// A workspace was created and became the active one.
+    WorkspaceCreated(mycode_config::WorkspaceDef),
+    /// The sidebar switched to another workspace.
+    WorkspaceSwitched(String),
+    /// The active workspace was renamed.
+    WorkspaceRenamed(String),
+    /// A workspace was removed; its sessions move to the first remaining
+    /// workspace.
+    WorkspaceRemoved(String),
+    /// A session joined a workspace in the durable map.
+    SessionWorkspaceBound {
+        /// Session identity spelling.
+        session_id: String,
+        /// Workspace identity.
+        workspace_id: String,
+    },
+    /// Every remembered binding for one session was dropped (its data was
+    /// deleted).
+    SessionBindingsForgotten(String),
+    /// The workspace rename editor opened or closed.
+    WorkspaceRenameToggled(bool),
     /// A folder was added to the workspace.
     WorkspaceRootAdded(String),
     /// A folder was removed from the workspace.

@@ -220,6 +220,8 @@ impl Workspace {
             BridgeReply::Created(Ok(summary)) => {
                 let session_id = summary.session_id.clone();
                 self.apply_action(DesktopAction::SessionCreated(summary), cx);
+                // A fresh session belongs to the workspace the sidebar shows.
+                self.bind_session_workspace(&session_id, cx);
                 self.request_open_session(&session_id, cx);
                 if let Some(project) = self.pending_project.take() {
                     self.attach_project(&session_id, &project, cx);
@@ -418,7 +420,27 @@ impl Workspace {
                     self.apply_action(DesktopAction::Failed(message), cx);
                 }
             }
-            BridgeReply::UiState(Ok(ui_state)) => {
+            BridgeReply::UiState(Ok(mut ui_state)) => {
+                // One-time upgrade: the legacy anonymous folder list becomes
+                // the first named workspace, and every session that predates
+                // workspaces belongs to it (unbound sessions resolve to the
+                // first workspace on read).
+                let migrated = ui_state.workspaces.is_empty();
+                if migrated {
+                    let mut folders = ui_state.workspace_roots.clone();
+                    if folders.is_empty()
+                        && let Some(last) = ui_state.last_project.clone()
+                        && !last.trim().is_empty()
+                    {
+                        folders.push(last);
+                    }
+                    let default = mycode_config::WorkspaceDef::generate(
+                        crate::i18n::t("Default", "默认"),
+                        folders,
+                    );
+                    ui_state.active_workspace = Some(default.id.clone());
+                    ui_state.workspaces.push(default);
+                }
                 self.apply_action(
                     DesktopAction::UiStateLoaded {
                         recents: ui_state.recent_projects,
@@ -427,10 +449,15 @@ impl Workspace {
                         selected_provider: ui_state.selected_provider,
                         selected_model: ui_state.selected_model,
                         session_projects: ui_state.session_projects,
-                        workspace_roots: ui_state.workspace_roots,
+                        workspaces: ui_state.workspaces,
+                        session_workspaces: ui_state.session_workspaces,
+                        active_workspace: ui_state.active_workspace,
                     },
                     cx,
                 );
+                if migrated {
+                    self.persist_ui_state(cx);
+                }
                 self.restore_session_projects(cx);
                 self.refresh_skills(cx);
             }

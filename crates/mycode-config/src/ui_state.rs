@@ -24,10 +24,43 @@ pub const MAX_RECENT_PROJECTS: usize = 16;
 pub const MAX_WORKSPACE_ROOTS: usize = 8;
 /// Maximum remembered session-to-project bindings.
 pub const MAX_SESSION_PROJECTS: usize = 256;
+/// Maximum workspaces kept in the UI state.
+pub const MAX_WORKSPACES: usize = 16;
+/// Maximum characters in one workspace name.
+pub const MAX_WORKSPACE_NAME_CHARS: usize = 64;
+/// Maximum remembered session-to-workspace bindings.
+pub const MAX_SESSION_WORKSPACES: usize = 512;
 /// Maximum length of one remembered session id.
 const MAX_SESSION_ID_BYTES: usize = 64;
 /// Maximum length of one remembered project path.
 const MAX_PROJECT_PATH_BYTES: usize = 1024;
+
+/// One named workspace: a set of folders plus the chats grouped under it.
+///
+/// Sessions reference a workspace by `id`; `folders` are absolute paths the
+/// chat tools can use, exactly like the legacy single-workspace roots.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkspaceDef {
+    /// Stable workspace identity (`ws1-…`).
+    pub id: String,
+    /// User-visible name.
+    pub name: String,
+    /// Member folders, most recently added first.
+    pub folders: Vec<String>,
+}
+
+impl WorkspaceDef {
+    /// Mints a workspace with a fresh identity around `name` and `folders`.
+    #[must_use]
+    pub fn generate(name: &str, folders: Vec<String>) -> Self {
+        Self {
+            id: format!("ws1-{}", uuid::Uuid::new_v4().simple()),
+            name: name.to_owned(),
+            folders,
+        }
+    }
+}
 
 /// Durable desktop UI state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +83,18 @@ pub struct UiState {
     /// The open chat still has one cwd; the other roots are extra tool roots.
     #[serde(default)]
     pub workspace_roots: Vec<String>,
+    /// Named workspaces. Sessions are grouped under them by
+    /// `session_workspaces`; the legacy `workspace_roots` list seeds the
+    /// first workspace on upgrade and mirrors the active one's folders.
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceDef>,
+    /// Session-to-workspace bindings (session id, workspace id), most recent
+    /// first. A session missing here belongs to the first workspace.
+    #[serde(default)]
+    pub session_workspaces: Vec<(String, String)>,
+    /// The workspace the sidebar shows.
+    #[serde(default)]
+    pub active_workspace: Option<String>,
 }
 
 impl Default for UiState {
@@ -62,6 +107,9 @@ impl Default for UiState {
             selected_model: None,
             session_projects: Vec::new(),
             workspace_roots: Vec::new(),
+            workspaces: Vec::new(),
+            session_workspaces: Vec::new(),
+            active_workspace: None,
         }
     }
 }
@@ -117,6 +165,46 @@ impl UiState {
             .map(|(_, project)| project.as_str())
     }
 
+    /// Upserts one session's workspace binding at the front of the list.
+    ///
+    /// Like `set_session_project`, invalid ids or unknown workspaces are
+    /// dropped silently.
+    pub fn set_session_workspace(&mut self, session_id: &str, workspace_id: &str) {
+        if !valid_session_id(session_id)
+            || !self
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.id == workspace_id)
+        {
+            return;
+        }
+        let session_id = session_id.to_owned();
+        self.session_workspaces
+            .retain(|(existing, _)| *existing != session_id);
+        self.session_workspaces
+            .insert(0, (session_id, workspace_id.to_owned()));
+        self.session_workspaces.truncate(MAX_SESSION_WORKSPACES);
+    }
+
+    /// The workspace bound to one session, when remembered.
+    #[must_use]
+    pub fn workspace_for_session(&self, session_id: &str) -> Option<&str> {
+        self.session_workspaces
+            .iter()
+            .find(|(existing, _)| existing == session_id)
+            .map(|(_, workspace)| workspace.as_str())
+    }
+
+    /// Drops every remembered binding for one session (project and
+    /// workspace). Called when a session's durable data is deleted so the
+    /// lists never accumulate ids nothing resolves anymore.
+    pub fn forget_session(&mut self, session_id: &str) {
+        self.session_projects
+            .retain(|(existing, _)| existing != session_id);
+        self.session_workspaces
+            .retain(|(existing, _)| existing != session_id);
+    }
+
     /// Validates the document.
     ///
     /// # Errors
@@ -154,8 +242,64 @@ impl UiState {
                 return Err(invalid());
             }
         }
+        if self.workspaces.len() > MAX_WORKSPACES {
+            return Err(invalid());
+        }
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            if !valid_workspace_id(&workspace.id)
+                || self.workspaces[..index]
+                    .iter()
+                    .any(|earlier| earlier.id == workspace.id)
+            {
+                return Err(invalid());
+            }
+            let name = workspace.name.trim();
+            if name.is_empty()
+                || workspace.name.chars().count() > MAX_WORKSPACE_NAME_CHARS
+                || workspace.name.chars().any(char::is_control)
+            {
+                return Err(invalid());
+            }
+            if workspace.folders.len() > MAX_WORKSPACE_ROOTS {
+                return Err(invalid());
+            }
+            for folder in &workspace.folders {
+                if valid_project_path(folder).is_none() {
+                    return Err(invalid());
+                }
+            }
+        }
+        if let Some(active) = &self.active_workspace
+            && !self
+                .workspaces
+                .iter()
+                .any(|workspace| &workspace.id == active)
+        {
+            return Err(invalid());
+        }
+        if self.session_workspaces.len() > MAX_SESSION_WORKSPACES {
+            return Err(invalid());
+        }
+        for (session_id, workspace_id) in &self.session_workspaces {
+            if !valid_session_id(session_id)
+                || !self
+                    .workspaces
+                    .iter()
+                    .any(|workspace| &workspace.id == workspace_id)
+            {
+                return Err(invalid());
+            }
+        }
         Ok(())
     }
+}
+
+fn valid_workspace_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_SESSION_ID_BYTES
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
 }
 
 fn valid_project_path(value: &str) -> Option<String> {

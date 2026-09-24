@@ -1,11 +1,13 @@
-//! Workspace sidebar: one workspace, several folders, one session list.
+//! Workspace sidebar: named workspaces, their folders, and their sessions.
 //!
-//! The folders are members of a single workspace, the way projects sit in a
-//! solution. Chats belong to the workspace. The selected folder is the
-//! working directory; the others stay visible to tools as absolute paths.
+//! The header switches, creates, renames, and deletes workspaces. Each
+//! workspace holds several folders, the way projects sit in a solution;
+//! chats belong to exactly one workspace. The selected folder is the working
+//! directory; the others stay visible to tools as absolute paths.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -31,8 +33,28 @@ pub(super) fn render_sidebar(
     let sessions = workspace.vm().sessions.clone();
     let bindings = workspace.vm().session_projects.clone();
     let view = workspace.vm().view;
-    let session_count = sessions.len();
-    let roots_view = workspace_roots(cx, &roots, &sessions, &bindings, cwd.as_deref());
+    let active_id =
+        crate::view_model::active_workspace(workspace.vm()).map(|workspace| workspace.id.clone());
+    let active_name = crate::view_model::active_workspace(workspace.vm())
+        .map(|workspace| workspace.name.clone())
+        .unwrap_or_else(|| t("Workspace", "工作区").to_owned());
+    // Sessions of the workspace the sidebar shows. A session without a
+    // membership predates named workspaces and belongs to the first one.
+    let in_workspace = |session: &SessionSummary| {
+        crate::view_model::workspace_of_session(workspace.vm(), &session.session_id).is_some_and(
+            |owner| {
+                active_id
+                    .as_ref()
+                    .is_some_and(|active| owner.id.as_str() == active.as_str())
+            },
+        )
+    };
+    let workspace_sessions: Vec<SessionSummary> = sessions
+        .iter()
+        .filter(|session| in_workspace(session))
+        .cloned()
+        .collect();
+    let session_count = workspace_sessions.len();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
 
@@ -46,12 +68,7 @@ pub(super) fn render_sidebar(
         .bg(skin::glass_sidebar(theme))
         .border_r_1()
         .border_color(skin::glass_border(theme))
-        .child(pane_head(
-            t("Workspace", "工作区"),
-            Some(&session_count.to_string()),
-            desk.faint,
-            theme,
-        ))
+        .child(workspace_head(&active_name, session_count, desk.faint, cx))
         .child(
             div().px_2().pt_1().child(
                 Button::new("new-chat")
@@ -65,8 +82,70 @@ pub(super) fn render_sidebar(
                     })),
             ),
         )
-        .child(roots_view)
+        .child(workspace_roots(
+            cx,
+            &roots,
+            &workspace_sessions,
+            &bindings,
+            cwd.as_deref(),
+        ))
         .child(render_sidebar_footer(workspace, view, cx))
+}
+
+/// The sidebar header: the active workspace's name, its session count, and
+/// the switcher menu toggle.
+fn workspace_head(
+    name: &str,
+    session_count: usize,
+    faint: gpui_kit::Hsla,
+    cx: &Context<Workspace>,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    div()
+        .id("workspace-switcher")
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .pt(px(10.))
+        .pb(px(8.))
+        .border_b_1()
+        .border_color(theme.border)
+        .cursor_pointer()
+        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .on_click(cx.listener(|workspace, _, _, cx| {
+            let open = !workspace.vm().workspace_menu_open;
+            workspace.on_toggle_workspace_menu(open, cx);
+        }))
+        .child(
+            Icon::new(IconName::Folder)
+                .xsmall()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .truncate()
+                .text_color(theme.foreground)
+                .child(name.to_owned()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .flex_shrink_0()
+                .text_color(faint)
+                .child(session_count.to_string()),
+        )
+        .child(
+            Icon::new(IconName::ChevronDown)
+                .xsmall()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground),
+        )
 }
 
 fn workspace_roots(
@@ -77,27 +156,6 @@ fn workspace_roots(
     cwd: Option<&str>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
-    let in_workspace = |session: &SessionSummary| -> bool {
-        match bindings
-            .iter()
-            .find_map(|(id, path)| (id == &session.session_id).then_some(path.as_str()))
-        {
-            Some(path) => roots
-                .iter()
-                .any(|root| crate::view_model::same_project_path(path, root)),
-            None => true,
-        }
-    };
-    let workspace_sessions: Vec<SessionSummary> = sessions
-        .iter()
-        .filter(|session| in_workspace(session))
-        .cloned()
-        .collect();
-    let other: Vec<SessionSummary> = sessions
-        .iter()
-        .filter(|session| !in_workspace(session))
-        .cloned()
-        .collect();
     div()
         .id("workspace-roots")
         .flex_1()
@@ -127,7 +185,7 @@ fn workspace_roots(
                 .enumerate()
                 .map(|(index, root)| root_row(index, root, cwd, cx)),
         )
-        .when(!workspace_sessions.is_empty(), |this| {
+        .when(!sessions.is_empty(), |this| {
             this.child(
                 div()
                     .px_2()
@@ -136,23 +194,7 @@ fn workspace_roots(
                     .text_color(theme.muted_foreground)
                     .child(t("Sessions", "会话")),
             )
-            .children(workspace_sessions.iter().map(|summary| {
-                let project = bindings
-                    .iter()
-                    .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
-                session_row(summary, project, cwd, cx)
-            }))
-        })
-        .when(!other.is_empty(), |this| {
-            this.child(
-                div()
-                    .px_2()
-                    .pt_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t("Other", "其他")),
-            )
-            .children(other.iter().map(|summary| {
+            .children(sessions.iter().map(|summary| {
                 let project = bindings
                     .iter()
                     .find_map(|(id, path)| (id == &summary.session_id).then_some(path.as_str()));
@@ -278,21 +320,40 @@ fn session_row(
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let is_open = summary.active;
-    let title: SharedString = if !summary.title.is_empty() {
+    let title: SharedString = if summary.corrupt {
+        t("Unreadable session", "无法读取的会话").into()
+    } else if !summary.title.is_empty() {
         summary.title.clone().into()
     } else if let Some(project) = project {
         project_label(project).into()
     } else {
         t("New session", "新建会话").into()
     };
-    let elsewhere = project.is_some_and(|path| {
-        cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))
-    });
+    let elsewhere = !summary.corrupt
+        && project.is_some_and(|path| {
+            cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))
+        });
     let folder: Option<SharedString> = elsewhere
         .then(|| project.map(project_label))
         .flatten()
         .map(Into::into);
     let session_id = summary.session_id.clone();
+    let open_listener = {
+        let session_id = session_id.clone();
+        cx.listener(move |workspace, _, _, cx| {
+            workspace.on_open_session(&session_id, cx);
+        })
+    };
+    let corrupt_listener = cx.listener(move |workspace, _, _, cx| {
+        workspace.push_toast(
+            t(
+                "That session's stored data is unreadable; delete it to clean up.",
+                "该会话的存储数据无法读取；删除它以清理。",
+            ),
+            crate::workspace::ToastKind::Info,
+            cx,
+        );
+    });
     div()
         .id(format!("session-row-{}", summary.session_id))
         .flex()
@@ -311,12 +372,8 @@ fn session_row(
         } else {
             theme.sidebar_foreground
         })
-        .on_click({
-            let session_id = session_id.clone();
-            cx.listener(move |workspace, _, _, cx| {
-                workspace.on_open_session(&session_id, cx);
-            })
-        })
+        .when(summary.corrupt, |this| this.on_click(corrupt_listener))
+        .when(!summary.corrupt, |this| this.on_click(open_listener))
         .child(
             div()
                 .flex_1()
@@ -474,11 +531,11 @@ pub(super) fn render_project_menu_layer(
                 .child(menu_row(
                     "project-menu-browse",
                     t("Browse…", "浏览…"),
-                    false,
                     cx.listener(|workspace, _, _, cx| {
                         workspace.on_toggle_project_menu(false, cx);
                         workspace.on_open_project_dialog(cx);
                     }),
+                    IconName::FolderOpen,
                     theme,
                 ))
                 .when(!recents.is_empty(), |this| {
@@ -522,11 +579,178 @@ pub(super) fn render_project_menu_layer(
         .into_any_element()
 }
 
+/// Workspace switcher layer: the workspace list plus create, rename, and
+/// delete, anchored under the sidebar header.
+pub(super) fn render_workspace_menu_layer(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let workspaces = workspace.vm().workspaces.clone();
+    let active_id =
+        crate::view_model::active_workspace(workspace.vm()).map(|workspace| workspace.id.clone());
+    let rename_open = workspace.vm().workspace_rename_open;
+    let rename_input = workspace.workspace_rename_input.clone();
+    let session_count = |id: &str| -> usize {
+        let first = workspaces.first().map(|workspace| workspace.id.as_str());
+        workspace
+            .vm()
+            .sessions
+            .iter()
+            .filter(|session| {
+                match workspace
+                    .vm()
+                    .session_workspaces
+                    .iter()
+                    .find(|(existing, _)| existing == &session.session_id)
+                {
+                    Some((_, bound)) => bound == id,
+                    None => first == Some(id),
+                }
+            })
+            .count()
+    };
+    let mut panel = skin::popover_panel("workspace-menu", theme)
+        .absolute()
+        .top(px(44.))
+        .left(px(8.))
+        .w(px(244.))
+        .max_h(px(360.))
+        .overflow_y_scroll()
+        .p_1()
+        .flex()
+        .flex_col()
+        .gap_0p5();
+    if rename_open && let Some(input) = rename_input {
+        panel = panel
+            .child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .pb(px(2.))
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t("Workspace name", "工区名称")),
+            )
+            .child(div().h(px(30.)).px_1().text_sm().child(Input::new(&input)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .px_2()
+                    .pt_2()
+                    .child(
+                        Button::new("workspace-rename-confirm")
+                            .icon(IconName::Check)
+                            .label(t("Save", "保存"))
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace.on_confirm_workspace_rename(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("workspace-rename-cancel")
+                            .label(t("Cancel", "取消"))
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                workspace.on_cancel_workspace_rename(cx);
+                            })),
+                    ),
+            );
+    } else {
+        for item in &workspaces {
+            let id = item.id.clone();
+            let selected = active_id.as_deref() == Some(id.as_str());
+            let count = session_count(&id);
+            panel = panel.child(
+                div()
+                    .id(format!("workspace-menu-{}", element_id(&item.id)))
+                    .h(px(30.))
+                    .px_2()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .rounded(skin::radius_control())
+                    .text_sm()
+                    .cursor_pointer()
+                    .text_color(theme.foreground)
+                    .when(selected, |this| this.bg(skin::frost_accent(theme)))
+                    .hover(|this| this.bg(skin::frost_hover(theme)))
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_switch_workspace(&id, cx);
+                    }))
+                    .child(Icon::new(IconName::Check).xsmall().text_color(if selected {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    }))
+                    .child(div().flex_1().min_w_0().truncate().child(item.name.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .flex_shrink_0()
+                            .text_color(theme.muted_foreground)
+                            .child(count.to_string()),
+                    ),
+            );
+        }
+        panel = panel
+            .child(div().mx_2().my(px(2.)).h(px(1.)).bg(theme.border))
+            .child(menu_row(
+                "workspace-menu-create",
+                t("New workspace", "新建工区"),
+                cx.listener(|workspace, _, _, cx| {
+                    workspace.on_create_workspace(cx);
+                }),
+                IconName::Plus,
+                theme,
+            ))
+            .child(menu_row(
+                "workspace-menu-rename",
+                t("Rename", "重命名"),
+                cx.listener(|workspace, _, window, cx| {
+                    workspace.on_start_workspace_rename(window, cx);
+                }),
+                IconName::Pen,
+                theme,
+            ))
+            .child(menu_row(
+                "workspace-menu-delete",
+                t("Delete workspace", "删除工区"),
+                cx.listener(move |workspace, _, _, cx| {
+                    let id = active_id.clone().unwrap_or_default();
+                    workspace.on_delete_workspace(&id, cx);
+                }),
+                IconName::Trash,
+                theme,
+            ));
+    }
+    div()
+        .id("workspace-menu-layer")
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .id("workspace-menu-backdrop")
+                .absolute()
+                .size_full()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_toggle_workspace_menu(false, cx);
+                })),
+        )
+        .child(panel)
+        .into_any_element()
+}
+
 fn menu_row(
     id: impl Into<gpui_kit::ElementId>,
     label: impl Into<SharedString>,
-    selected: bool,
     on_click: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+    icon: IconName,
     theme: &Theme,
 ) -> impl IntoElement {
     div()
@@ -541,8 +765,13 @@ fn menu_row(
         .text_sm()
         .cursor_pointer()
         .text_color(theme.foreground)
-        .when(selected, |this| this.bg(skin::frost_accent(theme)))
         .hover(|this| this.bg(skin::frost_hover(theme)))
         .on_click(on_click)
+        .child(
+            Icon::new(icon)
+                .xsmall()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground),
+        )
         .child(div().min_w_0().truncate().child(label.into()))
 }

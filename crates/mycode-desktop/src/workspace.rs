@@ -126,6 +126,9 @@ pub struct Workspace {
     pending_project: Option<String>,
     /// Folder the user last chose. Opens for other folders are ignored.
     focused_project: Option<String>,
+    /// Rename editor for the active workspace; lives only while the
+    /// workspace menu is in rename mode.
+    pub(crate) workspace_rename_input: Option<Entity<InputState>>,
     /// Session id of the conversation open currently in flight.
     pending_open: Option<String>,
     /// Drop conversation replies until the next explicit open. Set when the
@@ -194,6 +197,7 @@ impl Workspace {
             ask_input: None,
             pending_project: None,
             focused_project: None,
+            workspace_rename_input: None,
             pending_open: None,
             suppress_open: false,
             pending_composer_prefill: None,

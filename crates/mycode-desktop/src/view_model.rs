@@ -26,7 +26,8 @@ pub(crate) use self::chat::{
 };
 pub(crate) use self::models::{rank_model_ids, selected_reasoning_level};
 pub(crate) use self::projects::{
-    newest_session_in_project, project_of_session, same_project_path, task_surface_visible,
+    active_workspace, newest_session_in_project, project_of_session, same_project_path,
+    task_surface_visible, workspace_of_session,
 };
 pub(crate) use self::reduce::{
     close_floating_menus, reasoning_levels_for, reduce, selected_model_supports_reasoning,
@@ -38,12 +39,10 @@ pub(crate) use self::usage::{
 };
 
 // Kept public API: the `DesktopAction` vocabulary is `pub`, so its payload
-// types must be too (`private_interfaces`), and three variants plus the
-// grouping/suggestion projections are exercised today only by the tests
-// below, where a restricted visibility would trip `dead_code` in non-test
-// builds.
+// types must be too (`private_interfaces`), and the suggestion projection is
+// exercised today only by render code outside this module, where a
+// restricted visibility would trip `dead_code` in non-test builds.
 pub use self::models::suggested_model_ids;
-pub use self::projects::{GroupedSessions, group_sessions};
 pub use self::settings::{
     CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
     WebSubview,

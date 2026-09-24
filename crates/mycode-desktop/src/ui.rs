@@ -117,6 +117,9 @@ pub fn render_root(
         .when(workspace.vm().project_menu_open, |this| {
             this.child(sidebar::render_project_menu_layer(workspace, cx))
         })
+        .when(workspace.vm().workspace_menu_open, |this| {
+            this.child(sidebar::render_workspace_menu_layer(workspace, cx))
+        })
         .when(
             workspace.vm().subagent_window.is_some()
                 && crate::view_model::task_surface_visible(workspace.vm()),

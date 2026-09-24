@@ -1,19 +1,40 @@
-//! Project-centric grouping: path comparison, session bindings, and the
-//! sidebar's grouped-session projection.
+//! Project- and workspace-shaped projections: path comparison, session
+//! bindings, and the active-workspace view of the sidebar.
 
 use mycode_app::SessionSummary;
 
 use super::state::WorkspaceState;
 
-/// Sidebar grouping of sessions relative to the active project filter.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GroupedSessions {
-    /// Sessions bound to the active project.
-    pub current: Vec<SessionSummary>,
-    /// Sessions with no project binding.
-    pub unbound: Vec<SessionSummary>,
-    /// Sessions bound to some other project, grouped by that path.
-    pub others: Vec<(String, Vec<SessionSummary>)>,
+/// The workspace the sidebar shows. A stale active id falls back to the
+/// first workspace, which is also where unbound sessions live.
+#[must_use]
+pub fn active_workspace(state: &WorkspaceState) -> Option<&mycode_config::WorkspaceDef> {
+    match state.active_workspace.as_deref() {
+        Some(id) => state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == id)
+            .or_else(|| state.workspaces.first()),
+        None => state.workspaces.first(),
+    }
+}
+
+/// The workspace a session belongs to; a session without a binding predates
+/// named workspaces and belongs to the first one.
+#[must_use]
+pub fn workspace_of_session<'a>(
+    state: &'a WorkspaceState,
+    session_id: &str,
+) -> Option<&'a mycode_config::WorkspaceDef> {
+    let bound = state
+        .session_workspaces
+        .iter()
+        .find(|(existing, _)| existing == session_id)
+        .map(|(_, workspace)| workspace.as_str());
+    match bound {
+        Some(id) => state.workspaces.iter().find(|workspace| workspace.id == id),
+        None => state.workspaces.first(),
+    }
 }
 
 /// Task cards belong to the open session's project. Leaving that project
@@ -74,39 +95,4 @@ pub(crate) fn newest_session_in_project<'a>(
         let bound = project_of_session(bindings, &session.session_id)?;
         same_project_path(bound, project).then_some(session.session_id.as_str())
     })
-}
-
-/// Groups sessions for the project-centric sidebar.
-#[must_use]
-pub fn group_sessions(
-    sessions: &[SessionSummary],
-    bindings: &[(String, String)],
-    active_project: Option<&str>,
-) -> GroupedSessions {
-    let mut grouped = GroupedSessions::default();
-    for session in sessions {
-        let project = bindings
-            .iter()
-            .find(|(id, _)| id == &session.session_id)
-            .map(|(_, project)| project.as_str());
-        match project {
-            Some(project)
-                if active_project.is_some_and(|active| same_project_path(active, project)) =>
-            {
-                grouped.current.push(session.clone());
-            }
-            Some(project) => match grouped
-                .others
-                .iter_mut()
-                .find(|(key, _)| same_project_path(key, project))
-            {
-                Some((_, rows)) => rows.push(session.clone()),
-                None => grouped
-                    .others
-                    .push((project.to_owned(), vec![session.clone()])),
-            },
-            None => grouped.unbound.push(session.clone()),
-        }
-    }
-    grouped
 }
