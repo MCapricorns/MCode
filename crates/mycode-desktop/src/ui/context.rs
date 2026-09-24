@@ -1,14 +1,23 @@
 //! Right panel: live subagent progress, the working tree, and model usage.
+//! The full changes drawer also lives here — the inspector list is a preview,
+//! the drawer is where a large working tree is browsable.
+use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::theme::Theme;
+use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
     Window, div, px,
 };
 
+use crate::i18n::t;
 use crate::view_model::cache_percent;
 use crate::workspace::Workspace;
+
+/// How many dirty files the inspector preview lists before pointing at the
+/// full drawer.
+const CHANGES_PREVIEW: usize = 6;
 
 pub(super) fn render_context_panel(
     workspace: &mut Workspace,
@@ -51,11 +60,10 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let jobs = workspace.vm().live_jobs.clone();
-    let running = jobs.iter().filter(|job| !job.done).count();
-    let summary = if running == 0 {
-        format!("{} done", jobs.len())
+    let summary = if jobs.len() == 1 {
+        t("1 running", "1 个运行中").to_owned()
     } else {
-        format!("{running} running")
+        format!("{} {}", jobs.len(), t("running", "个运行中"))
     };
     div()
         .id("subagents")
@@ -68,7 +76,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .child(div().text_sm().child("Subagents"))
+                .child(div().text_sm().child(t("Subagents", "子代理")))
                 .child(
                     div()
                         .text_xs()
@@ -78,6 +86,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
         )
         .children(jobs.into_iter().enumerate().map(|(index, job)| {
             let call_id = job.call_id.clone();
+            let cancel_id = job.call_id.clone();
             let role = if job.role.is_empty() {
                 "task".to_owned()
             } else {
@@ -89,12 +98,10 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                 job.label.clone()
             };
             let step = if job.step.is_empty() {
-                "starting".to_owned()
+                t("starting", "启动中").to_owned()
             } else {
                 job.step.clone()
             };
-            let color = if job.done { desk.green } else { desk.amber };
-            let chip = if job.done { "done".to_owned() } else { role };
             div()
                 .id(format!("subagent-{index}"))
                 .flex()
@@ -106,7 +113,6 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                 .bg(super::skin::frost_card(theme))
                 .border_1()
                 .border_color(super::skin::glass_border(theme))
-                .when(job.done, |card| card.opacity(0.6))
                 .cursor_pointer()
                 .hover(|card| card.bg(super::skin::frost_hover(theme)))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -119,7 +125,7 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                         .items_center()
                         .gap_2()
                         .min_w_0()
-                        .child(super::lamp(color))
+                        .child(super::lamp(desk.amber))
                         .child(
                             div()
                                 .flex_1()
@@ -131,10 +137,21 @@ fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl Into
                         )
                         .child(
                             div()
+                                .id(format!("subagent-cancel-{index}"))
                                 .flex_shrink_0()
-                                .text_xs()
-                                .text_color(color)
-                                .child(chip),
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(px(18.))
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .text_color(theme.muted_foreground)
+                                .hover(|this| this.text_color(theme.danger))
+                                .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    cx.stop_propagation();
+                                    workspace.on_cancel_subagent(&cancel_id, cx);
+                                }))
+                                .child(Icon::new(IconName::X).xsmall()),
                         ),
                 )
                 .child(
@@ -152,12 +169,29 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
     let theme = cx.theme();
     let git = workspace.git();
     let selected = workspace.git_diff_path();
+    let shown: Vec<_> = git.files.iter().take(CHANGES_PREVIEW).collect();
+    let hidden_count = git.files.len().saturating_sub(shown.len());
     div()
         .id("changes")
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().text_sm().child("Changes"))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(div().text_sm().child(t("Changes", "改动")))
+                .when(!git.files.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{} {}", git.files.len(), t("files", "个文件"))),
+                    )
+                }),
+        )
         .when(!git.branch.is_empty(), |this| {
             this.child(
                 div()
@@ -179,10 +213,10 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Working tree clean"),
+                    .child(t("Working tree clean", "工作区无改动")),
             )
         })
-        .children(git.files.iter().enumerate().map(|(index, file)| {
+        .children(shown.into_iter().enumerate().map(|(index, file)| {
             let path = file.path.clone();
             let open = selected == Some(file.path.as_str());
             div()
@@ -217,6 +251,32 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
                         .child(file.path.clone()),
                 )
         }))
+        .when(hidden_count > 0, |this| {
+            this.child(
+                div()
+                    .id("git-file-more")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .h(px(28.))
+                    .rounded(px(6.))
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(theme.muted_foreground)
+                    .hover(|row| row.bg(theme.secondary_hover).text_color(theme.foreground))
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_toggle_changes_panel(true, cx);
+                    }))
+                    .child(div().flex_1().min_w_0().truncate().child(format!(
+                        "{} {}",
+                        t("View all", "查看全部"),
+                        git.files.len()
+                    )))
+                    .child(Icon::new(IconName::ChevronRight).xsmall()),
+            )
+        })
         .when(selected.is_some(), |this| {
             this.child(
                 div()
@@ -229,44 +289,201 @@ fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoEl
         })
 }
 
+/// The full changes drawer: every dirty file plus the selected file's diff.
+/// The inspector panel is a short preview; this is where a large working
+/// tree stays browsable.
+pub(super) fn render_changes_drawer(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
+    let git = workspace.git();
+    let selected = workspace.git_diff_path();
+    let diff = workspace.git_diff().to_owned();
+    let files = git.files.clone();
+    div()
+        .id("changes-drawer-layer")
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .id("changes-drawer-backdrop")
+                .absolute()
+                .size_full()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_toggle_changes_panel(false, cx);
+                })),
+        )
+        .child(
+            div()
+                .id("changes-drawer")
+                .absolute()
+                .top(px(44.))
+                .right(px(12.))
+                .bottom(px(12.))
+                .w(px(480.))
+                .flex()
+                .flex_col()
+                .rounded(px(12.))
+                .border_1()
+                .border_color(super::skin::glass_border(theme))
+                .bg(theme.popover)
+                .shadow_lg()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(div().flex_1().min_w_0().text_sm().truncate().child(format!(
+                            "{}{}",
+                            t("Changes", "改动"),
+                            if git.branch.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" · {}", git.branch)
+                            }
+                        )))
+                        .child(
+                            div()
+                                .id("changes-drawer-close")
+                                .px_2()
+                                .py(px(2.))
+                                .rounded(px(6.))
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(theme.muted_foreground)
+                                .hover(|this| this.bg(theme.secondary_hover))
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    cx.stop_propagation();
+                                    workspace.on_toggle_changes_panel(false, cx);
+                                }))
+                                .child(t("Close", "关闭")),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("changes-drawer-files")
+                        .flex_shrink_0()
+                        .max_h(px(220.))
+                        .overflow_y_scroll()
+                        .p_2()
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.))
+                        .children(files.into_iter().enumerate().map(|(index, file)| {
+                            let path = file.path.clone();
+                            let open = selected == Some(file.path.as_str());
+                            div()
+                                .id(format!("changes-drawer-file-{index}"))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .px_2()
+                                .h(px(26.))
+                                .rounded(px(6.))
+                                .text_xs()
+                                .cursor_pointer()
+                                .when(open, |row| row.bg(theme.accent))
+                                .hover(|row| row.bg(theme.secondary_hover))
+                                .on_click(cx.listener(move |workspace, _, _, cx| {
+                                    workspace.on_select_git_file(&path);
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .w(px(20.))
+                                        .flex_shrink_0()
+                                        .text_color(theme.primary)
+                                        .child(file.status.clone()),
+                                )
+                                .child(div().flex_1().min_w_0().truncate().child(file.path.clone()))
+                        })),
+                )
+                .child(
+                    div()
+                        .id("changes-drawer-diff")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px_3()
+                        .py_2()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .whitespace_normal()
+                        .text_color(theme.muted_foreground)
+                        .child(if diff.is_empty() {
+                            t("Pick a file to see its diff.", "选择一个文件查看差异。").to_owned()
+                        } else {
+                            diff
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
 fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let vm = workspace.vm();
-    let model = vm
+    let selected_model = vm
         .selected_model
         .clone()
         .or_else(|| vm.last_turn.as_ref().map(|turn| turn.model.clone()))
         .or_else(|| vm.live_turn.as_ref().map(|turn| turn.model.clone()));
+    let model = selected_model.clone();
     let provider = vm.selected_provider.clone().unwrap_or_default();
     let thinking = crate::view_model::selected_reasoning_level(vm);
     let context_window = model_context_window(vm);
-    let usage = vm.usage_totals.iter().find(|row| {
-        vm.selected_model
-            .as_deref()
-            .is_none_or(|selected| crate::view_model::usage_key_matches(&row.key, selected))
-    });
-    let live = vm.live_turn.as_ref().filter(|turn| {
-        vm.selected_model
+    // Prefer the exact provider/model row, then any provider with that model,
+    // then the model the last turn actually ran on — the panel should never
+    // go blank while a conversation has accounting.
+    let exact_key = match (provider.is_empty(), selected_model.as_deref()) {
+        (false, Some(model)) => Some(format!("{provider}/{model}")),
+        _ => None,
+    };
+    let usage = exact_key
+        .as_deref()
+        .and_then(|key| vm.usage_totals.iter().find(|row| row.key == key))
+        .or_else(|| {
+            selected_model.as_deref().and_then(|model| {
+                vm.usage_totals
+                    .iter()
+                    .find(|row| crate::view_model::usage_key_matches(&row.key, model))
+            })
+        })
+        .or_else(|| {
+            vm.last_turn.as_ref().and_then(|turn| {
+                vm.usage_totals
+                    .iter()
+                    .find(|row| crate::view_model::usage_key_matches(&row.key, &turn.model))
+            })
+        });
+    let model_of = |turn: &crate::view_model::TurnStats| {
+        selected_model
             .as_deref()
             .is_none_or(|selected| turn.model == selected)
-    });
-    let last = vm.last_turn.as_ref().filter(|turn| {
-        vm.selected_model
-            .as_deref()
-            .is_none_or(|selected| turn.model == selected)
-    });
+    };
+    let live = vm.live_turn.as_ref().filter(|turn| model_of(turn));
+    let last = vm.last_turn.as_ref().filter(|turn| model_of(turn));
 
     div()
         .id("model-usage")
         .flex()
         .flex_col()
         .gap_3()
-        .child(div().text_sm().child("Model"))
+        .child(div().text_sm().child(t("Model", "模型")))
         .child(
-            div()
-                .text_sm()
-                .whitespace_normal()
-                .child(model.unwrap_or_else(|| "No model selected".to_owned())),
+            div().text_sm().whitespace_normal().child(
+                model
+                    .clone()
+                    .unwrap_or_else(|| t("No model selected", "未选择模型").to_owned()),
+            ),
         )
         .when(!provider.is_empty(), |this| {
             this.child(
@@ -276,11 +493,12 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                     .child(provider),
             )
         })
-        .child(stat_line("Thinking", thinking, theme))
+        .child(stat_line(t("Thinking", "思考"), thinking, theme))
         .when(context_window > 0, |this| {
             let used = live
                 .map(|turn| turn.input)
                 .or_else(|| last.map(|turn| turn.input))
+                .or_else(|| usage.map(|row| row.input))
                 .unwrap_or(0);
             this.child(bar_row(
                 "context",
@@ -297,24 +515,34 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
         })
         .when_some(usage, |this, row| {
             let share = cache_percent(row.cache, row.input);
-            this.child(stat_line("Input", &super::compact_count(row.input), theme))
-                .child(stat_line(
-                    "Output",
-                    &super::compact_count(row.output),
-                    theme,
-                ))
-                .when_some(share, |this, share| {
-                    this.child(stat_line("Cache", &format!("{share}%"), theme))
-                })
-                .child(stat_line("Turns", &row.requests.to_string(), theme))
+            this.child(stat_line(
+                t("Input", "输入"),
+                &super::compact_count(row.input),
+                theme,
+            ))
+            .child(stat_line(
+                t("Output", "输出"),
+                &super::compact_count(row.output),
+                theme,
+            ))
+            .when_some(share, |this, share| {
+                this.child(stat_line(t("Cache", "缓存"), &format!("{share}%"), theme))
+            })
+            .child(stat_line(
+                t("Turns", "轮次"),
+                &row.requests.to_string(),
+                theme,
+            ))
         })
         .when_some(live, |this, turn| {
             this.child(stat_line(
-                "Live",
+                t("Live", "实时"),
                 &format!(
-                    "{} in · {} out",
+                    "{} {} · {} {}",
                     super::compact_count(turn.input),
-                    super::compact_count(turn.output)
+                    t("in", "入"),
+                    super::compact_count(turn.output),
+                    t("out", "出")
                 ),
                 theme,
             ))
@@ -324,7 +552,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("No usage in this session yet."),
+                    .child(t("No usage in this session yet.", "本会话暂无用量统计。")),
             )
         })
 }
@@ -400,7 +628,7 @@ fn bar_row(
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child("Context"),
+                        .child(t("Context", "上下文")),
                 )
                 .child(
                     div()
@@ -436,7 +664,7 @@ fn window_body(text: String) -> impl IntoElement {
     div().text_sm().whitespace_normal().child(text)
 }
 
-/// Small window for one subagent so its progress is readable.
+/// Small window for one running subagent so its progress is readable.
 pub(super) fn render_subagent_window(
     workspace: &mut Workspace,
     cx: &mut Context<Workspace>,
@@ -452,7 +680,7 @@ pub(super) fn render_subagent_window(
     let title = job.as_ref().map(|job| {
         if job.role.is_empty() {
             if job.label.is_empty() {
-                "Subagent".to_owned()
+                t("Subagent", "子代理").to_owned()
             } else {
                 job.label.clone()
             }
@@ -505,7 +733,7 @@ pub(super) fn render_subagent_window(
                         .min_w_0()
                         .text_sm()
                         .truncate()
-                        .child(title.unwrap_or_else(|| "Subagent".to_owned())),
+                        .child(title.unwrap_or_else(|| t("Subagent", "子代理").to_owned())),
                 )
                 .child(
                     div()
@@ -521,7 +749,7 @@ pub(super) fn render_subagent_window(
                             cx.stop_propagation();
                             workspace.on_open_subagent("", cx);
                         }))
-                        .child("Close"),
+                        .child(t("Close", "关闭")),
                 ),
         )
         .child(
@@ -534,23 +762,23 @@ pub(super) fn render_subagent_window(
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(window_label("Goal", theme))
+                .child(window_label(t("Goal", "目标"), theme))
                 .child(window_body(if goal.is_empty() {
-                    "No short goal yet.".to_owned()
+                    t("No short goal yet.", "暂无简短目标。").to_owned()
                 } else {
                     goal
                 }))
-                .child(window_label("Task", theme))
+                .child(window_label(t("Task", "任务"), theme))
                 .child(window_body(if prompt.is_empty() {
-                    "Waiting for the task brief.".to_owned()
+                    t("Waiting for the task brief.", "等待任务简报。").to_owned()
                 } else {
                     prompt
                 }))
                 .when(!path.is_empty(), |this| {
-                    this.child(window_label("Path", theme))
+                    this.child(window_label(t("Path", "路径"), theme))
                         .child(window_body(path))
                 })
-                .child(window_label(&format!("Now  {now}"), theme))
+                .child(window_label(&format!("{}  {now}", t("Now", "当前")), theme))
                 .children(log.into_iter().enumerate().map(|(index, line)| {
                     let current = index == last;
                     div()

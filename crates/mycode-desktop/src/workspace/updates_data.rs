@@ -27,6 +27,14 @@ impl Workspace {
     }
 
     pub(crate) fn on_download_update(&mut self, cx: &mut Context<Self>) {
+        // One download at a time: a re-offer arriving mid-download must not
+        // restart it, and a staged update only needs the install prompt.
+        if matches!(
+            self.vm.update,
+            UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+        ) {
+            return;
+        }
         let Some(offer) = self.vm.last_offer.clone() else {
             return;
         };
@@ -168,6 +176,18 @@ impl Workspace {
         if self.project_picker.is_some() {
             self.project_picker = None;
             cx.notify();
+            return;
+        }
+        if self.vm.changes_panel_open {
+            self.apply_action(DesktopAction::ChangesPanelToggled(false), cx);
+            return;
+        }
+        if self.vm.update_dialog_open {
+            self.apply_action(DesktopAction::UpdateDialogToggled(false), cx);
+            return;
+        }
+        if self.vm.subagent_window.is_some() {
+            self.apply_action(DesktopAction::SubagentWindowChanged(None), cx);
             return;
         }
         let mut dismissed = close_floating_menus(&mut self.vm);

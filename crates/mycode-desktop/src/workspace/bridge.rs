@@ -180,13 +180,33 @@ impl Workspace {
             BridgeEvent::UpdateAvailable { offer } => {
                 let version = offer.version.clone();
                 let notes_url = offer.notes_url.clone();
+                let can_start = !matches!(
+                    self.vm.update,
+                    UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                );
                 self.apply_action(DesktopAction::UpdateOfferFound(offer), cx);
-                self.push_toast(
-                    format!("v{version} is available"),
-                    crate::workspace::ToastKind::Info,
+                if can_start {
+                    self.push_toast(
+                        format!(
+                            "{} v{version}{}",
+                            crate::i18n::t("New version", "发现新版本"),
+                            crate::i18n::t(", downloading…", ",正在下载…")
+                        ),
+                        crate::workspace::ToastKind::Info,
+                        cx,
+                    );
+                }
+                self.apply_action(
+                    DesktopAction::UpdateStateChanged(UpdateState::Available {
+                        version,
+                        notes_url,
+                    }),
                     cx,
                 );
-                DesktopAction::UpdateStateChanged(UpdateState::Available { version, notes_url })
+                // An offer on the wire starts the download right away; the
+                // install itself always waits for the user's confirm.
+                self.on_download_update(cx);
+                return;
             }
         };
         self.apply_action(action, cx);
@@ -283,7 +303,10 @@ impl Workspace {
             BridgeReply::Exported(Ok(_summary)) => {}
             BridgeReply::Exported(Err(message)) => {
                 self.apply_action(
-                    DesktopAction::Failed(format!("export failed: {message}")),
+                    DesktopAction::Failed(format!(
+                        "{} {message}",
+                        crate::i18n::t("export failed:", "导出失败:")
+                    )),
                     cx,
                 );
             }
@@ -304,7 +327,10 @@ impl Workspace {
             }
             BridgeReply::Imported(Err(message)) => {
                 self.apply_action(
-                    DesktopAction::Failed(format!("import failed: {message}")),
+                    DesktopAction::Failed(format!(
+                        "{} {message}",
+                        crate::i18n::t("import failed:", "导入失败:")
+                    )),
                     cx,
                 );
             }
@@ -379,7 +405,11 @@ impl Workspace {
                     cx,
                 );
                 if refreshed {
-                    self.push_toast("Models refreshed", crate::workspace::ToastKind::Info, cx);
+                    self.push_toast(
+                        crate::i18n::t("Models refreshed", "模型目录已刷新").to_owned(),
+                        crate::workspace::ToastKind::Info,
+                        cx,
+                    );
                 }
             }
             BridgeReply::Catalog(Err(message)) => {
@@ -416,7 +446,11 @@ impl Workspace {
             BridgeReply::UpdateChecked(Ok(None)) => {
                 self.apply_action(DesktopAction::UpdateStateChanged(UpdateState::UpToDate), cx);
                 if self.take_manual_update_check() {
-                    self.push_toast("You're up to date", crate::workspace::ToastKind::Info, cx);
+                    self.push_toast(
+                        crate::i18n::t("You're up to date", "已是最新版本").to_owned(),
+                        crate::workspace::ToastKind::Info,
+                        cx,
+                    );
                 }
             }
             BridgeReply::UpdateChecked(Ok(Some(offer))) => {
@@ -430,19 +464,22 @@ impl Workspace {
                 );
                 if self.take_manual_update_check() {
                     self.push_toast(
-                        format!("v{version} is available"),
+                        format!("v{version} {}", crate::i18n::t("is available", "可用")),
                         crate::workspace::ToastKind::Info,
                         cx,
                     );
                 }
+                // A manual check downloads too; the dialog prompts install.
+                self.on_download_update(cx);
             }
             BridgeReply::UpdateChecked(Err(message)) => {
+                let brief = mycode_app::brief_error(&message);
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message.clone())),
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
                 if self.take_manual_update_check() {
-                    self.push_toast(message, crate::workspace::ToastKind::Error, cx);
+                    self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
                 }
             }
             BridgeReply::UpdateDownloaded(Ok(prepared)) => {
@@ -453,17 +490,26 @@ impl Workspace {
                     .map(|offer| offer.version.clone());
                 self.apply_action(DesktopAction::UpdateStaged(prepared), cx);
                 let message = match version {
-                    Some(version) => format!("v{version} is ready to install"),
-                    None => "Update is ready to install".to_owned(),
+                    Some(version) => format!(
+                        "v{version} {}",
+                        crate::i18n::t("is ready to install", "已就绪,可安装")
+                    ),
+                    None => {
+                        crate::i18n::t("Update is ready to install", "更新已就绪,可安装").to_owned()
+                    }
                 };
                 self.push_toast(message, crate::workspace::ToastKind::Info, cx);
+                // Downloading runs on its own; installing never does.
+                self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
             }
             BridgeReply::UpdateDownloaded(Err(message)) => {
+                let brief = mycode_app::brief_error(&message);
                 self.apply_action(
-                    DesktopAction::UpdateStateChanged(UpdateState::Failed(message.clone())),
+                    DesktopAction::UpdateStateChanged(UpdateState::Failed(brief.clone())),
                     cx,
                 );
-                self.push_toast(message, crate::workspace::ToastKind::Error, cx);
+                self.push_toast(brief, crate::workspace::ToastKind::Error, cx);
+                self.apply_action(DesktopAction::UpdateDialogToggled(true), cx);
             }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Created(Err(message))

@@ -22,7 +22,7 @@ pub(crate) use self::models::{
 };
 
 use self::composer::parse_mention;
-use self::jobs::{finish_live_job, live_job_mut, tool_progress, tool_started};
+use self::jobs::{finish_live_job, tool_progress, tool_started};
 use self::models::{
     active_preset_changed, ensure_model_selection, model_selected, provider_selected,
 };
@@ -64,6 +64,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             });
             state.live_jobs.clear();
             state.subagent_window = None;
+            state.changes_panel_open = false;
             state.transcript_extra = 0;
         }
         DesktopAction::SessionDeleted => {
@@ -72,6 +73,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.queued.clear();
             state.live_jobs.clear();
             state.subagent_window = None;
+            state.changes_panel_open = false;
             state.pending_ask = None;
             state.error = None;
             state.transcript_extra = 0;
@@ -85,6 +87,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             state.queued.clear();
             state.live_jobs.clear();
             state.subagent_window = None;
+            state.changes_panel_open = false;
             state.todo_rows.clear();
             state.pending_ask = None;
             state.transcript_extra = 0;
@@ -104,6 +107,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 state.queued.clear();
                 state.live_jobs.clear();
                 state.subagent_window = None;
+                state.changes_panel_open = false;
                 state.todo_rows.clear();
                 state.pending_ask = None;
                 state.sending = false;
@@ -172,14 +176,11 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::SubagentWindowChanged(call_id) => {
             state.subagent_window = call_id;
         }
+        DesktopAction::ChangesPanelToggled(open) => {
+            state.changes_panel_open = open;
+        }
         DesktopAction::SubagentDismissed(call_id) => {
-            if let Some(job) = live_job_mut(state, &call_id) {
-                job.done = true;
-                job.step = "cancelled".to_owned();
-            }
-            if state.subagent_window.as_deref() == Some(call_id.as_str()) {
-                state.subagent_window = None;
-            }
+            jobs::drop_live_job(state, &call_id);
         }
         DesktopAction::MessageSent { head, entry } => {
             if let Some(conversation) = state.active.as_mut() {
@@ -192,7 +193,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::TurnArmed => {
             state.sending = true;
             state.error = None;
-            set_streaming_status(state, "Waiting for the model");
+            set_streaming_status(
+                state,
+                crate::i18n::t("Waiting for the model", "等待模型响应"),
+            );
         }
         DesktopAction::ChatDelta(delta) => {
             append_streaming(state, false, delta);
@@ -252,16 +256,22 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 elapsed_ms,
             });
             let key = format!("{provider}/{model}");
-            let row = match state.usage_totals.iter_mut().find(|row| row.key == key) {
-                Some(row) => row,
-                None => {
-                    state.usage_totals.push(UsageTotal {
-                        key,
-                        ..UsageTotal::default()
-                    });
-                    state.usage_totals.last_mut().expect("just pushed")
-                }
-            };
+            // Merge with a rebuilt bare-model row from an earlier replay so
+            // the visible totals keep updating instead of freezing behind
+            // a stale first row.
+            let row =
+                match state.usage_totals.iter_mut().find(|row| {
+                    row.key == key || crate::view_model::usage_key_matches(&row.key, &key)
+                }) {
+                    Some(row) => row,
+                    None => {
+                        state.usage_totals.push(UsageTotal {
+                            key,
+                            ..UsageTotal::default()
+                        });
+                        state.usage_totals.last_mut().expect("just pushed")
+                    }
+                };
             row.input = row.input.saturating_add(input);
             row.output = row.output.saturating_add(output);
             row.cache = row.cache.saturating_add(cache.unwrap_or_default());
@@ -297,7 +307,10 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
             if let Some(conversation) = state.active.as_mut() {
                 conversation.entries.push(entry);
             }
-            set_streaming_status(state, "Waiting for the next step");
+            set_streaming_status(
+                state,
+                crate::i18n::t("Waiting for the next step", "等待下一步"),
+            );
             if let Some(conversation) = state.active.as_mut()
                 && let Some(streaming) = conversation.streaming.as_mut()
             {
@@ -342,6 +355,7 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         }
         DesktopAction::SettingsLoaded(settings) => {
             let dark = settings.theme != "light";
+            crate::i18n::apply_language(&settings.language);
             state.settings = Some(settings);
             state.dark_theme = dark;
         }
@@ -351,6 +365,16 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
                 settings.dirty = true;
             }
             state.dark_theme = dark;
+        }
+        DesktopAction::SettingsLanguageSelected(language) => {
+            if !mycode_config::VALID_LANGUAGES.contains(&language.as_str()) {
+                return;
+            }
+            crate::i18n::apply_language(&language);
+            if let Some(settings) = state.settings.as_mut() {
+                settings.language = language;
+                settings.dirty = true;
+            }
         }
         DesktopAction::SettingsPaletteSelected(palette) => {
             let palette = crate::ui::desk::normalize_palette(&palette).to_owned();
@@ -667,7 +691,9 @@ pub(crate) fn reduce(state: &mut WorkspaceState, action: DesktopAction) {
         DesktopAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
         DesktopAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         DesktopAction::ShellKindMenuToggled(open) => state.shell_kind_menu_open = open,
+        DesktopAction::LanguageMenuToggled(open) => state.language_menu_open = open,
         DesktopAction::UpdateStateChanged(update) => state.update = update,
+        DesktopAction::UpdateDialogToggled(open) => state.update_dialog_open = open,
         DesktopAction::UpdateOfferFound(offer) => state.last_offer = Some(offer),
         DesktopAction::AutoUpdateToggled(auto_update) => state.auto_update = auto_update,
         DesktopAction::UpdateStaged(prepared) => {
@@ -704,6 +730,7 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.provider_kind_menu_open
         || state.mcp_transport_menu_open
         || state.shell_kind_menu_open
+        || state.language_menu_open
         || state.mention.is_some();
     state.project_menu_open = false;
     state.model_menu_open = false;
@@ -713,6 +740,7 @@ pub(crate) fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.provider_kind_menu_open = false;
     state.mcp_transport_menu_open = false;
     state.shell_kind_menu_open = false;
+    state.language_menu_open = false;
     state.mention = None;
     was_open
 }

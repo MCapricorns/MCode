@@ -9,6 +9,7 @@ use gpui_kit::{
     div, px,
 };
 
+use crate::i18n::t;
 use crate::ui::{element_id, hover_delete_button, project_label, skin};
 use crate::workspace::Workspace;
 
@@ -38,7 +39,10 @@ pub(super) fn render_welcome(
                 .id("welcome-tagline")
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child("Open a folder, or start a session."),
+                .child(t(
+                    "Open a folder, or start a session.",
+                    "打开一个目录,或开始一个会话。",
+                )),
         )
         .child(
             div()
@@ -52,7 +56,7 @@ pub(super) fn render_welcome(
                     welcome_action(
                         "welcome-open-project",
                         IconName::FolderOpen,
-                        "Open folder",
+                        t("Open folder", "打开目录"),
                         true,
                         theme,
                     )
@@ -64,7 +68,7 @@ pub(super) fn render_welcome(
                     welcome_action(
                         "welcome-new-chat",
                         IconName::MessageSquare,
-                        "New session",
+                        t("New session", "新建会话"),
                         false,
                         theme,
                     )
@@ -88,7 +92,7 @@ pub(super) fn render_welcome(
                             .text_color(theme.muted_foreground)
                             .px_2()
                             .pb_1()
-                            .child("Recent"),
+                            .child(t("Recent", "最近")),
                     )
                     .children(recents.iter().take(6).map(|project| {
                         let project = project.clone();

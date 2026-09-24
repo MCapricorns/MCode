@@ -35,15 +35,16 @@ pub fn normalize_palette(palette: &str) -> &'static str {
 /// Short label for a palette id.
 #[must_use]
 pub fn palette_label(palette: &str) -> &'static str {
+    let t = crate::i18n::t;
     match normalize_palette(palette) {
-        "ocean" => "Ocean",
-        "forest" => "Forest",
-        "dusk" => "Dusk",
-        "sand" => "Sand",
-        "rose" => "Rose",
-        "ink" => "Ink",
-        "moss" => "Moss",
-        _ => "Slate",
+        "ocean" => t("Ocean", "海洋"),
+        "forest" => t("Forest", "森林"),
+        "dusk" => t("Dusk", "暮色"),
+        "sand" => t("Sand", "沙丘"),
+        "rose" => t("Rose", "玫瑰"),
+        "ink" => t("Ink", "墨色"),
+        "moss" => t("Moss", "苔原"),
+        _ => t("Slate", "石板灰"),
     }
 }
 

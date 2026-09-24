@@ -1,6 +1,10 @@
 //! Live tool and subagent progress: the `task|role|phase|detail` protocol,
 //! the inspector-panel job cards, and the status lines they feed.
+//!
+//! Finished jobs drop out of the list the way completed todos do: the panel
+//! and the status line only ever describe work that is still running.
 
+use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind, LiveJob, WorkspaceState};
 
 use super::streaming::{set_streaming_status, tool_call_label};
@@ -13,9 +17,9 @@ pub(super) fn tool_started(
     target: String,
 ) {
     let label = tool_call_label(&name, &target);
-    set_streaming_status(state, &format!("Running {label}"));
+    set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
     if name == "task" {
-        upsert_live_job(state, &call_id, "", "starting", false);
+        upsert_live_job(state, &call_id, "", "starting");
     }
     if let Some(conversation) = state.active.as_mut() {
         conversation.entries.push(ConversationEntry {
@@ -37,9 +41,9 @@ pub(super) fn tool_progress(
     message: String,
 ) {
     apply_live_job_progress(state, &call_id, &name, &message);
-    let running = state.live_jobs.iter().filter(|job| !job.done).count();
+    let running = state.live_jobs.len();
     let status = if running > 1 {
-        format!("{running} subagents")
+        format!("{running} {}", t("subagents running", "个子代理运行中"))
     } else if name == "task" || message.starts_with("task|") {
         live_job_status(state, &call_id)
     } else if name.is_empty() {
@@ -58,7 +62,7 @@ fn parse_task_progress(message: &str) -> Option<(&str, &str, &str)> {
     Some((parts.next()?, parts.next()?, parts.next().unwrap_or("")))
 }
 
-fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: &str, done: bool) {
+fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: &str) {
     if let Some(job) = state
         .live_jobs
         .iter_mut()
@@ -70,11 +74,16 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         if !step.is_empty() {
             push_job_step(job, step);
         }
-        job.done = done;
         return;
     }
-    if let Some(job) = state.live_jobs.iter_mut().rev().find(|job| !job.done)
-        && (call_id.is_empty() || job.call_id.is_empty())
+    // A progress line may arrive before its `ToolStarted` claimed the call:
+    // attach to the newest job that has no call id yet, claiming or filling
+    // it as needed.
+    if let Some(job) = state
+        .live_jobs
+        .iter_mut()
+        .rev()
+        .find(|job| job.call_id.is_empty())
     {
         if !call_id.is_empty() {
             job.call_id = call_id.to_owned();
@@ -85,7 +94,6 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         if !step.is_empty() {
             push_job_step(job, step);
         }
-        job.done = done;
         return;
     }
     let step = if step.is_empty() {
@@ -101,7 +109,6 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         path: String::new(),
         log: vec![step.clone()],
         step,
-        done,
     });
 }
 
@@ -122,31 +129,31 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
     if let Some((role, phase, detail)) = parse_task_progress(message) {
         match phase {
             "queued" => {
-                upsert_live_job(state, call_id, role, "queued", false);
+                upsert_live_job(state, call_id, role, "queued");
                 if let Some(job) = live_job_mut(state, call_id) {
                     job.label = detail.to_owned();
                 }
             }
             "prompt" => {
-                upsert_live_job(state, call_id, role, "starting", false);
+                upsert_live_job(state, call_id, role, "starting");
                 if let Some(job) = live_job_mut(state, call_id) {
                     job.prompt = detail.chars().take(8_000).collect();
                 }
             }
             "path" => {
-                upsert_live_job(state, call_id, role, "starting", false);
+                upsert_live_job(state, call_id, role, "starting");
                 if let Some(job) = live_job_mut(state, call_id) {
                     job.path = detail.to_owned();
                 }
             }
-            "done" => upsert_live_job(state, call_id, role, "done", true),
-            "tool" => upsert_live_job(state, call_id, role, &format!("running {detail}"), false),
-            "step" => upsert_live_job(state, call_id, role, detail, false),
-            other => upsert_live_job(state, call_id, role, other, false),
+            "done" => drop_live_job(state, call_id),
+            "tool" => upsert_live_job(state, call_id, role, &format!("running {detail}")),
+            "step" => upsert_live_job(state, call_id, role, detail),
+            other => upsert_live_job(state, call_id, role, other),
         }
         return;
     }
-    upsert_live_job(state, call_id, "", message, false);
+    upsert_live_job(state, call_id, "", message);
 }
 
 pub(super) fn live_job_mut<'a>(
@@ -154,7 +161,7 @@ pub(super) fn live_job_mut<'a>(
     call_id: &str,
 ) -> Option<&'a mut LiveJob> {
     if call_id.is_empty() {
-        return state.live_jobs.iter_mut().rev().find(|job| !job.done);
+        return state.live_jobs.last_mut();
     }
     state
         .live_jobs
@@ -164,15 +171,15 @@ pub(super) fn live_job_mut<'a>(
 
 fn live_job_status(state: &WorkspaceState, call_id: &str) -> String {
     let job = if call_id.is_empty() {
-        state.live_jobs.iter().rev().find(|job| !job.done)
+        state.live_jobs.last()
     } else {
         state.live_jobs.iter().find(|job| job.call_id == call_id)
     };
     let Some(job) = job else {
-        return "subagent".to_owned();
+        return t("subagent", "子代理").to_owned();
     };
     let who = if job.role.is_empty() {
-        "subagent"
+        t("subagent", "子代理")
     } else {
         job.role.as_str()
     };
@@ -184,11 +191,18 @@ fn live_job_status(state: &WorkspaceState, call_id: &str) -> String {
     format!("{who} · {detail}")
 }
 
-pub(super) fn finish_live_job(state: &mut WorkspaceState, call_id: &str) {
-    if let Some(job) = live_job_mut(state, call_id) {
-        job.done = true;
-        if job.step.is_empty() || job.step == "starting" || job.step == "queued" {
-            job.step = "done".to_owned();
-        }
+/// Removes one finished job and any detail window still showing it.
+pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) {
+    if call_id.is_empty() {
+        state.live_jobs.pop();
+    } else {
+        state.live_jobs.retain(|job| job.call_id != call_id);
     }
+    if !call_id.is_empty() && state.subagent_window.as_deref() == Some(call_id) {
+        state.subagent_window = None;
+    }
+}
+
+pub(super) fn finish_live_job(state: &mut WorkspaceState, call_id: &str) {
+    drop_live_job(state, call_id);
 }

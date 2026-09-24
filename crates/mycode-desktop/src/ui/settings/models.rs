@@ -14,6 +14,7 @@ use gpui_kit::{
 };
 
 use super::widgets::{dropdown_field, labeled_field, row_header, settings_card};
+use crate::i18n::t;
 use crate::ui::skin;
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
@@ -78,18 +79,20 @@ fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace
     let providers_empty = provider_row_elements.is_empty();
     settings_card(
         "providers",
-        "Model providers",
-        Some("Pick a provider, paste its API key, done. Every listed model becomes selectable in the composer."),
+        t("Model providers", "模型服务商"),
+        Some(t(
+            "Pick a provider, paste its API key, done. Every listed model becomes selectable \
+             in the composer.",
+            "选一个服务商,粘贴 API 密钥即可。列出的每个模型都会出现在输入框的模型菜单中。",
+        )),
         theme,
         vec![
             div()
                 .when(providers_empty, |this| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .opacity(0.5)
-                            .child("No providers yet — add one below"),
-                    )
+                    this.child(div().text_xs().opacity(0.5).child(t(
+                        "No providers yet — add one below",
+                        "还没有服务商 — 在下方添加",
+                    )))
                 })
                 .children(provider_row_elements)
                 .into_any_element(),
@@ -103,7 +106,7 @@ fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace
                 .child(
                     Button::new("add-from-catalog")
                         .icon(IconName::Plus)
-                        .label("Add from catalog\u{2026}")
+                        .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
                         .small()
                         .primary()
                         .on_click(cx.listener(|workspace, _, _, cx| {
@@ -116,7 +119,7 @@ fn render_models_list_page(workspace: &mut Workspace, cx: &mut Context<Workspace
                 .child(
                     Button::new("add-custom-endpoint")
                         .icon(IconName::Terminal)
-                        .label("Add custom endpoint\u{2026}")
+                        .label(t("Add custom endpoint\u{2026}", "添加自定义端点\u{2026}"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|workspace, _, _, cx| {
@@ -209,14 +212,17 @@ fn render_models_catalog_page(
     let has_preset = workspace.vm().active_preset.is_some();
     let header = super::subview_header(
         if has_preset {
-            "Configure provider"
+            t("Configure provider", "配置服务商")
         } else {
-            "Add from catalog"
+            t("Add from catalog", "从目录添加")
         },
         if has_preset {
             None
         } else {
-            Some("190+ providers from models.dev")
+            Some(t(
+                "190+ providers from models.dev",
+                "来自 models.dev 的 190+ 服务商",
+            ))
         },
         move |workspace, cx| {
             if has_preset {
@@ -238,8 +244,11 @@ fn render_models_catalog_page(
             this.child(
                 settings_card(
                     "catalog-search",
-                    "Choose a provider",
-                    Some("Filter by name or id, then pick a provider to configure."),
+                    t("Choose a provider", "选择服务商"),
+                    Some(t(
+                        "Filter by name or id, then pick a provider to configure.",
+                        "按名称或 id 过滤,然后选择一个服务商进行配置。",
+                    )),
                     theme,
                     vec![
                         div()
@@ -285,7 +294,10 @@ fn provider_row(
         .border_color(theme.border)
         .child(row_header(
             &name,
-            format!("{kind} \u{b7} {host} \u{b7} {models} model(s)"),
+            format!(
+                "{kind} \u{b7} {host} \u{b7} {models} {}",
+                t("model(s)", "个模型")
+            ),
         ))
         .child(Icon::new(IconName::KeyRound).small().text_color(if keyed {
             theme.success
@@ -343,7 +355,7 @@ fn preset_row(
         .child(
             Button::new(format!("preset-add-{id}"))
                 .icon(IconName::Plus)
-                .label("Add")
+                .label(t("Add", "添加"))
                 .small()
                 .outline()
                 .on_click(move |_, _, cx| {
@@ -415,9 +427,14 @@ fn render_preset_form(
     let models: Vec<String> = preset.models.iter().map(|model| model.id.clone()).collect();
     let checked: Vec<String> = workspace.vm().preset_models.clone();
     let selection_label = if models.is_empty() {
-        "no models".to_owned()
+        t("no models", "无模型").to_owned()
     } else {
-        format!("{} of {} models", checked.len(), models.len())
+        format!(
+            "{} / {} {}",
+            checked.len(),
+            models.len(),
+            t("models", "个模型")
+        )
     };
     let menu_open = workspace.vm().preset_model_menu_open;
     let provider_id_owned = provider_id.to_owned();
@@ -436,18 +453,17 @@ fn render_preset_form(
             div()
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(format!("Add {name}")),
+                .child(format!("{} {name}", t("Add", "添加"))),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(
-                    div().text_xs().opacity(0.6).child(
-                        "Models — all are selected by default; uncheck what you do not need",
-                    ),
-                )
+                .child(div().text_xs().opacity(0.6).child(t(
+                    "Models — all are selected by default; uncheck what you do not need",
+                    "模型 — 默认全选;不需要的取消勾选即可",
+                )))
                 .child(
                     Button::new("preset-model-chip")
                         .label(selection_label)
@@ -507,9 +523,9 @@ fn render_preset_form(
                 let sign_in = workspace.vm().copilot_sign_in.clone();
                 let error = workspace.vm().copilot_error.clone();
                 let sign_label = match preset.id.as_str() {
-                    "xai" => "Sign in with SuperGrok / X",
-                    "openai-codex" => "Sign in with ChatGPT",
-                    _ => "Sign in with GitHub",
+                    "xai" => t("Sign in with SuperGrok / X", "使用 SuperGrok / X 登录"),
+                    "openai-codex" => t("Sign in with ChatGPT", "使用 ChatGPT 登录"),
+                    _ => t("Sign in with GitHub", "使用 GitHub 登录"),
                 };
                 this.child(
                     div()
@@ -541,8 +557,10 @@ fn render_preset_form(
                                     .border_color(skin::glass_border(theme))
                                     .bg(skin::glass(theme))
                                     .child(div().text_xs().opacity(0.7).child(format!(
-                                        "Open {} and enter this code:",
-                                        sign_in.verification_uri
+                                        "{} {} {}",
+                                        t("Open", "打开"),
+                                        sign_in.verification_uri,
+                                        t("and enter this code:", "并输入此验证码:")
                                     )))
                                     .child(
                                         div()
@@ -566,7 +584,7 @@ fn render_preset_form(
                         })
                         .child(
                             Button::new("preset-cancel-oauth")
-                                .label("Close")
+                                .label(t("Close", "关闭"))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -584,12 +602,10 @@ fn render_preset_form(
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .opacity(0.6)
-                                .child("API key (stored in the secret vault)"),
-                        )
+                        .child(div().text_xs().opacity(0.6).child(t(
+                            "API key (stored in the secret vault)",
+                            "API 密钥(保存在凭据库中)",
+                        )))
                         .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
                 )
                 .child(
@@ -600,7 +616,7 @@ fn render_preset_form(
                         .child(
                             Button::new("preset-confirm")
                                 .icon(IconName::Check)
-                                .label("Add provider")
+                                .label(t("Add provider", "添加服务商"))
                                 .small()
                                 .primary()
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -610,7 +626,7 @@ fn render_preset_form(
                         )
                         .child(
                             Button::new("preset-cancel")
-                                .label("Cancel")
+                                .label(t("Cancel", "取消"))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -696,8 +712,11 @@ fn render_custom_provider_page(
     .collect::<Vec<_>>();
     let kind_field = dropdown_field(
         "provider-kind",
-        "Protocol",
-        Some("Wire protocol the endpoint speaks."),
+        t("Protocol", "协议"),
+        Some(t(
+            "Wire protocol the endpoint speaks.",
+            "端点使用的传输协议。",
+        )),
         &kind,
         &kind_options,
         kind_menu_open,
@@ -706,8 +725,11 @@ fn render_custom_provider_page(
         cx,
     );
     let header = super::subview_header(
-        "Add custom endpoint",
-        Some("Any endpoint speaking one of the three wire protocols."),
+        t("Add custom endpoint", "添加自定义端点"),
+        Some(t(
+            "Any endpoint speaking one of the three wire protocols.",
+            "任何支持这三种协议之一的端点。",
+        )),
         |workspace, cx| {
             workspace.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
         },
@@ -723,8 +745,11 @@ fn render_custom_provider_page(
         .child(
             settings_card(
                 "custom-provider",
-                "Endpoint",
-                Some("The provider appears in the model picker as soon as it is added."),
+                t("Endpoint", "端点"),
+                Some(t(
+                    "The provider appears in the model picker as soon as it is added.",
+                    "添加后该服务商立即出现在模型菜单中。",
+                )),
                 theme,
                 vec![
                     div()
@@ -732,19 +757,22 @@ fn render_custom_provider_page(
                         .flex_col()
                         .gap_2()
                         .text_sm()
-                        .child(labeled_field("id", id_input))
+                        .child(labeled_field(t("id", "标识"), id_input))
                         .child(kind_field)
-                        .child(labeled_field("base URL", base_url_input))
-                        .child(labeled_field("default model", model_input))
+                        .child(labeled_field(t("base URL", "Base URL"), base_url_input))
+                        .child(labeled_field(t("default model", "默认模型"), model_input))
                         .into_any_element(),
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
                         .text_sm()
-                        .child(labeled_field("context window (optional)", context_input))
                         .child(labeled_field(
-                            "max output tokens (optional)",
+                            t("context window (optional)", "上下文窗口(可选)"),
+                            context_input,
+                        ))
+                        .child(labeled_field(
+                            t("max output tokens (optional)", "最大输出 token(可选)"),
                             max_output_input,
                         ))
                         .into_any_element(),
@@ -754,7 +782,10 @@ fn render_custom_provider_page(
                         .gap_2()
                         .text_sm()
                         .child(labeled_field(
-                            "api key (stored in secrets.json)",
+                            t(
+                                "api key (stored in secrets.json)",
+                                "API 密钥(保存在 secrets.json)",
+                            ),
                             api_key_input,
                         ))
                         .into_any_element(),
@@ -765,7 +796,7 @@ fn render_custom_provider_page(
                         .child(
                             Button::new("provider-add")
                                 .icon(IconName::Check)
-                                .label("Add provider")
+                                .label(t("Add provider", "添加服务商"))
                                 .small()
                                 .primary()
                                 .on_click(cx.listener(|workspace, _, _, cx| {

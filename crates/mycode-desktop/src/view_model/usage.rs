@@ -31,17 +31,25 @@ pub(crate) fn usage_key_matches(key: &str, model: &str) -> bool {
     key == model || key.rsplit_once('/').is_some_and(|(_, id)| id == model)
 }
 
-/// Parses a projected usage line: `model: N in / M out`.
+/// Parses a projected usage line: `key: N in / M out [· cache K] …`, where
+/// `key` is `provider/model` for newer events and a bare model id for older
+/// ones. Trailing display suffixes (tok/s, % cached) are ignored.
 #[must_use]
-pub(crate) fn parse_usage_text(text: &str) -> Option<(String, u64, u64)> {
-    let (model, rest) = text.split_once(':')?;
+pub(crate) fn parse_usage_text(text: &str) -> Option<(String, u64, u64, Option<u64>)> {
+    let (key, rest) = text.split_once(':')?;
     let rest = rest.trim();
     let (input, rest) = rest.split_once(" in / ")?;
     let output = rest.split_whitespace().next()?;
+    let cache = rest
+        .split('\u{b7}')
+        .find_map(|part| part.trim().strip_prefix("cache "))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse().ok());
     Some((
-        model.trim().to_owned(),
+        key.trim().to_owned(),
         input.trim().parse().ok()?,
         output.trim().parse().ok()?,
+        cache,
     ))
 }
 

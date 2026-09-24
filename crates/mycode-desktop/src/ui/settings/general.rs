@@ -1,5 +1,5 @@
-//! The General settings page: theme, request identity, and the platform
-//! shell preference.
+//! The General settings page: theme, language, request identity, and the
+//! platform shell preference.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -11,7 +11,27 @@ use gpui_kit::{
 };
 
 use super::widgets::{dropdown_field, settings_card, settings_row};
+use crate::i18n::{effective_language_id, t};
 use crate::workspace::Workspace;
+
+/// Display label for one configured language id.
+fn language_label(id: &str) -> &'static str {
+    match id {
+        "zh" => "中文",
+        "en" => "English",
+        _ => t("Follow system", "跟随系统"),
+    }
+}
+
+/// The id a displayed label maps back to, across both language packs.
+fn language_id_for_label(label: &str) -> Option<&'static str> {
+    match label {
+        "中文" => Some("zh"),
+        "English" => Some("en"),
+        "Follow system" | "跟随系统" => Some("auto"),
+        _ => None,
+    }
+}
 
 pub(super) fn render_general_section(
     workspace: &mut Workspace,
@@ -26,6 +46,18 @@ pub(super) fn render_general_section(
         .as_ref()
         .map(|settings| settings.palette.clone())
         .unwrap_or_else(|| "slate".to_owned());
+    let configured_language = workspace
+        .vm()
+        .settings
+        .as_ref()
+        .map(|settings| settings.language.clone())
+        .unwrap_or_else(|| "auto".to_owned());
+    let language = effective_language_id(&configured_language).to_owned();
+    let language_label_now = language_label(&language).to_owned();
+    let language_options = ["auto", "en", "zh"]
+        .iter()
+        .map(|id| language_label(id).to_owned())
+        .collect::<Vec<_>>();
     let effective_ua = workspace
         .vm()
         .settings
@@ -34,7 +66,7 @@ pub(super) fn render_general_section(
         .unwrap_or_default();
     let theme_row = settings_row(
         "theme",
-        "Color theme",
+        t("Color theme", "配色主题"),
         None,
         div()
             .flex()
@@ -43,7 +75,7 @@ pub(super) fn render_general_section(
             .child(
                 Button::new("theme-light")
                     .icon(IconName::Sun)
-                    .label("Light")
+                    .label(t("Light", "浅色"))
                     .small()
                     .when(!dark, |this| this.primary())
                     .when(dark, |this| this.ghost())
@@ -55,7 +87,7 @@ pub(super) fn render_general_section(
             .child(
                 Button::new("theme-dark")
                     .icon(IconName::Moon)
-                    .label("Dark")
+                    .label(t("Dark", "深色"))
                     .small()
                     .when(dark, |this| this.primary())
                     .when(!dark, |this| this.ghost())
@@ -68,21 +100,47 @@ pub(super) fn render_general_section(
     );
     let palette_row = settings_row(
         "palette",
-        "Palette",
-        Some("Solid panels over a page gradient. Pick a hue; light and dark stay separate."),
+        t("Palette", "色板"),
+        Some(t(
+            "Solid panels over a page gradient. Pick a hue; light and dark stay separate.",
+            "页面渐变之上的实色面板。选一个色调；浅色与深色各自独立。",
+        )),
         palette_choices(&palette, dark, cx).into_any_element(),
+    );
+    let language_row = dropdown_field(
+        "language",
+        t("Language", "语言"),
+        Some(t(
+            "Interface language. English and Simplified Chinese are built in.",
+            "界面语言。内置英文与简体中文。",
+        )),
+        &language_label_now,
+        &language_options,
+        workspace.vm().language_menu_open,
+        |workspace, open, cx| workspace.on_toggle_language_menu(open, cx),
+        |workspace, label, cx| {
+            if let Some(id) = language_id_for_label(label) {
+                workspace.on_select_language(id, cx);
+            }
+            workspace.on_toggle_language_menu(false, cx);
+        },
+        cx,
     );
     let ua_field = div()
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_sm().child("HTTP User-Agent"))
+        .child(
+            div()
+                .text_sm()
+                .child(t("HTTP User-Agent", "HTTP User-Agent")),
+        )
         .child(div().h(px(30.)).text_sm().child(Input::new(&ua_input)))
         .child(
             div()
                 .text_xs()
                 .opacity(0.5)
-                .child(format!("Effective: {effective_ua}")),
+                .child(format!("{}: {effective_ua}", t("Effective", "生效值"))),
         )
         .into_any_element();
     let shell = workspace
@@ -109,7 +167,11 @@ pub(super) fn render_general_section(
         })
         .unwrap_or_else(|| "auto".to_owned());
     let shell_status = if shell_program.is_empty() {
-        "No shell found. Detect one or browse to pwsh, powershell, cmd, or bash.".to_owned()
+        t(
+            "No shell found. Detect one or browse to pwsh, powershell, cmd, or bash.",
+            "未找到 shell。可自动检测,或浏览选择 pwsh、powershell、cmd 或 bash。",
+        )
+        .to_owned()
     } else {
         format!("{shell_kind} · {shell_program} ({shell_source})")
     };
@@ -126,23 +188,28 @@ pub(super) fn render_general_section(
         .gap_3()
         .child(settings_card(
             "appearance",
-            "Appearance",
-            Some("Theme applies immediately and is saved to settings right away."),
+            t("Appearance", "外观"),
+            Some(t(
+                "Theme applies immediately and is saved to settings right away.",
+                "主题立即生效并随设置保存。",
+            )),
             theme,
-            vec![theme_row, palette_row, ua_field],
+            vec![theme_row, palette_row, language_row, ua_field],
         ))
         .child(settings_card(
             "shell",
-            "Shell",
-            Some(
+            t("Shell", "Shell"),
+            Some(t(
                 "First launch detects pwsh, then Windows PowerShell, then cmd or Git bash. \
                  Override it here if detection misses your install.",
-            ),
+                "首次启动会依次探测 pwsh、Windows PowerShell、cmd 或 Git bash。\
+                 如果检测不到,可在这里手动指定。",
+            )),
             theme,
             vec![
                 settings_row(
                     "shell-current",
-                    "Current program",
+                    t("Current program", "当前程序"),
                     Some(shell_status.as_str()),
                     div()
                         .flex()
@@ -150,7 +217,7 @@ pub(super) fn render_general_section(
                         .gap_1()
                         .child(
                             Button::new("shell-detect")
-                                .label("Detect")
+                                .label(t("Detect", "检测"))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -159,7 +226,7 @@ pub(super) fn render_general_section(
                         )
                         .child(
                             Button::new("shell-browse")
-                                .label("Browse")
+                                .label(t("Browse", "浏览"))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -170,8 +237,8 @@ pub(super) fn render_general_section(
                 ),
                 dropdown_field(
                     "shell-kind",
-                    "Kind",
-                    Some("Used to build the launch line"),
+                    t("Kind", "类型"),
+                    Some(t("Used to build the launch line", "用于拼接启动命令")),
                     &shell_kind,
                     &shell_options,
                     shell_kind_open,

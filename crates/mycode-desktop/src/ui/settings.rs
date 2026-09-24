@@ -30,6 +30,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px, rems,
 };
 
+use crate::i18n::t;
 use crate::view_model::{MainView, SettingsSection, UpdateState};
 use crate::workspace::Workspace;
 
@@ -70,7 +71,7 @@ pub(super) fn render_settings_view(
                         .child(
                             Button::new("settings-back")
                                 .icon(IconName::ArrowLeft)
-                                .label("Back")
+                                .label(t("Back", "返回"))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -87,7 +88,7 @@ pub(super) fn render_settings_view(
                                     div()
                                         .text_lg()
                                         .font_weight(gpui_kit::FontWeight::BOLD)
-                                        .child("Settings"),
+                                        .child(t("Settings", "设置")),
                                 )
                                 .child(
                                     div()
@@ -103,7 +104,7 @@ pub(super) fn render_settings_view(
                         this.child(
                             Button::new("settings-save")
                                 .icon(IconName::Check)
-                                .label("Save changes")
+                                .label(t("Save changes", "保存更改"))
                                 .small()
                                 .primary()
                                 .disabled(!dirty || saving)
@@ -141,12 +142,10 @@ pub(super) fn render_settings_view(
                                 .px_6()
                                 .py_4()
                                 .when(!settings_ready, |this| {
-                                    this.child(
-                                        div()
-                                            .text_sm()
-                                            .opacity(0.6)
-                                            .child("Loading settings\u{2026}"),
-                                    )
+                                    this.child(div().text_sm().opacity(0.6).child(t(
+                                        "Loading settings\u{2026}",
+                                        "正在加载设置\u{2026}",
+                                    )))
                                 })
                                 .when(settings_ready, |this| {
                                     this.child(match section {
@@ -298,7 +297,7 @@ fn render_settings_nav(
                         .pb(px(2.))
                         .text_xs()
                         .text_color(desk.faint)
-                        .child(*group),
+                        .child(SettingsSection::group_label(group)),
                 )
                 .children(rows)
                 .into_any_element(),
@@ -315,7 +314,10 @@ fn render_settings_nav(
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::glass_sidebar(theme))
         .child(crate::ui::sidebar::pane_head(
-            "Settings", None, desk.faint, theme,
+            t("Settings", "设置"),
+            None,
+            desk.faint,
+            theme,
         ))
         .child(
             div()
@@ -352,7 +354,7 @@ fn render_settings_nav(
                             .gap_1()
                             .text_color(desk.amber)
                             .child(crate::ui::lamp(desk.amber))
-                            .child("UNSAVED"),
+                            .child(t("UNSAVED", "未保存")),
                     )
                 }),
         )
@@ -464,7 +466,7 @@ pub(super) fn subview_header(
         .child(
             Button::new("subview-back")
                 .icon(IconName::ArrowLeft)
-                .label("Back")
+                .label(t("Back", "返回"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(move |workspace, _, _, cx| {

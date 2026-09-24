@@ -10,6 +10,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
+use crate::i18n::t;
 use crate::ui::skin::{self, popover_panel};
 use crate::view_model::{MentionKind, selected_reasoning_level};
 use crate::workspace::Workspace;
@@ -101,16 +102,17 @@ pub(super) fn render_model_menu(
         .or_else(|| selected_provider.clone());
     let mut rows = Vec::new();
     if grouped.is_empty() {
-        rows.push(ModelMenuRow::Hint(
-            "No enabled providers. Add one in Settings, Models.",
-        ));
+        rows.push(ModelMenuRow::Hint(t(
+            "No enabled providers. Add one in Settings \u{b7} Models.",
+            "没有启用的服务商。请在 设置 \u{b7} 模型 中添加。",
+        )));
     }
     if let Some((provider, _name, models)) = grouped
         .iter()
         .find(|(id, _, _)| browse.as_deref() == Some(id.as_str()))
     {
         rows.push(ModelMenuRow::Header {
-            label: "Models".to_owned(),
+            label: t("Models", "模型").to_owned(),
             divider: false,
         });
         rows.extend(models.iter().map(|id| ModelMenuRow::Model {
@@ -127,7 +129,7 @@ pub(super) fn render_model_menu(
         .collect();
     if !others.is_empty() {
         rows.push(ModelMenuRow::Header {
-            label: "Switch provider".to_owned(),
+            label: t("Switch provider", "切换服务商").to_owned(),
             divider: true,
         });
         rows.extend(others.iter().map(|(id, name, _)| ModelMenuRow::Provider {
@@ -318,15 +320,15 @@ fn menu_row(
 
 fn reasoning_row_label(level: &str) -> String {
     match level {
-        "default" => "Default \u{b7} provider".to_owned(),
-        "off" => "Off".to_owned(),
-        "on" => "On".to_owned(),
-        "minimal" => "Minimal".to_owned(),
-        "low" => "Low \u{b7} brief".to_owned(),
-        "medium" => "Medium \u{b7} balanced".to_owned(),
-        "high" => "High \u{b7} deep".to_owned(),
-        "xhigh" => "Extra high".to_owned(),
-        "max" => "Max".to_owned(),
+        "default" => t("Default \u{b7} provider", "默认 \u{b7} 跟随服务商").to_owned(),
+        "off" => t("Off", "关闭").to_owned(),
+        "on" => t("On", "开启").to_owned(),
+        "minimal" => t("Minimal", "极简").to_owned(),
+        "low" => t("Low \u{b7} brief", "低 \u{b7} 简短").to_owned(),
+        "medium" => t("Medium \u{b7} balanced", "中 \u{b7} 均衡").to_owned(),
+        "high" => t("High \u{b7} deep", "高 \u{b7} 深入").to_owned(),
+        "xhigh" => t("Extra high", "超高").to_owned(),
+        "max" => t("Max", "最高").to_owned(),
         other => other.to_owned(),
     }
 }
@@ -344,8 +346,8 @@ pub(super) fn render_mention_layer(
         .clone()
         .expect("caller checks the menu is open");
     let heading = match mention.kind {
-        MentionKind::File => "FILES",
-        MentionKind::Command => "COMMANDS",
+        MentionKind::File => t("FILES", "文件"),
+        MentionKind::Command => t("COMMANDS", "命令"),
     };
     div()
         .id("mention-layer")

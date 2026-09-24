@@ -14,6 +14,7 @@ use gpui_kit::{
 };
 
 use super::widgets::{dropdown_field, labeled_field, settings_card};
+use crate::i18n::t;
 use crate::ui::desk::Desk;
 use crate::ui::skin;
 use crate::view_model::DesktopAction;
@@ -87,17 +88,19 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
         .gap_3()
         .child(settings_card(
             "mcp",
-            "MCP servers",
-            Some(
-                "Stdio or Streamable-HTTP tool servers. A stored key shows as a lock \
-                 and is never written back into a field. Enabled servers connect once \
-                 and their tools join the agent.",
-            ),
+            t("MCP servers", "MCP 服务器"),
+            Some(t(
+                "Stdio or Streamable-HTTP tool servers. A stored key shows as a lock and \
+                 is never written back into a field. Enabled servers connect once and \
+                 their tools join the agent.",
+                "Stdio 或 Streamable-HTTP 工具服务器。已保存的密钥显示为锁形标记,且不会回填到输入框。\
+                 启用的服务器会连接一次,其工具随即加入代理。",
+            )),
             theme,
             vec![
                 div()
                     .when(mcp_empty, |this| {
-                        this.child(div().text_xs().opacity(0.5).child("No MCP servers yet"))
+                        this.child(div().text_xs().opacity(0.5).child(t("No MCP servers yet", "还没有 MCP 服务器")))
                     })
                     .children(mcp_row_elements)
                     .into_any_element(),
@@ -112,7 +115,7 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                         this.child(
                             Button::new("mcp-open-catalog")
                                 .icon(IconName::Plus)
-                                .label("Add from catalog\u{2026}")
+                                .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
                                 .small()
                                 .primary()
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -126,7 +129,7 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                     .child(
                         Button::new("mcp-open-json")
                             .icon(IconName::File)
-                            .label("Import JSON\u{2026}")
+                            .label(t("Import JSON\u{2026}", "导入 JSON\u{2026}"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|workspace, _, _, cx| {
@@ -137,7 +140,7 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                     .child(
                         Button::new("mcp-open-custom")
                             .icon(IconName::Terminal)
-                            .label("Add custom server\u{2026}")
+                            .label(t("Add custom server\u{2026}", "添加自定义服务器\u{2026}"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|workspace, _, _, cx| {
@@ -175,8 +178,11 @@ fn render_mcp_catalog_page(
         .collect();
     let key_input = workspace.mcp_key_input(window, cx);
     let header = super::subview_header(
-        "Add from catalog",
-        Some("Paste a new key, then Add. A stored key is not shown here."),
+        t("Add from catalog", "从目录添加"),
+        Some(t(
+            "Paste a new key, then Add. A stored key is not shown here.",
+            "粘贴新的密钥后点击添加。已保存的密钥不会在这里显示。",
+        )),
         |workspace, cx| {
             workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
         },
@@ -191,8 +197,11 @@ fn render_mcp_catalog_page(
         .child(header)
         .child(settings_card(
             "mcp-catalog",
-            "Built-in servers",
-            Some("The key field starts empty. Bearer is added on the wire."),
+            t("Built-in servers", "内置服务器"),
+            Some(t(
+                "The key field starts empty. Bearer is added on the wire.",
+                "密钥输入框默认为空。Bearer 会在请求时自动附加。",
+            )),
             theme,
             vec![
                 div()
@@ -211,7 +220,7 @@ fn render_mcp_catalog_page(
                                 div()
                                     .text_xs()
                                     .opacity(0.6)
-                                    .child("Key for the server you add"),
+                                    .child(t("Key for the server you add", "要添加的服务器的密钥")),
                             )
                             .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
                     )
@@ -228,8 +237,11 @@ fn render_mcp_json_page(
 ) -> AnyElement {
     let json_input = workspace.mcp_json_input(window, cx);
     let header = super::subview_header(
-        "Import JSON",
-        Some("Claude Desktop or Cursor mcp.json"),
+        t("Import JSON", "导入 JSON"),
+        Some(t(
+            "Claude Desktop or Cursor mcp.json",
+            "Claude Desktop 或 Cursor 的 mcp.json",
+        )),
         |workspace, cx| {
             workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
         },
@@ -244,11 +256,13 @@ fn render_mcp_json_page(
         .child(header)
         .child(settings_card(
             "mcp-import",
-            "Paste a config",
-            Some(
-                "A servers map or one server object. Authorization headers are stored \
-                 as the API key and are not shown again.",
-            ),
+            t("Paste a config", "粘贴配置"),
+            Some(t(
+                "A servers map or one server object. Authorization headers are stored as \
+                 the API key and are not shown again.",
+                "可以是 servers 映射或单个服务器对象。Authorization 头会作为 API 密钥保存,\
+                 之后不再显示。",
+            )),
             theme,
             vec![
                 div()
@@ -257,7 +271,7 @@ fn render_mcp_json_page(
                     .child(Textarea::new(&json_input))
                     .into_any_element(),
                 Button::new("mcp-import-json")
-                    .label("Import pasted JSON")
+                    .label(t("Import pasted JSON", "导入粘贴的 JSON"))
                     .small()
                     .primary()
                     .on_click(cx.listener(|workspace, _, _, cx| {
@@ -281,8 +295,11 @@ fn render_mcp_custom_page(
         .flex_col()
         .gap_3()
         .child(super::subview_header(
-            "Add custom server",
-            Some("stdio command or Streamable HTTP"),
+            t("Add custom server", "添加自定义服务器"),
+            Some(t(
+                "stdio command or Streamable HTTP",
+                "stdio 命令或 Streamable HTTP",
+            )),
             |workspace, cx| {
                 workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
             },
@@ -339,9 +356,18 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
         .collect();
     let tools_summary: Option<String> = tools.as_ref().map(|tools| {
         if tools.is_empty() {
-            "connected \u{b7} no tools advertised".to_owned()
+            format!(
+                "{} \u{b7} {}",
+                t("connected", "已连接"),
+                t("no tools advertised", "未提供工具")
+            )
         } else {
-            format!("connected \u{b7} {} tool(s)", tools.len())
+            format!(
+                "{} \u{b7} {} {}",
+                t("connected", "已连接"),
+                tools.len(),
+                t("tool(s)", "个工具")
+            )
         }
     });
     div()
@@ -417,9 +443,9 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
                 .child(
                     Button::new(format!("mcp-tools-{id}"))
                         .label(if probing {
-                            "Connecting\u{2026}"
+                            t("Connecting\u{2026}", "连接中\u{2026}")
                         } else {
-                            "Probe"
+                            t("Probe", "探测")
                         })
                         .small()
                         .ghost()
@@ -471,7 +497,7 @@ fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -
         )
         .child(
             Button::new(format!("mcp-add-{id}"))
-                .label("Add")
+                .label(t("Add", "添加"))
                 .small()
                 .primary()
                 .on_click({
@@ -590,8 +616,11 @@ fn render_mcp_form(
     let transport_options = vec!["http".to_owned(), "stdio".to_owned()];
     let transport_field = dropdown_field(
         "mcp-transport",
-        "Transport",
-        Some("HTTP servers speak Streamable-HTTP; stdio servers spawn a command."),
+        t("Transport", "传输方式"),
+        Some(t(
+            "HTTP servers speak Streamable-HTTP; stdio servers spawn a command.",
+            "HTTP 服务器使用 Streamable-HTTP;stdio 服务器启动一条命令。",
+        )),
         &transport,
         &transport_options,
         transport_menu_open,
@@ -612,7 +641,7 @@ fn render_mcp_form(
             div()
                 .text_xs()
                 .opacity(0.7)
-                .child("Add a custom MCP server"),
+                .child(t("Add a custom MCP server", "添加自定义 MCP 服务器")),
         )
         .child(
             div()
@@ -620,35 +649,44 @@ fn render_mcp_form(
                 .flex_col()
                 .gap_2()
                 .text_sm()
-                .child(labeled_field("id", form.read(cx).id.clone()))
+                .child(labeled_field(t("id", "标识"), form.read(cx).id.clone()))
                 .child(transport_field)
                 // Only the fields the chosen transport uses are shown; the
                 // old form listed every field and users typed the full
                 // command line into a single "command" that never resolved.
                 .when(is_http, |this| {
                     this.child(labeled_field(
-                        "endpoint (https URL)",
+                        t("endpoint (https URL)", "端点(https URL)"),
                         form.read(cx).endpoint.clone(),
                     ))
                     .child(labeled_field(
-                        "api key (stored in the vault, sent as Bearer)",
+                        t(
+                            "api key (stored in the vault, sent as Bearer)",
+                            "API 密钥(保存在凭据库,以 Bearer 发送)",
+                        ),
                         form.read(cx).api_key.clone(),
                     ))
                 })
                 .when(!is_http, |this| {
                     this.child(labeled_field(
-                        "command line (program and arguments, quotes allowed)",
+                        t(
+                            "command line (program and arguments, quotes allowed)",
+                            "命令行(程序与参数,允许引号)",
+                        ),
                         form.read(cx).command.clone(),
                     ))
                     .child(labeled_field(
-                        "environment (KEY=VALUE pairs, optional)",
+                        t(
+                            "environment (KEY=VALUE pairs, optional)",
+                            "环境变量(KEY=VALUE,可选)",
+                        ),
                         form.read(cx).env.clone(),
                     ))
                 }),
         )
         .child(
             Button::new("mcp-add")
-                .label("Add server")
+                .label(t("Add server", "添加服务器"))
                 .small()
                 .outline()
                 .on_click(cx.listener(|workspace, _, _, cx| {

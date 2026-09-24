@@ -7,6 +7,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div};
 
 use super::widgets::{settings_card, settings_row};
+use crate::i18n::t;
 use crate::ui::ellipsis;
 use crate::view_model::UpdateState;
 use crate::workspace::Workspace;
@@ -18,33 +19,40 @@ pub(super) fn render_about_section(
     let vm = workspace.vm();
     let current = mycode_app::current_version().to_owned();
     let catalog_line = match vm.catalog_fetched_at {
-        0 => "bundled snapshot".to_owned(),
+        0 => t("bundled snapshot", "内置快照").to_owned(),
         seconds => {
             let date = catalog_date(seconds);
-            format!("cloud catalog \u{b7} fetched {date}")
+            format!(
+                "{} · {} {date}",
+                t("cloud catalog", "云端目录"),
+                t("fetched", "获取于")
+            )
         }
     };
     let auto_update = vm.auto_update;
     let checking = matches!(vm.update, UpdateState::Checking);
     let status: (String, Option<AnyElement>) = match &vm.update {
-        UpdateState::Idle => ("Update checks run at startup.".to_owned(), None),
-        UpdateState::Checking => ("Checking for updates\u{2026}".to_owned(), None),
+        UpdateState::Idle => (
+            t("Update checks run at startup.", "启动时会检查更新。").to_owned(),
+            None,
+        ),
+        UpdateState::Checking => (t("Checking for updates…", "正在检查更新…").to_owned(), None),
         UpdateState::UpToDate => (
-            format!("v{current} is the latest version."),
+            format!("v{current} {}", t("is the latest version.", "是最新版本。")),
             Some(
                 div()
                     .text_xs()
                     .text_color(cx.theme().success)
-                    .child("up to date")
+                    .child(t("up to date", "已是最新"))
                     .into_any_element(),
             ),
         ),
         UpdateState::Available { version, .. } => (
-            format!("v{version} is available."),
+            format!("v{version} {}", t("is available.", "可用。")),
             Some(
                 Button::new("update-download")
                     .icon(IconName::Download)
-                    .label("Download & install")
+                    .label(t("Download & install", "下载并安装"))
                     .small()
                     .primary()
                     .on_click(cx.listener(|workspace, _, _, cx| {
@@ -53,13 +61,16 @@ pub(super) fn render_about_section(
                     .into_any_element(),
             ),
         ),
-        UpdateState::Downloading { .. } => ("Downloading and verifying\u{2026}".to_owned(), None),
+        UpdateState::Downloading { .. } => (
+            t("Downloading and verifying…", "正在下载并校验…").to_owned(),
+            None,
+        ),
         UpdateState::Ready { version } => (
-            format!("v{version} is staged."),
+            format!("v{version} {}", t("is staged.", "已就绪。")),
             Some(
                 Button::new("update-restart")
                     .icon(IconName::RefreshCw)
-                    .label("Restart to install")
+                    .label(t("Restart to install", "重启并安装"))
                     .small()
                     .primary()
                     .on_click(cx.listener(|workspace, _, _, cx| {
@@ -69,12 +80,15 @@ pub(super) fn render_about_section(
             ),
         ),
         UpdateState::Failed(message) => (
-            message.clone(),
+            // The one-line status carries the headline only; transport error
+            // chains from GitHub/reqwest can run for paragraphs.
+            t("Last update attempt failed.", "上次更新失败。").to_owned(),
             Some(
                 div()
                     .text_xs()
+                    .whitespace_normal()
                     .text_color(cx.theme().danger)
-                    .child(ellipsis(message, 120))
+                    .child(ellipsis(message, 160))
                     .into_any_element(),
             ),
         ),
@@ -82,7 +96,7 @@ pub(super) fn render_about_section(
     let rows = vec![
         settings_row(
             "version",
-            "Current version",
+            t("Current version", "当前版本"),
             None,
             div()
                 .text_sm()
@@ -92,7 +106,7 @@ pub(super) fn render_about_section(
         ),
         settings_row(
             "author",
-            "Author",
+            t("Author", "作者"),
             None,
             div()
                 .text_sm()
@@ -102,8 +116,8 @@ pub(super) fn render_about_section(
         ),
         settings_row(
             "thanks",
-            "Thanks",
-            Some("People who built MYCode."),
+            t("Thanks", "致谢"),
+            Some(t("People who built MYCode.", "参与构建 MYCode 的人。")),
             div()
                 .text_sm()
                 .opacity(0.8)
@@ -112,8 +126,11 @@ pub(super) fn render_about_section(
         ),
         settings_row(
             "auto-update",
-            "Automatic checks",
-            Some("Check GitHub for a newer release once a day."),
+            t("Automatic checks", "自动检查"),
+            Some(t(
+                "Check GitHub for a newer release once a day.",
+                "每天在 GitHub 检查一次新版本。",
+            )),
             Switch::new("update-auto-toggle")
                 .checked(auto_update)
                 .on_click(cx.listener(|workspace, checked: &bool, _, cx| {
@@ -123,21 +140,28 @@ pub(super) fn render_about_section(
         ),
         settings_row(
             "update-status",
-            "Status",
+            t("Status", "状态"),
             None,
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(div().text_xs().opacity(0.7).child(status.0))
+                .min_w_0()
+                .child(
+                    div()
+                        .text_xs()
+                        .opacity(0.7)
+                        .whitespace_normal()
+                        .child(status.0),
+                )
                 .child(
                     Button::new("check-update")
                         .icon(IconName::RefreshCw)
                         .label(if checking {
-                            "Checking\u{2026}"
+                            t("Checking…", "检查中…")
                         } else {
-                            "Check for updates"
+                            t("Check for updates", "检查更新")
                         })
                         .small()
                         .ghost()
@@ -161,7 +185,7 @@ pub(super) fn render_about_section(
             .unwrap_or_else(|| div().into_any_element()),
         settings_row(
             "catalog",
-            "Provider catalog",
+            t("Provider catalog", "模型目录"),
             None,
             div()
                 .flex()
@@ -172,7 +196,7 @@ pub(super) fn render_about_section(
                 .child(
                     Button::new("catalog-refresh")
                         .icon(IconName::RefreshCw)
-                        .label("Refresh")
+                        .label(t("Refresh", "刷新"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|workspace, _, _, cx| {
@@ -185,8 +209,11 @@ pub(super) fn render_about_section(
     let theme = cx.theme();
     settings_card(
         "about",
-        "About",
-        Some("MYCode updates itself from GitHub releases."),
+        t("About", "关于"),
+        Some(t(
+            "MYCode updates itself from GitHub releases.",
+            "MYCode 通过 GitHub release 自更新。",
+        )),
         theme,
         rows,
     )

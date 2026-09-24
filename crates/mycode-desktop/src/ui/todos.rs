@@ -4,6 +4,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{Context, InteractiveElement, IntoElement, ParentElement, Styled, div, px};
 
+use crate::i18n::t;
 use crate::workspace::Workspace;
 
 /// Checklist in the chat column, above the composer. Completed items never arrive.
@@ -24,7 +25,7 @@ pub(super) fn render_todo_inline(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(format!("todos  {}", rows.len())),
+                .child(format!("{}  {}", t("todos", "待办"), rows.len())),
         )
         .children(
             rows.into_iter()

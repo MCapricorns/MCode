@@ -77,6 +77,8 @@ pub(crate) struct WorkspaceState {
     pub live_jobs: Vec<LiveJob>,
     /// Call id of the subagent detail window, when open.
     pub subagent_window: Option<String>,
+    /// Whether the full working-tree changes drawer is open.
+    pub changes_panel_open: bool,
     /// Pending ask rows awaiting user answers.
     pub pending_ask: Option<Vec<(String, Vec<String>, bool)>>,
     /// Draft answers aligned with [`Self::pending_ask`].
@@ -127,6 +129,8 @@ pub(crate) struct WorkspaceState {
     pub auto_update: bool,
     /// Self-update progress.
     pub update: UpdateState,
+    /// Whether the update dialog (download/install prompt) is open.
+    pub update_dialog_open: bool,
     /// The staged update waiting for a restart, when any.
     pub prepared_update: Option<PreparedUpdate>,
     /// The newest release offer, when one is available.
@@ -147,6 +151,8 @@ pub(crate) struct WorkspaceState {
     pub subagent_menu: Option<(String, String)>,
     /// Whether the General page's shell-kind dropdown is open.
     pub shell_kind_menu_open: bool,
+    /// Whether the General page's language dropdown is open.
+    pub language_menu_open: bool,
     /// Filter text for the provider preset picker.
     pub preset_search: String,
     /// The catalog provider currently being added, when any.
@@ -194,6 +200,9 @@ pub enum DesktopAction {
     Failed(String),
     /// Settings loaded from the core.
     SettingsLoaded(SettingsState),
+    /// The user picked a UI language (`auto`, `en`, `zh`); applies live and
+    /// persists with settings.
+    SettingsLanguageSelected(String),
     /// The user picked the light or dark theme; persists with settings.
     SettingsThemeSelected(bool),
     /// The user picked a color palette; persists with settings.
@@ -221,6 +230,8 @@ pub enum DesktopAction {
     SubagentMenuToggled(Option<(String, String)>),
     /// The General-page shell-kind dropdown opened or closed.
     ShellKindMenuToggled(bool),
+    /// The General-page language dropdown opened or closed.
+    LanguageMenuToggled(bool),
     /// Unbound sessions inherit the active project (repairs the missing bind).
     /// The settings editor toggled durable usage records.
     SettingsUsageToggled(bool),
@@ -313,6 +324,8 @@ pub enum DesktopAction {
     SubagentWindowChanged(Option<String>),
     /// The user closed one running subagent from its row.
     SubagentDismissed(String),
+    /// Opens or closes the full changes drawer.
+    ChangesPanelToggled(bool),
     /// The user sent a prompt; show a working status before the first token.
     TurnArmed,
     /// Incremental assistant text from the active model turn.
@@ -427,6 +440,8 @@ pub enum DesktopAction {
     AutoUpdateToggled(bool),
     /// A verified update is staged and waiting for a restart.
     UpdateStaged(PreparedUpdate),
+    /// The update dialog opened or closed.
+    UpdateDialogToggled(bool),
 }
 
 /// Maximum composer text before the send is rejected locally.

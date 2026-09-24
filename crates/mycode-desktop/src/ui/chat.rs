@@ -23,11 +23,10 @@ pub(super) fn render_chat(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     // Entries render straight from state: cloning the whole transcript per
-    // frame made every notify (menu toggles, stream deltas) allocate all
+    // frame made every notify (menu toggles, stream deltas) allocate all the
     // message text again. The borrow is scoped so the welcome and composer
     // builders can still take `&mut Workspace`.
     let sending = workspace.vm().sending;
-    let live_jobs = workspace.vm().live_jobs.clone();
     let extra = workspace.vm().transcript_extra;
     let (show_welcome, hidden, entry_elements, streaming_element) = {
         let active = workspace.vm().active.as_ref();
@@ -46,17 +45,7 @@ pub(super) fn render_chat(
                     elements.push(transcript::render_user_entry(entry, index > 0, index, cx));
                 }
                 TranscriptItem::Tool { call, result } => {
-                    let step = live_jobs.iter().find_map(|job| {
-                        (call.call_id.as_deref() == Some(job.call_id.as_str())
-                            && !job.step.is_empty())
-                        .then_some(job.step.as_str())
-                    });
-                    elements.push(transcript::render_tool_block(
-                        call,
-                        result,
-                        step,
-                        cx.theme(),
-                    ));
+                    elements.push(transcript::render_tool_block(call, result, cx.theme()));
                 }
                 TranscriptItem::Entry(entry) => {
                     elements.push(transcript::render_entry(entry, cx.theme()));
@@ -65,17 +54,16 @@ pub(super) fn render_chat(
         }
         let streaming_element = streaming
             .map(|streaming| {
-                transcript::render_streaming_entry(streaming, &live_jobs, cx.theme(), cx)
-                    .into_any_element()
+                transcript::render_streaming_entry(streaming, cx.theme(), cx).into_any_element()
             })
             .or_else(|| {
                 sending.then(|| {
                     transcript::render_streaming_entry(
                         &crate::view_model::StreamingReply {
-                            status: "Waiting for the model".to_owned(),
+                            status: crate::i18n::t("Waiting for the model", "等待模型响应")
+                                .to_owned(),
                             ..crate::view_model::StreamingReply::default()
                         },
-                        &live_jobs,
                         cx.theme(),
                         cx,
                     )
@@ -226,6 +214,9 @@ fn render_fold_chip(hidden: usize, cx: &Context<Workspace>) -> impl IntoElement 
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(format!("{hidden} earlier entries")),
+                .child(format!(
+                    "{} {hidden}",
+                    crate::i18n::t("earlier entries", "条更早的记录")
+                )),
         )
 }

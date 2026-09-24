@@ -12,7 +12,8 @@ pub(crate) struct ComposerMention {
     pub items: Vec<(String, String)>,
 }
 
-/// One in-flight or just-finished `task` subagent.
+/// One running `task` subagent. Finished jobs drop out of the list the way
+/// completed todos do.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LiveJob {
     /// Provider-assigned call id.
@@ -29,8 +30,6 @@ pub(crate) struct LiveJob {
     pub step: String,
     /// Recent progress lines for the detail window.
     pub log: Vec<String>,
-    /// Whether the child has returned its answer.
-    pub done: bool,
 }
 
 /// The mention trigger parsed from the composer draft.

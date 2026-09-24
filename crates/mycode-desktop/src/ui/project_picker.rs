@@ -64,7 +64,7 @@ pub(crate) fn render(
         .current
         .as_ref()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "This computer".to_owned());
+        .unwrap_or_else(|| crate::i18n::t("This computer", "此电脑").to_owned());
     let drives = filesystem_roots();
     let current = picker.current.clone();
     let entries = picker.entries;
@@ -132,7 +132,7 @@ fn picker_header(theme: &gpui_kit::component::theme::Theme, path_label: &str) ->
             div()
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child("Choose a project folder"),
+                .child(crate::i18n::t("Choose a project folder", "选择项目目录")),
         )
         .child(
             div()
@@ -154,25 +154,33 @@ fn picker_nav(cx: &mut Context<Workspace>, at_roots: bool) -> impl IntoElement {
         .flex_row()
         .gap_2()
         .child(
-            desk_button("picker-up", "Up", !at_roots, theme).on_click(cx.listener(
-                |workspace, _, _, cx| {
-                    workspace.on_picker_up(cx);
-                },
-            )),
+            desk_button(
+                "picker-up",
+                crate::i18n::t("Up", "上一级"),
+                !at_roots,
+                theme,
+            )
+            .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.on_picker_up(cx);
+            })),
         )
         .child(
-            desk_button("picker-home", "Home", true, theme).on_click(cx.listener(
-                |workspace, _, _, cx| {
+            desk_button("picker-home", crate::i18n::t("Home", "主目录"), true, theme).on_click(
+                cx.listener(|workspace, _, _, cx| {
                     workspace.on_picker_home(cx);
-                },
-            )),
+                }),
+            ),
         )
         .child(
-            desk_button("picker-roots", "This computer", !at_roots, theme).on_click(cx.listener(
-                |workspace, _, _, cx| {
-                    workspace.on_picker_roots(cx);
-                },
-            )),
+            desk_button(
+                "picker-roots",
+                crate::i18n::t("This computer", "此电脑"),
+                !at_roots,
+                theme,
+            )
+            .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.on_picker_roots(cx);
+            })),
         )
 }
 
@@ -287,7 +295,9 @@ fn picker_list(
                     .py_3()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child(status.unwrap_or("This folder is empty.").to_owned()),
+                    .child(status.map(str::to_owned).unwrap_or_else(|| {
+                        crate::i18n::t("This folder is empty.", "此目录为空。").to_owned()
+                    })),
             )
         })
         .when(status.is_some() && !entries.is_empty(), |list| {
@@ -321,7 +331,10 @@ fn picker_footer(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child("Drop a folder on the window to open it."),
+                .child(crate::i18n::t(
+                    "Drop a folder on the window to open it.",
+                    "把目录拖到窗口即可打开。",
+                )),
         )
         .child(
             div()
@@ -329,20 +342,28 @@ fn picker_footer(
                 .flex_row()
                 .gap_2()
                 .child(
-                    desk_button("picker-cancel", "Cancel", true, theme).on_click(cx.listener(
-                        |workspace, _, _, cx| {
-                            workspace.on_picker_cancel(cx);
-                        },
-                    )),
+                    desk_button(
+                        "picker-cancel",
+                        crate::i18n::t("Cancel", "取消"),
+                        true,
+                        theme,
+                    )
+                    .on_click(cx.listener(|workspace, _, _, cx| {
+                        workspace.on_picker_cancel(cx);
+                    })),
                 )
                 .child(
-                    desk_button("picker-use", "Use this folder", !at_roots, theme).on_click(
-                        cx.listener(move |workspace, _, _, cx| {
-                            if !at_roots {
-                                workspace.on_picker_confirm(cx);
-                            }
-                        }),
-                    ),
+                    desk_button(
+                        "picker-use",
+                        crate::i18n::t("Use this folder", "使用此目录"),
+                        !at_roots,
+                        theme,
+                    )
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        if !at_roots {
+                            workspace.on_picker_confirm(cx);
+                        }
+                    })),
                 ),
         )
 }
@@ -392,7 +413,13 @@ pub(crate) fn browse(path: Option<PathBuf>) -> ProjectPicker {
         Ok((entries, truncated)) => ProjectPicker {
             current: Some(path),
             entries,
-            status: truncated.then(|| format!("Showing the first {MAX_ENTRIES} entries.")),
+            status: truncated.then(|| {
+                format!(
+                    "{}{MAX_ENTRIES} {}",
+                    crate::i18n::t("Showing the first ", "仅显示前 "),
+                    crate::i18n::t("entries.", "条。")
+                )
+            }),
         },
         Err(status) => ProjectPicker {
             current: Some(path),

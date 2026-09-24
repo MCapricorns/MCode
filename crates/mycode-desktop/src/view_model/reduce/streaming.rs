@@ -3,6 +3,8 @@
 
 use mycode_app::{MAX_STREAMING_CHARS, StreamingReply};
 
+use crate::i18n::t;
+
 use crate::view_model::WorkspaceState;
 
 pub(super) fn tool_call_label(name: &str, target: &str) -> String {
@@ -34,9 +36,9 @@ pub(super) fn append_streaming(state: &mut WorkspaceState, thinking: bool, delta
             .streaming
             .get_or_insert_with(StreamingReply::default);
         streaming.status = if thinking {
-            "Thinking".to_owned()
+            t("Thinking", "思考中").to_owned()
         } else {
-            "Writing".to_owned()
+            t("Writing", "正在输出").to_owned()
         };
         let buffer = if thinking {
             &mut streaming.thinking

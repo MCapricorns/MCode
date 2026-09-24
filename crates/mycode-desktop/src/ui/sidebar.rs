@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 
 use super::{element_id, project_label, skin};
+use crate::i18n::t;
 use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
@@ -46,7 +47,7 @@ pub(super) fn render_sidebar(
         .border_r_1()
         .border_color(skin::glass_border(theme))
         .child(pane_head(
-            "Workspace",
+            t("Workspace", "工作区"),
             Some(&session_count.to_string()),
             desk.faint,
             theme,
@@ -55,7 +56,7 @@ pub(super) fn render_sidebar(
             div().px_2().pt_1().child(
                 Button::new("new-chat")
                     .icon(IconName::Plus)
-                    .label("New session")
+                    .label(t("New session", "新建会话"))
                     .small()
                     .outline()
                     .w_full()
@@ -114,7 +115,10 @@ fn workspace_roots(
                     .py_1()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Add the folders this workspace should see. Chats can use all of them."),
+                    .child(t(
+                        "Add the folders this workspace should see. Chats can use all of them.",
+                        "添加工作区要包含的目录。会话可以使用全部目录。",
+                    )),
             )
         })
         .children(
@@ -130,7 +134,7 @@ fn workspace_roots(
                     .pt_2()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Sessions"),
+                    .child(t("Sessions", "会话")),
             )
             .children(workspace_sessions.iter().map(|summary| {
                 let project = bindings
@@ -146,7 +150,7 @@ fn workspace_roots(
                     .pt_2()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Other"),
+                    .child(t("Other", "其他")),
             )
             .children(other.iter().map(|summary| {
                 let project = bindings
@@ -177,7 +181,7 @@ fn workspace_roots(
                     workspace.on_toggle_project_menu(open, cx);
                 }))
                 .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                .child("Add folder"),
+                .child(t("Add folder", "添加目录")),
         )
 }
 
@@ -279,7 +283,7 @@ fn session_row(
     } else if let Some(project) = project {
         project_label(project).into()
     } else {
-        "New session".into()
+        t("New session", "新建会话").into()
     };
     let elsewhere = project.is_some_and(|path| {
         cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))
@@ -419,9 +423,9 @@ fn render_sidebar_footer(
                 }))
                 .child(Icon::new(IconName::Settings).small())
                 .child(div().text_xs().child(if view == MainView::Settings {
-                    "Back to chat"
+                    t("Back to chat", "返回对话")
                 } else {
-                    "Settings"
+                    t("Settings", "设置")
                 })),
         )
         .child(
@@ -469,7 +473,7 @@ pub(super) fn render_project_menu_layer(
                 .gap_0p5()
                 .child(menu_row(
                     "project-menu-browse",
-                    "Browse…",
+                    t("Browse…", "浏览…"),
                     false,
                     cx.listener(|workspace, _, _, cx| {
                         workspace.on_toggle_project_menu(false, cx);
@@ -485,7 +489,7 @@ pub(super) fn render_project_menu_layer(
                             .pb(px(2.))
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("Recent"),
+                            .child(t("Recent", "最近")),
                     )
                 })
                 .children(recents.iter().enumerate().map(|(index, project)| {

@@ -11,6 +11,7 @@ use gpui_kit::{
 };
 
 use super::widgets::{row_header, settings_card, settings_row};
+use crate::i18n::t;
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
@@ -64,20 +65,22 @@ pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspac
         .gap_3()
         .child(settings_card(
             "agents-capacity",
-            "Delegation",
-            Some(
-                "The parent model may hand work to these roles. Inherit uses the \
-                 session provider and the role's own thinking level. 0 concurrent \
-                 slots means automatic capacity.",
-            ),
+            t("Delegation", "任务委派"),
+            Some(t(
+                "The parent model may hand work to these roles. Inherit uses the session \
+                 provider and the role's own thinking level. 0 concurrent slots means \
+                 automatic capacity.",
+                "主模型可以把工作交给这些角色。继承 表示沿用会话的服务商与角色自身的思考档位。\
+                 并发数为 0 表示自动分配。",
+            )),
             theme,
             vec![settings_row(
                 "agents-concurrent",
-                "Max concurrent",
-                Some("0 = automatic"),
+                t("Max concurrent", "最大并发"),
+                Some(t("0 = automatic", "0 = 自动")),
                 Button::new("agents-concurrent-cycle")
                     .label(if max_concurrent == 0 {
-                        "auto".to_owned()
+                        t("auto", "自动").to_owned()
                     } else {
                         max_concurrent.to_string()
                     })
@@ -101,8 +104,11 @@ pub(super) fn render_agents_section(workspace: &Workspace, cx: &Context<Workspac
         ))
         .child(settings_card(
             "agents-roles",
-            "Roles",
-            Some("Scout is read-only. Artisan writes in a worktree. Steward cleans up. Sentinel reviews."),
+            t("Roles", "角色"),
+            Some(t(
+                "Scout is read-only. Artisan writes in a worktree. Steward cleans up. Sentinel reviews.",
+                "Scout 只读;Artisan 在 worktree 中写入;Steward 收尾;Sentinel 评审。",
+            )),
             theme,
             role_cards,
         ))
@@ -251,7 +257,7 @@ fn agent_route_picker(
                             .text_color(theme.muted_foreground)
                             .px_2()
                             .pt_1()
-                            .child("Thinking"),
+                            .child(t("Thinking", "思考")),
                     )
                     .children(thinking.iter().map(|level| {
                         let picked = level.clone();
@@ -286,7 +292,7 @@ fn agent_route_picker(
                             .text_color(theme.muted_foreground)
                             .px_2()
                             .pt_2()
-                            .child("Model"),
+                            .child(t("Model", "模型")),
                     )
                     .child(agent_model_row(&role, "inherit", None, cx))
                     .children(providers.iter().flat_map(|(provider, models)| {

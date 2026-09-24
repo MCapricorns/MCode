@@ -10,21 +10,25 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, div, px, rems,
 };
 
+use crate::i18n::t;
 use crate::ui::skin::{self, mono_chip};
 use crate::ui::{desk::Desk, ellipsis};
 use crate::view_model::{ConversationEntry, EntryKind, StreamingReply};
 use crate::workspace::Workspace;
 
 /// The in-flight assistant turn: a live status line, then thinking and text.
+///
+/// Subagent progress lives on this one status line and in the inspector
+/// panel; the transcript itself stays free of per-child rows.
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
-    jobs: &[crate::view_model::LiveJob],
     theme: &Theme,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
+    let _ = cx;
     let desk = Desk::of(theme);
     let status = if streaming.status.is_empty() {
-        "Working".to_owned()
+        t("Working", "处理中").to_owned()
     } else {
         streaming.status.clone()
     };
@@ -38,7 +42,7 @@ pub(super) fn render_streaming_entry(
             .flex_col()
             .gap_2()
             .child(mono_chip(
-                &format!("WORKING · {status}"),
+                &format!("{} · {status}", t("WORKING", "进行中")),
                 desk.amber,
                 desk.amber.opacity(0.45),
                 theme,
@@ -63,81 +67,8 @@ pub(super) fn render_streaming_entry(
                     theme,
                 ))
             })
-            .when(!jobs.is_empty(), |this| {
-                this.children(jobs.iter().enumerate().map(|(index, job)| {
-                    let who = if job.role.is_empty() {
-                        "task".to_owned()
-                    } else {
-                        job.role.clone()
-                    };
-                    let title = if job.label.is_empty() {
-                        who.clone()
-                    } else {
-                        job.label.clone()
-                    };
-                    let step = if job.step.is_empty() {
-                        "starting".to_owned()
-                    } else {
-                        job.step.clone()
-                    };
-                    let call_id = job.call_id.clone();
-                    div()
-                        .id(format!("live-job-{index}"))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .truncate()
-                                        .text_color(if job.done {
-                                            theme.muted_foreground
-                                        } else {
-                                            theme.foreground
-                                        })
-                                        .child(format!("{who} · {title}")),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .truncate()
-                                        .text_color(theme.muted_foreground)
-                                        .child(step),
-                                ),
-                        )
-                        .when(!job.done && !call_id.is_empty(), |row| {
-                            row.child(
-                                div()
-                                    .id(format!("live-job-close-{index}"))
-                                    .size(px(18.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(4.))
-                                    .cursor_pointer()
-                                    .text_color(theme.muted_foreground)
-                                    .hover(|this| this.text_color(theme.danger))
-                                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                                        cx.stop_propagation();
-                                        workspace.on_cancel_subagent(&call_id, cx);
-                                    }))
-                                    .child(Icon::new(IconName::X).xsmall()),
-                            )
-                        })
-                }))
-            })
             .when(
-                jobs.is_empty()
-                    && streaming.thinking.trim().is_empty()
-                    && streaming.text.trim().is_empty(),
+                streaming.thinking.trim().is_empty() && streaming.text.trim().is_empty(),
                 |this| {
                     this.child(
                         div()
@@ -330,7 +261,6 @@ fn short_stamp(event_id: &str) -> String {
 pub(super) fn render_tool_block(
     call: &ConversationEntry,
     result: Option<&ConversationEntry>,
-    step: Option<&str>,
     theme: &Theme,
 ) -> gpui_kit::AnyElement {
     let desk = Desk::of(theme);
@@ -374,18 +304,7 @@ pub(super) fn render_tool_block(
                         .text_color(theme.foreground)
                         .child(call.text.to_string()),
                 ),
-        )
-        .when_some(step.filter(|_| waiting), |card, step| {
-            card.child(
-                div()
-                    .px_2()
-                    .pb(px(6.))
-                    .text_xs()
-                    .truncate()
-                    .text_color(theme.muted_foreground)
-                    .child(step.to_owned()),
-            )
-        });
+        );
     if let Some(result) = result {
         let body = result_body(tool_name(call.text.as_ref()), result, theme, &desk);
         card = card.child(
@@ -482,7 +401,11 @@ fn diff_preview(lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement 
                 .child((*line).to_owned())
         }))
         .when(lines.len() > shown, |this| {
-            this.child(preview_caption("… more changes omitted", desk.faint, theme))
+            this.child(preview_caption(
+                t("… more changes omitted", "… 更多改动已省略"),
+                desk.faint,
+                theme,
+            ))
         })
 }
 
@@ -518,7 +441,11 @@ fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> imp
                 .child((*line).to_owned())
         }))
         .when(lines.len() > shown, |this| {
-            this.child(preview_caption("… more results omitted", desk.faint, theme))
+            this.child(preview_caption(
+                t("… more results omitted", "… 更多结果已省略"),
+                desk.faint,
+                theme,
+            ))
         })
 }
 
@@ -603,7 +530,7 @@ pub(super) fn render_user_entry(
                             workspace.on_edit_message(index, cx);
                         }))
                         .child(Icon::new(IconName::Pen).xsmall())
-                        .child("edit"),
+                        .child(t("edit", "编辑")),
                 )
                 .child(
                     div()
@@ -623,7 +550,7 @@ pub(super) fn render_user_entry(
                             workspace.on_recall_message(index, cx);
                         }))
                         .child(Icon::new(IconName::RefreshCcw).xsmall())
-                        .child("recall"),
+                        .child(t("recall", "撤回")),
                 ),
         );
     }

@@ -7,6 +7,7 @@
 //! state into elements and sends commands back. No session, provider, tool,
 //! file path, or credential is handled here.
 mod git_status;
+pub(crate) mod i18n;
 pub mod ui;
 pub mod view_model;
 pub mod workspace;

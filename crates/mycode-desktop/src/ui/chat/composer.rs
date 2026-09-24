@@ -13,6 +13,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
+use crate::i18n::t;
 use crate::ui::{desk::Desk, ellipsis, project_label, skin};
 use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
@@ -46,9 +47,9 @@ pub(super) fn render_composer(
     if workspace.composer_steer != sending {
         workspace.composer_steer = sending;
         let placeholder = if sending {
-            "Steer without interrupting"
+            t("Steer without interrupting", "追加引导,不打断当前任务")
         } else {
-            "Message MYCode"
+            t("Message MYCode", "给 MYCode 发消息")
         };
         composer.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
@@ -71,7 +72,7 @@ pub(super) fn render_composer(
     let project_chip_label: SharedString = session_project
         .as_deref()
         .map(project_label)
-        .unwrap_or_else(|| "Set folder".to_owned())
+        .unwrap_or_else(|| t("Set folder", "选择目录").to_owned())
         .into();
     let has_project = session_project.is_some();
 
@@ -185,7 +186,7 @@ pub(super) fn render_composer(
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child("No folder"),
+                                    .child(t("No folder", "未选择目录")),
                             )
                         }),
                 ),
@@ -297,7 +298,7 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .text_xs()
                         .font_family(theme.mono_font_family.clone())
                         .text_color(desk.faint)
-                        .child(format!("QUEUED  {}", items.len())),
+                        .child(format!("{}  {}", t("QUEUED", "已排队"), items.len())),
                 )
                 .child(
                     div()
@@ -305,7 +306,7 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .min_w_0()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child("Sends when this turn ends"),
+                        .child(t("Sends when this turn ends", "本轮结束后发送")),
                 )
                 .child(
                     div()
@@ -324,7 +325,7 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
                         .on_click(cx.listener(|workspace, _, _, cx| {
                             workspace.on_interrupt_queued(0, cx);
                         }))
-                        .child("Interrupt & send"),
+                        .child(t("Interrupt & send", "打断并发送")),
                 ),
         )
         .children(items.into_iter().enumerate().map(|(index, text)| {
@@ -363,20 +364,20 @@ fn render_queued_followups(items: Vec<String>, cx: &mut Context<Workspace>) -> i
 fn model_button_label(vm: &WorkspaceState) -> String {
     vm.selected_model
         .clone()
-        .unwrap_or_else(|| "Select model".to_owned())
+        .unwrap_or_else(|| t("Select model", "选择模型").to_owned())
 }
 
 fn thinking_button_label(vm: &WorkspaceState) -> String {
     match selected_reasoning_level(vm) {
-        "default" => "Thinking".to_owned(),
-        "off" => "Thinking off".to_owned(),
-        "on" => "Thinking on".to_owned(),
-        "minimal" => "Minimal".to_owned(),
-        "low" => "Low".to_owned(),
-        "medium" => "Medium".to_owned(),
-        "high" => "High".to_owned(),
-        "xhigh" => "Extra high".to_owned(),
-        "max" => "Max".to_owned(),
+        "default" => t("Thinking", "思考").to_owned(),
+        "off" => t("Thinking off", "思考关").to_owned(),
+        "on" => t("Thinking on", "思考开").to_owned(),
+        "minimal" => t("Minimal", "极简").to_owned(),
+        "low" => t("Low", "低").to_owned(),
+        "medium" => t("Medium", "中").to_owned(),
+        "high" => t("High", "高").to_owned(),
+        "xhigh" => t("Extra high", "超高").to_owned(),
+        "max" => t("Max", "最高").to_owned(),
         other => other.to_owned(),
     }
 }

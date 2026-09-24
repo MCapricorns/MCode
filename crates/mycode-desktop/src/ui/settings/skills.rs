@@ -9,6 +9,7 @@ use gpui_kit::{
 };
 
 use super::widgets::settings_card;
+use crate::i18n::t;
 use crate::workspace::Workspace;
 
 pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspace>) -> AnyElement {
@@ -20,10 +21,11 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                 .text_xs()
                 .opacity(0.5)
                 .whitespace_normal()
-                .child(
-                    "No skills yet. Add SKILL.md under the project .agents/skills/ \
-                     folder or ~/.agents/skills/.",
-                )
+                .child(t(
+                    "No skills yet. Add SKILL.md under the project .agents/skills/ folder \
+                     or ~/.agents/skills/.",
+                    "还没有技能。在项目 .agents/skills/ 或 ~/.agents/skills/ 下添加 SKILL.md。",
+                ))
                 .into_any_element(),
         ]
     } else {
@@ -31,7 +33,11 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
             .into_iter()
             .map(|skill| {
                 let slug = skill.slug.clone();
-                let scope = if skill.global { "user" } else { "workspace" };
+                let scope = if skill.global {
+                    t("user", "用户")
+                } else {
+                    t("workspace", "工作区")
+                };
                 div()
                     .id(format!("skill-row-{}", skill.slug))
                     .w_full()
@@ -74,7 +80,7 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                     )
                     .child(
                         Button::new(format!("skill-use-{}", skill.slug))
-                            .label("Use")
+                            .label(t("Use", "使用"))
                             .small()
                             .outline()
                             .on_click(cx.listener(move |workspace, _, _, cx| {
@@ -99,7 +105,7 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                 .child(
                     Button::new("skills-refresh")
                         .icon(IconName::RefreshCw)
-                        .label("Refresh")
+                        .label(t("Refresh", "刷新"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|workspace, _, _, cx| {
@@ -109,11 +115,13 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
         )
         .child(settings_card(
             "skills-catalog",
-            "Slash commands",
-            Some(
-                "Type / in the composer to insert a skill. Workspace \
-                 .agents/skills win over the same slug in ~/.agents.",
-            ),
+            t("Slash commands", "斜杠命令"),
+            Some(t(
+                "Type / in the composer to insert a skill. Workspace .agents/skills win \
+                 over the same slug in ~/.agents.",
+                "在输入框输入 / 即可插入技能。工作区 .agents/skills 中的同名技能优先于 \
+                 ~/.agents。",
+            )),
             theme,
             rows,
         ))

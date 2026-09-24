@@ -5,6 +5,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, px};
 
+use crate::i18n::t;
 use crate::ui::{desk::Desk, lamp, short_id, skin};
 use crate::workspace::Workspace;
 
@@ -48,7 +49,7 @@ pub(crate) fn render_ask_panel(
                             div()
                                 .text_sm()
                                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                .child("The agent needs your input"),
+                                .child(t("The agent needs your input", "代理需要你的输入")),
                         ),
                 )
                 .children(
@@ -101,7 +102,9 @@ pub(crate) fn render_ask_panel(
                                     )
                                 })
                                 .when(*optional, |this| {
-                                    this.child(div().text_xs().opacity(0.5).child("Optional"))
+                                    this.child(
+                                        div().text_xs().opacity(0.5).child(t("Optional", "可选")),
+                                    )
                                 })
                         }),
                 )
@@ -123,7 +126,7 @@ pub(crate) fn render_ask_panel(
                         )
                         .child(
                             Button::new("ask-submit")
-                                .label("Answer")
+                                .label(t("Answer", "回答"))
                                 .small()
                                 .primary()
                                 .on_click(cx.listener(|workspace, _, _, cx| {

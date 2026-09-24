@@ -195,7 +195,7 @@ impl Workspace {
             project_picker: None,
             runtime_ticks: 0,
             conversation_scroll: gpui_kit::ScrollHandle::new(),
-            git: crate::git_status::GitSnapshot::empty("No folder"),
+            git: crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录")),
             git_rx: None,
             git_diff_path: None,
             git_diff: String::new(),
@@ -283,7 +283,7 @@ impl Workspace {
         };
         let path = path.to_owned();
         self.git_diff_path = Some(path.clone());
-        self.git_diff = "Loading diff…".to_owned();
+        self.git_diff = crate::i18n::t("Loading diff…", "正在加载差异…").to_owned();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let diff = crate::git_status::read_diff(std::path::Path::new(&root), &path);
@@ -297,7 +297,8 @@ impl Workspace {
             return;
         }
         let Some(root) = self.vm.project_dir.clone() else {
-            self.git = crate::git_status::GitSnapshot::empty("No folder");
+            self.git =
+                crate::git_status::GitSnapshot::empty(crate::i18n::t("No folder", "未打开目录"));
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -530,6 +531,11 @@ impl Workspace {
         self.apply_action(DesktopAction::SubagentWindowChanged(next), cx);
     }
 
+    /// Opens or closes the full working-tree changes drawer.
+    pub(crate) fn on_toggle_changes_panel(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::ChangesPanelToggled(open), cx);
+    }
+
     pub(crate) fn on_interrupt_queued(&mut self, index: usize, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.apply_action(DesktopAction::QueuedMessagePromoted(index), cx);
@@ -621,8 +627,30 @@ impl Workspace {
         self.on_save_settings(cx);
     }
 
+    /// Applies and persists the UI language. The whole window re-renders on
+    /// the next frame, so no theme-style refresh is needed.
+    pub(crate) fn on_select_language(&mut self, language: &str, cx: &mut Context<Self>) {
+        if self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.language == language)
+        {
+            return;
+        }
+        self.apply_action(
+            DesktopAction::SettingsLanguageSelected(language.to_owned()),
+            cx,
+        );
+        self.on_save_settings(cx);
+    }
+
     pub(crate) fn on_toggle_shell_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(DesktopAction::ShellKindMenuToggled(open), cx);
+    }
+
+    pub(crate) fn on_toggle_language_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.apply_action(DesktopAction::LanguageMenuToggled(open), cx);
     }
 
     pub(crate) fn on_select_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {

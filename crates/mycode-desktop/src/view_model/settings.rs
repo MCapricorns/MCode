@@ -1,5 +1,7 @@
 //! The editable settings projection and the settings navigation vocabulary.
 
+use crate::i18n::t;
+
 /// One slash-command skill shown in the settings Skills page.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillEntry {
@@ -41,6 +43,8 @@ pub struct SettingsState {
     pub theme: String,
     /// Appearance palette: slate, ocean, forest, dusk, sand, rose, ink, or moss.
     pub palette: String,
+    /// UI language: `auto`, `en`, or `zh`.
+    pub language: String,
     /// Requested reasoning effort from the selected model's catalog options;
     /// `None` keeps the provider default.
     pub reasoning: Option<String>,
@@ -77,6 +81,7 @@ impl SettingsState {
             mcp_servers: settings.mcp_servers.clone(),
             theme: settings.appearance.theme.clone(),
             palette: settings.effective_palette().to_owned(),
+            language: settings.appearance.language.clone(),
             reasoning: settings.reasoning_effort.clone(),
             providers_with_keys,
             mcp_with_keys: Vec::new(),
@@ -104,6 +109,7 @@ impl SettingsState {
             appearance: mycode_config::AppearanceSettings {
                 theme: self.theme.clone(),
                 palette: self.palette.clone(),
+                language: self.language.clone(),
             },
             reasoning_effort: self.reasoning.clone(),
             subagents: self.subagents.clone(),
@@ -204,14 +210,14 @@ impl SettingsSection {
     /// Nav row label.
     pub fn label(self) -> &'static str {
         match self {
-            Self::General => "General",
-            Self::Models => "Models",
-            Self::Agents => "Agents",
-            Self::Skills => "Skills",
+            Self::General => t("General", "通用"),
+            Self::Models => t("Models", "模型"),
+            Self::Agents => t("Agents", "子代理"),
+            Self::Skills => t("Skills", "技能"),
             Self::Mcp => "MCP",
-            Self::Web => "Web search",
-            Self::Data => "Data",
-            Self::About => "About",
+            Self::Web => t("Web search", "网页搜索"),
+            Self::Data => t("Data", "数据"),
+            Self::About => t("About", "关于"),
         }
     }
 
@@ -233,14 +239,23 @@ impl SettingsSection {
     /// One-line hint under the nav label.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => "Theme, identity, shell",
-            Self::Models => "Providers, keys",
-            Self::Agents => "Roles, models",
-            Self::Skills => "Slash commands",
-            Self::Mcp => "Tool servers",
-            Self::Web => "Search backends",
-            Self::Data => "Usage, export",
-            Self::About => "Version, updates",
+            Self::General => t("Theme, identity, shell", "主题、身份、Shell"),
+            Self::Models => t("Providers, keys", "服务商、密钥"),
+            Self::Agents => t("Roles, models", "角色、模型"),
+            Self::Skills => t("Slash commands", "斜杠命令"),
+            Self::Mcp => t("Tool servers", "工具服务器"),
+            Self::Web => t("Search backends", "搜索后端"),
+            Self::Data => t("Usage, export", "用量、导出"),
+            Self::About => t("Version, updates", "版本、更新"),
+        }
+    }
+
+    /// Nav group captions, resolved per language at render time.
+    pub fn group_label(group: &'static str) -> &'static str {
+        match group {
+            "Workspace" => t("Workspace", "工作区"),
+            "Connect" => t("Connect", "连接"),
+            _ => t("System", "系统"),
         }
     }
 

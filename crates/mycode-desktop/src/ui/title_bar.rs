@@ -16,6 +16,7 @@ use gpui_kit::{
 };
 
 use super::skin;
+use crate::i18n::t;
 use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
@@ -33,12 +34,22 @@ pub(super) fn render_title_bar(
             .project_dir
             .as_deref()
             .map(super::project_label)
-            .unwrap_or_else(|| "no project".to_owned())
+            .unwrap_or_else(|| t("no project", "未打开目录").to_owned())
             .into(),
-        MainView::Settings => "Settings".into(),
+        MainView::Settings => t("Settings", "设置").into(),
     };
+    // The chip tracks the whole self-update pipeline: offering, downloading,
+    // or staged. Its click always opens the update dialog.
     let update_label: Option<SharedString> = match &workspace.vm().update {
-        UpdateState::Available { version, .. } => Some(format!("v{version} available").into()),
+        UpdateState::Available { version, .. } => {
+            Some(format!("v{version} {}", t("available", "可用")).into())
+        }
+        UpdateState::Downloading { version } => {
+            Some(format!("v{version} {}", t("downloading…", "下载中…")).into())
+        }
+        UpdateState::Ready { version } => {
+            Some(format!("v{version} {}", t("ready", "待安装")).into())
+        }
         _ => None,
     };
     let dark = workspace.vm().dark_theme;
@@ -171,7 +182,10 @@ fn title_controls(
                     .small()
                     .warning()
                     .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_show_main_view(MainView::Settings, cx);
+                        workspace.apply_action(
+                            crate::view_model::DesktopAction::UpdateDialogToggled(true),
+                            cx,
+                        );
                     })),
             )
         })
@@ -192,18 +206,19 @@ fn theme_toggle(
         .h(px(24.))
         .rounded(px(8.))
         .text_xs()
-        .child(theme_seg("Light", !dark, theme, cx))
-        .child(theme_seg("Dark", dark, theme, cx))
+        .child(theme_seg("light", t("Light", "浅色"), !dark, theme, cx))
+        .child(theme_seg("dark", t("Dark", "深色"), dark, theme, cx))
 }
 
 fn theme_seg(
+    id: &'static str,
     label: &'static str,
     on: bool,
     theme: &gpui_kit::component::theme::Theme,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     div()
-        .id(format!("theme-{label}"))
+        .id(format!("theme-{id}"))
         .px_2()
         .h_full()
         .flex()
@@ -223,7 +238,7 @@ fn theme_seg(
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             cx.stop_propagation();
-            workspace.on_select_theme(label == "Dark", window, cx);
+            workspace.on_select_theme(id == "dark", window, cx);
         }))
 }
 

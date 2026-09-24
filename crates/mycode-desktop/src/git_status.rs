@@ -3,6 +3,8 @@
 //! Reads `git status` and `git diff` in the session folder. A missing git
 //! install or a non-repository is a panel note, not a chat error.
 
+use crate::i18n::t;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -58,10 +60,10 @@ pub(crate) fn read_status(root: &Path) -> GitSnapshot {
         .output();
     let output = match output {
         Ok(output) => output,
-        Err(_) => return GitSnapshot::empty("git is not installed"),
+        Err(_) => return GitSnapshot::empty(t("git is not installed", "未安装 git")),
     };
     if !output.status.success() {
-        return GitSnapshot::empty("Not a git repository");
+        return GitSnapshot::empty(t("Not a git repository", "不是 git 仓库"));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let mut branch = String::new();
@@ -103,7 +105,7 @@ pub(crate) fn read_diff(root: &Path, path: &str) -> String {
     };
     let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if text.is_empty() {
-        "No diff against HEAD.".to_owned()
+        t("No diff against HEAD.", "与 HEAD 无差异。").to_owned()
     } else if text.len() > 12_000 {
         format!("{}…", &text[..12_000])
     } else {

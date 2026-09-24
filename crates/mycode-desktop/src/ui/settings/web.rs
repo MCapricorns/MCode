@@ -14,6 +14,7 @@ use gpui_kit::{
 };
 
 use super::widgets::{labeled_field, row_header, settings_card};
+use crate::i18n::t;
 use crate::view_model::DesktopAction;
 use crate::workspace::Workspace;
 
@@ -88,22 +89,24 @@ fn render_web_list(
         .gap_3()
         .child(settings_card(
             "web",
-            "Web search",
-            Some(
+            t("Web search", "网页搜索"),
+            Some(t(
                 "Querit and AnySearch are ready. A stored key stays in the vault and \
                  shows as a lock. Authorization is sent as Bearer — do not type Bearer \
                  yourself. QUERIT_API_KEY / ANYSEARCH_API_KEY also work.",
-            ),
+                "Querit 与 AnySearch 开箱可用。已保存的密钥保存在凭据库并显示为锁形标记。鉴权自动以 Bearer 发送 — 请不要自己输入 Bearer。也支持环境变量 QUERIT_API_KEY / ANYSEARCH_API_KEY。",
+            )),
             theme,
             vendor_rows,
         ))
         .child(settings_card(
             "web-custom",
-            "Custom backends",
-            Some(
+            t("Custom backends", "自定义后端"),
+            Some(t(
                 "A Querit-compatible endpoint (POST /v1/search, POST /v1/contents) \
                  or another AnySearch-compatible host.",
-            ),
+                "Querit 兼容端点(POST /v1/search、POST /v1/contents)或其他 AnySearch 兼容主机。",
+            )),
             theme,
             vec![
                 div()
@@ -113,7 +116,7 @@ fn render_web_list(
                                 .text_xs()
                                 .opacity(0.5)
                                 .whitespace_normal()
-                                .child("No custom backends"),
+                                .child(t("No custom backends", "暂无自定义后端")),
                         )
                     })
                     .children(custom_rows)
@@ -126,7 +129,7 @@ fn render_web_list(
                     .child(
                         Button::new("add-custom-backend")
                             .icon(IconName::Plus)
-                            .label("Add custom backend\u{2026}")
+                            .label(t("Add custom backend\u{2026}", "添加自定义后端\u{2026}"))
                             .small()
                             .primary()
                             .on_click(cx.listener(|workspace, _, _, cx| {
@@ -152,8 +155,11 @@ fn render_web_custom_page(
         .flex_col()
         .gap_3()
         .child(super::subview_header(
-            "Add custom backend",
-            Some("Querit-compatible or AnySearch-compatible host"),
+            t("Add custom backend", "添加自定义后端"),
+            Some(t(
+                "Querit-compatible or AnySearch-compatible host",
+                "Querit 兼容或 AnySearch 兼容的主机",
+            )),
             |workspace, cx| {
                 workspace.on_show_web_subview(crate::view_model::WebSubview::List, cx);
             },
@@ -286,7 +292,7 @@ fn vendor_backend_row(
                     )
                     .child(
                         Button::new(format!("web-key-save-{id}"))
-                            .label("Save key")
+                            .label(t("Save key", "保存密钥"))
                             .small()
                             .outline()
                             .on_click({
@@ -378,7 +384,12 @@ fn render_backend_form(
         .p_3()
         .rounded_md()
         .bg(theme.secondary)
-        .child(div().text_xs().opacity(0.7).child("Add web search backend"))
+        .child(
+            div()
+                .text_xs()
+                .opacity(0.7)
+                .child(t("Add web search backend", "添加网页搜索后端")),
+        )
         .child(
             div()
                 .flex()
@@ -391,7 +402,7 @@ fn render_backend_form(
         )
         .child(
             Button::new("backend-add")
-                .label("Add backend")
+                .label(t("Add backend", "添加后端"))
                 .small()
                 .outline()
                 .on_click(cx.listener(|workspace, _, _, cx| {

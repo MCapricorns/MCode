@@ -19,30 +19,45 @@ pub(super) fn rebuild_session_usage(state: &mut WorkspaceState) {
         if entry.kind != EntryKind::Usage {
             continue;
         }
-        let Some((model, input, output)) = parse_usage_text(&entry.text) else {
+        let Some((key, input, output, cache)) = parse_usage_text(&entry.text) else {
             continue;
         };
-        if let Some(row) = totals.iter_mut().find(|row| row.key == model) {
+        // Older events carry a bare model key; newer ones `provider/model`.
+        // Fold into whichever row either spelling matches so the panel keeps
+        // one row per model instead of a stale orphan beside the live one.
+        let row = totals
+            .iter_mut()
+            .find(|row| row.key == key || usage_row_matches(row, &key));
+        let cache_value = cache.unwrap_or_default();
+        if let Some(row) = row {
             row.input = row.input.saturating_add(input);
             row.output = row.output.saturating_add(output);
+            row.cache = row.cache.saturating_add(cache_value);
             row.requests = row.requests.saturating_add(1);
         } else {
             totals.push(UsageTotal {
-                key: model.clone(),
+                key: key.clone(),
                 input,
                 output,
+                cache: cache_value,
                 requests: 1,
-                ..UsageTotal::default()
             });
         }
         last = Some(TurnStats {
-            model,
+            model: key,
             input,
             output,
-            cache: None,
+            cache,
             elapsed_ms: 0,
         });
     }
     state.usage_totals = totals;
     state.last_turn = last;
+}
+
+/// Whether a usage row's key and `key` name the same model under possibly
+/// different providers.
+fn usage_row_matches(row: &UsageTotal, key: &str) -> bool {
+    crate::view_model::usage_key_matches(&row.key, key)
+        || crate::view_model::usage_key_matches(key, &row.key)
 }

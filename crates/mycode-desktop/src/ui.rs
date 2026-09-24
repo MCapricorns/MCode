@@ -10,6 +10,7 @@ mod sidebar;
 mod skin;
 mod title_bar;
 mod todos;
+mod update_dialog;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -121,6 +122,12 @@ pub fn render_root(
                 && crate::view_model::task_surface_visible(workspace.vm()),
             |this| this.child(context::render_subagent_window(workspace, cx)),
         )
+        .when(workspace.vm().changes_panel_open, |this| {
+            this.child(context::render_changes_drawer(workspace, cx))
+        })
+        .when(workspace.vm().update_dialog_open, |this| {
+            this.child(update_dialog::render_update_dialog(workspace, cx))
+        })
         .when(workspace.project_picker.is_some(), |this| {
             this.child(project_picker::render(workspace, cx))
         })
