@@ -105,6 +105,9 @@ enum Action {
     Heads {
         session: SessionId,
     },
+    Evict {
+        session: SessionId,
+    },
     ReserveEvent {
         session: SessionId,
         branch: BranchId,
@@ -216,6 +219,11 @@ impl SessionCore {
                     session: session.clone(),
                 },
             ),
+            // Eviction never recovers: a session whose manifest is gone must
+            // still be evictable, and an unknown session is already evicted.
+            SessionRequest::Evict { session } => Stage::Run(Action::Evict {
+                session: session.clone(),
+            }),
             SessionRequest::ReserveEvent {
                 session,
                 branch,
@@ -469,6 +477,7 @@ impl SessionCore {
         match action {
             Action::Create { session, branch } => self.action_create(&session, &branch),
             Action::Heads { session } => self.action_heads(&session),
+            Action::Evict { session } => self.action_evict(&session),
             Action::ReserveEvent {
                 session,
                 branch,

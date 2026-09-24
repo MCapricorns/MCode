@@ -30,6 +30,9 @@ pub struct SessionSummary {
     /// session; a frontend that tracks open conversations recomputes the
     /// flag itself.
     pub active: bool,
+    /// The session directory exists but its ledger could not be read or
+    /// validated. Such a row cannot be opened; a frontend offers deletion.
+    pub corrupt: bool,
 }
 
 /// What one conversation entry represents.

@@ -52,29 +52,44 @@ pub struct SessionSnapshot {
     pub branches: Vec<BranchSnapshot>,
 }
 
+/// Read-only session listing for session discovery.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionsListing {
+    /// Every strictly valid session snapshot, ordered by session ID.
+    pub sessions: Vec<SessionSnapshot>,
+    /// Sessions whose directory exists but whose manifest could not be read
+    /// or validated (a torn create, or an interrupted delete). Entries are
+    /// raw directory names: a torn directory may not even spell a valid
+    /// session id. They stay visible so a frontend can offer deletion
+    /// instead of losing the whole listing to one stray directory.
+    pub corrupt: Vec<String>,
+}
+
 /// Lists every stored session by strictly decoding each manifest.
 ///
 /// The listing performs no recovery and mutates nothing; manifests are the
 /// authority and atomically replaced, so a snapshot is always consistent.
-/// Any malformed or unreadable session fails closed.
+/// A session directory that is unreadable or fails strict validation is
+/// reported through [`SessionsListing::corrupt`] instead of failing the
+/// listing; only an unreadable sessions directory itself, or an owned-path
+/// violation, fails the call.
 ///
 /// # Errors
 ///
-/// Returns [`SessionError::Corrupt`] for an unreadable sessions directory or
-/// any manifest that fails strict validation and [`SessionError::Unavailable`]
-/// for owned-path violations.
-pub fn inspect_sessions(
-    home: &mycode_config::HomeLayout,
-) -> Result<Vec<SessionSnapshot>, SessionError> {
+/// Returns [`SessionError::Corrupt`] for an unreadable sessions directory
+/// and [`SessionError::Unavailable`] for owned-path violations.
+pub fn inspect_sessions(home: &mycode_config::HomeLayout) -> Result<SessionsListing, SessionError> {
     let sessions_root = home
         .owned_join(store::SESSIONS_RELATIVE_DIR)
         .map_err(|_| SessionError::Unavailable)?;
     let entries = match std::fs::read_dir(&sessions_root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionsListing::default());
+        }
         Err(_) => return Err(SessionError::Corrupt),
     };
-    let mut snapshots = Vec::new();
+    let mut listing = SessionsListing::default();
     for entry in entries {
         let entry = entry.map_err(|_| SessionError::Corrupt)?;
         if !entry
@@ -86,31 +101,53 @@ pub fn inspect_sessions(
         }
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
-            return Err(SessionError::Corrupt);
+            continue;
         };
-        let session_id = SessionId::parse(name).ok_or(SessionError::Corrupt)?;
-        let paths = store::SessionPaths::new(home, &session_id);
-        let manifest_bytes =
-            mycode_config::read_owned_file(home, paths.manifest(), store::MAX_MANIFEST_BYTES)
-                .map_err(|_| SessionError::Unavailable)?
-                .ok_or(SessionError::Corrupt)?
-                .to_vec();
-        let manifest =
-            store::decode_manifest(&manifest_bytes).map_err(|_| SessionError::Corrupt)?;
-        let mut branches = Vec::with_capacity(manifest.branches.len());
-        for row in &manifest.branches {
-            branches.push(BranchSnapshot {
-                branch_id: BranchId::parse(&row.branch_id).ok_or(SessionError::Corrupt)?,
-                head: store::decode_head(&row.head).ok_or(SessionError::Corrupt)?,
-                event_count: row.event_count,
-            });
+        let Some(session_id) = SessionId::parse(name) else {
+            listing.corrupt.push(name.to_owned());
+            continue;
+        };
+        let snapshot = session_snapshot(home, &session_id);
+        match snapshot {
+            Ok(snapshot) => listing.sessions.push(snapshot),
+            Err(SessionError::Corrupt) | Err(SessionError::Unavailable) => {
+                listing.corrupt.push(name.to_owned());
+            }
+            Err(_) => unreachable!("session_snapshot fails closed on Corrupt or Unavailable"),
         }
-        branches.sort_by(|a, b| a.branch_id.cmp(&b.branch_id));
-        snapshots.push(SessionSnapshot {
-            session_id,
-            branches,
+    }
+    listing
+        .sessions
+        .sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    listing.corrupt.sort();
+    Ok(listing)
+}
+
+/// Decodes one session's manifest into a snapshot; fails closed with
+/// `Corrupt` (bad data) or `Unavailable` (substrate) so the caller can
+/// classify the directory.
+fn session_snapshot(
+    home: &mycode_config::HomeLayout,
+    session_id: &SessionId,
+) -> Result<SessionSnapshot, SessionError> {
+    let paths = store::SessionPaths::new(home, session_id);
+    let manifest_bytes =
+        mycode_config::read_owned_file(home, paths.manifest(), store::MAX_MANIFEST_BYTES)
+            .map_err(|_| SessionError::Unavailable)?
+            .ok_or(SessionError::Corrupt)?
+            .to_vec();
+    let manifest = store::decode_manifest(&manifest_bytes).map_err(|_| SessionError::Corrupt)?;
+    let mut branches = Vec::with_capacity(manifest.branches.len());
+    for row in &manifest.branches {
+        branches.push(BranchSnapshot {
+            branch_id: BranchId::parse(&row.branch_id).ok_or(SessionError::Corrupt)?,
+            head: store::decode_head(&row.head).ok_or(SessionError::Corrupt)?,
+            event_count: row.event_count,
         });
     }
-    snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-    Ok(snapshots)
+    branches.sort_by(|a, b| a.branch_id.cmp(&b.branch_id));
+    Ok(SessionSnapshot {
+        session_id: session_id.clone(),
+        branches,
+    })
 }

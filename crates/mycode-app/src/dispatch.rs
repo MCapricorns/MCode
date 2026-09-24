@@ -8,8 +8,8 @@ use mycode_config::{HomeLayout, read_ui_state, replace_ui_state};
 use mycode_providers::catalog::http_client;
 
 use crate::ledger::{
-    delete_session, inspect_summaries, open_conversation, recall_message, render_error,
-    send_message,
+    delete_session, forget_session_bindings, inspect_summaries, open_conversation, recall_message,
+    render_error, send_message,
 };
 use crate::mcp_tools::mcp_list_tools;
 use crate::oauth::oauth_sign_in;
@@ -248,6 +248,29 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| format!("background task failed: {error}"))?
 }
 
+/// Cancels one session's live turn and every subagent it started.
+///
+/// Subagent registry keys are `{session_id}:{call_id}`, so the prefix match
+/// stops exactly that session's background work without touching others.
+fn cancel_session_work(state: &CoreState, session_id: &str) {
+    if let Ok(mut turns) = state.turn_cancels.lock()
+        && let Some(token) = turns.remove(session_id)
+    {
+        token.cancel();
+    }
+    if let Ok(mut subagents) = state.subagent_cancels.lock() {
+        let prefix = format!("{session_id}:");
+        subagents.retain(|key, token| {
+            if key.starts_with(&prefix) {
+                token.cancel();
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
 async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
     match command {
         BridgeCommand::ListSessions => BridgeReply::Sessions(
@@ -262,6 +285,7 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
                 title: String::new(),
                 event_count: 0,
                 active: true,
+                corrupt: false,
             })),
             Err(error) => BridgeReply::Created(Err(render_error(error))),
         },
@@ -365,9 +389,26 @@ async fn handle(state: &CoreState, command: &BridgeCommand) -> BridgeReply {
             }
         }
         BridgeCommand::DeleteSession { session_id } => {
+            // Stop the session's live work first, then evict the actor's
+            // cached ledger: a turn that survives the directory delete would
+            // recreate `pending/` on its next reservation and then fail
+            // fatally on the missing branch log, taking the whole session
+            // service down with it. The eviction is best-effort — a dead
+            // actor cannot resurrect anything either — so the durable
+            // delete always runs.
+            cancel_session_work(state, session_id);
+            if let Some(id) = mycode_agent::session::SessionId::parse(session_id) {
+                let _ = state.service.forget(&id).await;
+            }
             let home = state.home.clone();
             let session_id = session_id.clone();
-            BridgeReply::SessionDeleted(blocking(move || delete_session(&home, &session_id)).await)
+            BridgeReply::SessionDeleted(
+                blocking(move || {
+                    delete_session(&home, &session_id)?;
+                    forget_session_bindings(&home, &session_id)
+                })
+                .await,
+            )
         }
         BridgeCommand::RemoveRecent { project } => {
             let home = state.home.clone();

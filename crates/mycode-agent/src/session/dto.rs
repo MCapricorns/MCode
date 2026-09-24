@@ -183,6 +183,14 @@ pub enum SessionRequest {
         /// The session to recover.
         session: SessionId,
     },
+    /// Drops one session's in-memory ledger without touching disk.
+    ///
+    /// Idempotent; a host deletes a session's durable footprint under this
+    /// cover so no later in-flight write resurrects the directory.
+    Evict {
+        /// The session to forget.
+        session: SessionId,
+    },
     /// Validates, durably stages a payload, and issues an event reservation.
     ReserveEvent {
         /// The session to append into.
@@ -291,6 +299,8 @@ pub enum SessionResult {
     Created(CreatedResult),
     /// `open` finished.
     Opened(OpenedResult),
+    /// `evict` finished; nothing to return.
+    Evicted,
     /// `append` finished.
     Appended(AppendedResult),
     /// `read` finished.

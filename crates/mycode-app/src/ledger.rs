@@ -37,17 +37,29 @@ pub(crate) fn render_error(error: SessionError) -> String {
 
 /// Lists sessions with display titles: the first user message of each root
 /// branch, first page only. Per-session read failures degrade to an empty
-/// title; the listing itself never fails on one bad session.
+/// title; the listing itself never fails on one bad session. Directories
+/// whose manifest cannot be read at all surface as `corrupt` rows so the UI
+/// can offer deletion instead of losing the sidebar.
 pub(crate) async fn inspect_summaries(
     service: &SessionService,
     home: HomeLayout,
 ) -> Result<Vec<SessionSummary>, SessionError> {
     // Directory walk stays off the core runtime thread.
-    let snapshots = tokio::task::spawn_blocking(move || session::inspect_sessions(&home))
+    let listing = tokio::task::spawn_blocking(move || session::inspect_sessions(&home))
         .await
         .map_err(|_| SessionError::Unavailable)??;
-    let mut summaries = Vec::with_capacity(snapshots.len());
-    for snapshot in snapshots {
+    let mut summaries = Vec::with_capacity(listing.sessions.len() + listing.corrupt.len());
+    for name in &listing.corrupt {
+        summaries.push(SessionSummary {
+            session_id: name.clone(),
+            root_branch_id: String::new(),
+            title: String::new(),
+            event_count: 0,
+            active: false,
+            corrupt: true,
+        });
+    }
+    for snapshot in listing.sessions {
         let Some(root) = snapshot.branches.first() else {
             continue;
         };
@@ -60,6 +72,7 @@ pub(crate) async fn inspect_summaries(
             session_id: snapshot.session_id.as_str().to_owned(),
             title,
             active: false,
+            corrupt: false,
         });
     }
     Ok(summaries)
@@ -332,6 +345,18 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// Drops one session's remembered UI bindings (project and workspace).
+///
+/// Runs right after the durable delete so the advisory maps never accumulate
+/// ids that no longer resolve to anything. The state is advisory, so a
+/// failure here is reported but never blocks the deletion itself.
+pub(crate) fn forget_session_bindings(home: &HomeLayout, session_id: &str) -> Result<(), String> {
+    let mut ui_state =
+        mycode_config::read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
+    ui_state.forget_session(session_id);
+    mycode_config::replace_ui_state(home, &ui_state).map_err(|error| format!("ui state: {error}"))
 }
 
 pub(crate) fn head_spelling(head: &HeadStamp) -> String {

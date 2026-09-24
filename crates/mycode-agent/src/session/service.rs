@@ -104,6 +104,27 @@ impl SessionService {
         }
     }
 
+    /// Drops one session's in-memory ledger so later writes cannot
+    /// resurrect durable data the host is about to delete.
+    ///
+    /// Idempotent: evicting an unknown or already-evicted session succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the actor's terminal error only; the eviction itself cannot
+    /// fail at the domain level.
+    pub async fn forget(&self, session: &SessionId) -> Result<(), SessionError> {
+        match self
+            .run(SessionRequest::Evict {
+                session: session.clone(),
+            })
+            .await?
+        {
+            SessionResult::Evicted => Ok(()),
+            _ => Err(SessionError::Unavailable),
+        }
+    }
+
     /// Validates one event, durably stages its payload, and issues the
     /// single-use reservation.
     ///

@@ -98,6 +98,14 @@ impl SessionCore {
         })))
     }
 
+    /// Forgets one session's in-memory ledger. Disk is untouched: the host
+    /// owns the deletion this covers. Reservations die with the ledger, so a
+    /// later append can at worst fail `NotFound`, never resurrect the files.
+    pub(super) fn action_evict(&mut self, session: &SessionId) -> Result<SessionPull, OpFail> {
+        self.sessions.remove(session);
+        Ok(SessionPull::Complete(SessionResult::Evicted))
+    }
+
     pub(super) fn action_reserve_event(
         &mut self,
         session: &SessionId,
