@@ -52,8 +52,13 @@ impl GitSnapshot {
 }
 
 /// `git status --porcelain=v1 -b` for one directory.
+///
+/// `--no-optional-locks` keeps the background poll from taking
+/// `.git/index.lock` and opportunistically rewriting the index, which would
+/// contend with the user's own git commands and subagent worktree updates.
 pub(crate) fn read_status(root: &Path) -> GitSnapshot {
     let output = git_command()
+        .arg("--no-optional-locks")
         .arg("-C")
         .arg(root)
         .args(["status", "--porcelain=v1", "-b"])

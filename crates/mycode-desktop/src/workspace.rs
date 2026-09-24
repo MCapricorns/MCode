@@ -46,6 +46,14 @@ fn fit_edge(available: Pixels, desired: Pixels, floor: Pixels) -> Pixels {
 /// Poll cadence for streaming chat events from the core thread.
 const EVENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// Git status poll cadence (ticks) while the working tree keeps changing.
+const GIT_POLL_FAST_TICKS: u64 = 40;
+
+/// Idle backoff cap for the git poll: 2 s → 4 s → 8 s while the snapshot is
+/// unchanged, so an idle window stops spawning a `git status` process every
+/// 2 s; any change or folder switch snaps back to the fast cadence.
+const GIT_POLL_MAX_STRETCH: u32 = 2;
+
 /// Re-run the automatic update check after one day of runtime.
 const UPDATE_RECHECK_TICKS: u64 = 24 * 60 * 60 * 1000 / EVENT_POLL_INTERVAL.as_millis() as u64;
 
@@ -146,6 +154,8 @@ pub struct Workspace {
     git_diff: String,
     git_diff_rx: Option<std::sync::mpsc::Receiver<(String, String)>>,
     git_seen: Option<String>,
+    git_poll_stretch: u32,
+    git_next_poll: u64,
 }
 
 impl Workspace {
@@ -201,6 +211,8 @@ impl Workspace {
             git_diff: String::new(),
             git_diff_rx: None,
             git_seen: None,
+            git_poll_stretch: 0,
+            git_next_poll: 0,
         });
         workspace.update(cx, |workspace, cx| {
             let composer = workspace.composer.clone();
@@ -254,8 +266,11 @@ impl Workspace {
         }
         self.poll_git(cx);
         let current = self.vm.project_dir.clone();
-        if current != self.git_seen || self.runtime_ticks.is_multiple_of(40) {
+        if current != self.git_seen {
             self.git_seen = current;
+            self.git_poll_stretch = 0;
+            self.request_git_status();
+        } else if self.runtime_ticks >= self.git_next_poll {
             self.request_git_status();
         }
     }
@@ -293,6 +308,8 @@ impl Workspace {
     }
 
     fn request_git_status(&mut self) {
+        self.git_next_poll =
+            self.runtime_ticks + GIT_POLL_FAST_TICKS * (1_u64 << self.git_poll_stretch);
         if self.git_rx.is_some() {
             return;
         }
@@ -313,9 +330,17 @@ impl Workspace {
         if let Some(rx) = &self.git_rx
             && let Ok(snapshot) = rx.try_recv()
         {
-            self.git = snapshot;
             self.git_rx = None;
-            changed = true;
+            if self.git != snapshot {
+                self.git = snapshot;
+                self.git_poll_stretch = 0;
+                changed = true;
+            } else {
+                self.git_poll_stretch = self
+                    .git_poll_stretch
+                    .saturating_add(1)
+                    .min(GIT_POLL_MAX_STRETCH);
+            }
         }
         if let Some(rx) = &self.git_diff_rx
             && let Ok((path, diff)) = rx.try_recv()
