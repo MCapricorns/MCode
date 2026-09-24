@@ -3,6 +3,23 @@
 显著变化从 `0.4.5` 记起。更早的发布记录已作废，不再保留。日期为发布日（UTC）。
 发布说明在发版时手写，与本文件相互独立。
 
+## [0.5.0] - 2026-09-24
+
+### Added
+
+- 中英双语界面：新增 `appearance.language` 设置（auto/en/zh），通用页可切换，全 UI 即时切换；`auto` 跟随系统语言。
+- 完整改动抽屉：右侧面板的文件列表收敛为预览（前 6 个），“查看全部”打开全高抽屉，浏览全部改动文件并查看所选文件的 diff。
+- 自更新对话框：发现新版本后自动下载并校验，完成后弹出对话框确认“重启并安装”；右上角状态片（可用/下载中/待安装）点击即打开该对话框。
+
+### Changed
+
+- 子代理进度只保留两处：底部状态行与右侧面板卡片；对话内不再重复显示，子代理结束后其卡片像已完成的待办一样自动消失，面板卡片可直接取消该子代理。
+- 更新失败的错误文案压缩为单行摘要，不再把整段 HTTP 错误链拉满横幅。
+
+### Fixed
+
+- 修复模型用量统计：会话回放重建的行（裸模型名）与实时记录的行（provider/model）现在合并为同一行，输入/输出与轮次会持续刷新而不是冻结在旧行上；缓存占比在重建后不再丢失；面板选中模型无匹配行时回退显示实际运行的模型，不再出现“本会话暂无用量统计”的误报。
+
 ## [0.4.7] - 2026-09-23
 
 ### Changed
@@ -32,5 +49,6 @@
 - MCP 的添加收进二级页：从目录添加、导入 JSON、自定义服务器。已保存的密钥同样只显示锁。
 - 思考按钮写出 Thinking / Thinking off / Thinking on，不再只写 On。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/MCapricorns/mycode/releases/tag/v0.5.0
 [0.4.7]: https://github.com/MCapricorns/mycode/releases/tag/v0.4.7
