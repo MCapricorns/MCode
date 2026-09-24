@@ -34,4 +34,4 @@ stdio 或 Streamable-HTTP。设置页可粘贴 JSON 配置解析。HTTP 凭证�
 
 - `write`/`edit` 前 `checkpoint_file`。
 - Windows：PATH 搜索跳过无法打开或 0 字节的 Store App Execution Alias（os error 1920）。
-- `shell` 发现 PowerShell 时同样跳过空镜像。
+- `shell` 发现 pwsh 时同样跳过空镜像；侦查顺序为 pwsh，回退 Git bash，不使用 Windows PowerShell 5.1 与 cmd。

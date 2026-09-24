@@ -12,10 +12,6 @@ static RUNTIME_SHELL: RwLock<Option<DetectedShell>> = RwLock::new(None);
 pub enum ShellKind {
     /// PowerShell 7+ (`pwsh`).
     Pwsh,
-    /// Windows PowerShell 5.1 (`powershell`).
-    PowerShell,
-    /// `cmd.exe`.
-    Cmd,
     /// Bash (`bash` / `sh`).
     Bash,
 }
@@ -26,8 +22,6 @@ impl ShellKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pwsh => "pwsh",
-            Self::PowerShell => "powershell",
-            Self::Cmd => "cmd",
             Self::Bash => "bash",
         }
     }
@@ -37,8 +31,6 @@ impl ShellKind {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "pwsh" => Some(Self::Pwsh),
-            "powershell" => Some(Self::PowerShell),
-            "cmd" => Some(Self::Cmd),
             "bash" => Some(Self::Bash),
             _ => None,
         }
@@ -53,8 +45,6 @@ impl ShellKind {
             .unwrap_or("");
         match stem.to_ascii_lowercase().as_str() {
             "pwsh" => Self::Pwsh,
-            "powershell" => Self::PowerShell,
-            "cmd" => Self::Cmd,
             "bash" | "sh" => Self::Bash,
             _ => {
                 #[cfg(windows)]
@@ -149,8 +139,6 @@ pub(crate) struct WindowsShellEnv {
     program_files_x86: Option<std::ffi::OsString>,
     local_app_data: Option<std::ffi::OsString>,
     user_profile: Option<std::ffi::OsString>,
-    system_root: Option<std::ffi::OsString>,
-    comspec: Option<std::ffi::OsString>,
 }
 
 #[cfg(windows)]
@@ -163,8 +151,6 @@ impl WindowsShellEnv {
             local_app_data: std::env::var_os("LOCALAPPDATA")
                 .or_else(|| std::env::var_os("LocalAppData")),
             user_profile: std::env::var_os("USERPROFILE"),
-            system_root: std::env::var_os("SystemRoot").or_else(|| std::env::var_os("SYSTEMROOT")),
-            comspec: std::env::var_os("ComSpec").or_else(|| std::env::var_os("COMSPEC")),
         }
     }
 }
@@ -176,7 +162,7 @@ pub(crate) fn detect_windows_shell_with(env: &WindowsShellEnv) -> Option<Detecte
     pick_windows_shell(windows_shell_candidates(env))
 }
 
-/// Prefers a regular executable, then a Store execution alias for PowerShell.
+/// Prefers a regular executable, then a Store execution alias for pwsh.
 #[cfg(windows)]
 fn pick_windows_shell(candidates: Vec<(ShellKind, PathBuf)>) -> Option<DetectedShell> {
     if let Some((kind, program)) = candidates
@@ -191,8 +177,7 @@ fn pick_windows_shell(candidates: Vec<(ShellKind, PathBuf)>) -> Option<DetectedS
     candidates
         .into_iter()
         .find(|(kind, program)| {
-            matches!(kind, ShellKind::Pwsh | ShellKind::PowerShell)
-                && is_store_execution_alias(program)
+            matches!(kind, ShellKind::Pwsh) && is_store_execution_alias(program)
         })
         .map(|(kind, program)| DetectedShell { kind, program })
 }
@@ -203,7 +188,7 @@ fn image_is_regular_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 64)
 }
 
-/// A 0-byte `pwsh.exe` / `powershell.exe` under `WindowsApps`.
+/// A 0-byte `pwsh.exe` under `WindowsApps`.
 ///
 /// The Store publishes these as execution aliases. They are not PE images,
 /// but launching them starts the real package, so they are usable when the
@@ -214,7 +199,7 @@ fn is_store_execution_alias(path: &Path) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
-    if !name.eq_ignore_ascii_case("pwsh.exe") && !name.eq_ignore_ascii_case("powershell.exe") {
+    if !name.eq_ignore_ascii_case("pwsh.exe") {
         return false;
     }
     let in_windows_apps = path.components().any(|component| {
@@ -230,6 +215,9 @@ fn is_store_execution_alias(path: &Path) -> bool {
 }
 
 /// Candidate programs in discovery order. Existence is not required.
+///
+/// Windows PowerShell 5.1 and `cmd` are deliberate non-candidates: detection
+/// prefers PowerShell 7 and falls back to Git bash.
 #[cfg(windows)]
 fn windows_shell_candidates(env: &WindowsShellEnv) -> Vec<(ShellKind, PathBuf)> {
     let mut candidates = Vec::new();
@@ -296,33 +284,6 @@ fn windows_shell_candidates(env: &WindowsShellEnv) -> Vec<(ShellKind, PathBuf)> 
                 .join("scoop")
                 .join("shims")
                 .join("pwsh.exe"),
-        ));
-    }
-
-    candidates.extend(
-        path_named_files(env.path.as_deref(), "powershell.exe")
-            .into_iter()
-            .map(|program| (ShellKind::PowerShell, program)),
-    );
-
-    if let Some(system_root) = env.system_root.as_ref() {
-        candidates.push((
-            ShellKind::PowerShell,
-            Path::new(system_root)
-                .join("System32")
-                .join("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe"),
-        ));
-    }
-
-    if let Some(comspec) = env.comspec.as_ref() {
-        candidates.push((ShellKind::Cmd, PathBuf::from(comspec)));
-    }
-    if let Some(system_root) = env.system_root.as_ref() {
-        candidates.push((
-            ShellKind::Cmd,
-            Path::new(system_root).join("System32").join("cmd.exe"),
         ));
     }
 

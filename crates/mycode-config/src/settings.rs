@@ -34,7 +34,7 @@ pub use web::{
 use serde::{Deserialize, Serialize};
 
 use subagent_roles::subagents_are_default;
-use tools_shell::tools_are_default;
+use tools_shell::{retire_unsupported_shell, tools_are_default};
 
 use crate::ConfigError;
 use crate::authority::AuthorityRevision;
@@ -352,11 +352,13 @@ fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
             .with_detail("settings.json: formatVersion or kind does not match this build"));
     }
     let revision = AuthorityRevision::new(document.revision)?;
-    document.settings.validate()?;
+    let mut settings = document.settings;
+    let retired = retire_unsupported_shell(&mut settings);
+    settings.validate()?;
     Ok(ParsedSettings {
-        settings: document.settings,
+        settings,
         revision,
-        migrated: decoded.migrated,
+        migrated: decoded.migrated || retired,
     })
 }
 

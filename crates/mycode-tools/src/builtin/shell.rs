@@ -1,8 +1,8 @@
 //! `shell` — run a platform-native shell command in the session cwd.
 //!
 //! The public name is `shell`. There is no `bash` alias. Windows resolves one
-//! configured or detected shell (`pwsh`, Windows PowerShell, `cmd`, or Git
-//! bash). POSIX hosts use an explicit POSIX shell candidate list. Launch
+//! configured or detected shell (`pwsh`, with Git bash as the fallback).
+//! POSIX hosts use an explicit POSIX shell candidate list. Launch
 //! always goes through structured exec: one cwd/env/PATH snapshot per call,
 //! allowlisted environment, pinned identity, and contained spawn. Candidate
 //! fallback is allowed only for a typed executable-not-found result. Execution
@@ -63,20 +63,6 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
     "-EncodedCommand",
 ];
 
-/// Windows PowerShell 5.1 arguments. `-OutputFormat Text` must precede
-/// `-EncodedCommand` so redirected streams stay human text instead of CLIXML.
-#[cfg(windows)]
-const POWERSHELL_51_ARGUMENTS: &[&str] = &[
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-OutputFormat",
-    "Text",
-    "-EncodedCommand",
-];
-
 /// One executable line inserted after the script's statement-ordering
 /// prologue (leading comments, `using` statements, and `param` block): pins
 /// the hidden console's pipe encoding to UTF-8 so non-ASCII text survives on
@@ -86,9 +72,6 @@ const POWERSHELL_51_ARGUMENTS: &[&str] = &[
 #[cfg(windows)]
 const POWERSHELL_UTF8_PRELUDE: &str =
     "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }";
-
-#[cfg(windows)]
-const POWERSHELL_ERRORVIEW_PRELUDE: &str = "try { $ErrorView = 'NormalView' } catch { }";
 
 #[cfg(windows)]
 const WINDOWS_SHELL_EXECUTABLE: &str = "pwsh.exe";
@@ -171,9 +154,8 @@ impl Default for ShellTool {
 /// Arguments for [`ShellTool`].
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShellArgs {
-    /// Command to execute with the configurable platform shell (pwsh,
-    /// powershell, cmd, or bash on Windows; POSIX shell on macOS/Linux)
-    /// using the session cwd.
+    /// Command to execute with the configurable platform shell (pwsh or Git
+    /// bash on Windows; POSIX shell on macOS/Linux) using the session cwd.
     pub command: String,
     /// Timeout in seconds for this command (default: 120).
     pub timeout_secs: Option<u64>,
@@ -198,8 +180,8 @@ impl Tool for ShellTool {
         "Execute a platform-shell script for pipelines, redirection, expansion, \
          and shell syntax. Filesystem and search tools stay in-process; do not \
          use this tool to read, write, edit, grep, or find files. The platform \
-         shell is configurable (pwsh, powershell, cmd, or bash); POSIX hosts \
-         use a POSIX shell by default. Execution is unsandboxed current-user \
+         shell is pwsh or Git bash on Windows; POSIX hosts use a POSIX \
+         shell. Execution is unsandboxed current-user \
          execution with normal file and network access; environment filtering \
          is not a sandbox. Same-account processes outside this host are outside \
          the security boundary. Captured stdout/stderr is truncated beyond \
@@ -402,19 +384,11 @@ async fn prepare_windows_shell(
 #[cfg(windows)]
 fn windows_shell_args(detected: &DetectedShell, command: &str) -> Result<Vec<String>, ToolError> {
     match detected.kind {
-        ShellKind::Pwsh | ShellKind::PowerShell => {
-            let script = powershell_script_for(command, detected.kind);
-            let encoded = match detected.kind {
-                ShellKind::PowerShell => encode_powershell_command_with(
-                    &script,
-                    &detected.program,
-                    POWERSHELL_51_ARGUMENTS,
-                )?,
-                _ => encode_powershell_command(&script, &detected.program)?,
-            };
-            Ok(powershell_args(encoded, detected.kind))
+        ShellKind::Pwsh => {
+            let script = powershell_script_for(command);
+            let encoded = encode_powershell_command(&script, &detected.program)?;
+            Ok(powershell_args(encoded))
         }
-        ShellKind::Cmd => Ok(vec!["/c".to_owned(), command.to_owned()]),
         ShellKind::Bash => Ok(vec!["-c".to_owned(), command.to_owned()]),
     }
 }
@@ -480,23 +454,12 @@ async fn prepare_posix_shell(
 }
 
 #[cfg(windows)]
-fn powershell_prelude(kind: ShellKind) -> String {
-    match kind {
-        ShellKind::PowerShell => {
-            format!("{POWERSHELL_UTF8_PRELUDE}\n{POWERSHELL_ERRORVIEW_PRELUDE}")
-        }
-        _ => POWERSHELL_UTF8_PRELUDE.to_owned(),
-    }
-}
-
-#[cfg(windows)]
-fn powershell_script_for(command: &str, kind: ShellKind) -> String {
-    let prelude = powershell_prelude(kind);
-    let mut script = String::with_capacity(command.len() + prelude.len() + 4);
+fn powershell_script_for(command: &str) -> String {
+    let mut script = String::with_capacity(command.len() + POWERSHELL_UTF8_PRELUDE.len() + 4);
     if command.is_empty() {
         // PowerShell 7 rejects an empty -EncodedCommand payload as not Base64.
         script.push_str("#\n");
-        script.push_str(&prelude);
+        script.push_str(POWERSHELL_UTF8_PRELUDE);
         return script;
     }
     let prologue = powershell_prologue_units(command);
@@ -504,7 +467,7 @@ fn powershell_script_for(command: &str, kind: ShellKind) -> String {
     if !script.is_empty() && !script.ends_with('\n') {
         script.push('\n');
     }
-    script.push_str(&prelude);
+    script.push_str(POWERSHELL_UTF8_PRELUDE);
     script.push('\n');
     script.push_str(&command[prologue..]);
     script
@@ -574,18 +537,13 @@ fn scan_param_line(line: &str, paren_depth: &mut i64, quote: &mut Option<char>) 
 }
 
 #[cfg(windows)]
-fn powershell_fixed_arguments(kind: ShellKind) -> &'static [&'static str] {
-    match kind {
-        ShellKind::PowerShell => POWERSHELL_51_ARGUMENTS,
-        _ => POWERSHELL_ARGUMENTS,
-    }
-}
-
-#[cfg(windows)]
-fn powershell_args(encoded_command: String, kind: ShellKind) -> Vec<String> {
-    let fixed = powershell_fixed_arguments(kind);
-    let mut args = Vec::with_capacity(fixed.len() + 1);
-    args.extend(fixed.iter().map(|argument| (*argument).to_owned()));
+fn powershell_args(encoded_command: String) -> Vec<String> {
+    let mut args = Vec::with_capacity(POWERSHELL_ARGUMENTS.len() + 1);
+    args.extend(
+        POWERSHELL_ARGUMENTS
+            .iter()
+            .map(|argument| (*argument).to_owned()),
+    );
     args.push(encoded_command);
     args
 }
@@ -687,7 +645,7 @@ fn with_identity(
 
 const CLIXML_MARKER: &str = "#< CLIXML";
 
-/// Turns redirected PowerShell 5.1 CLIXML blobs into readable text.
+/// Turns redirected PowerShell CLIXML blobs into readable text.
 #[must_use]
 pub(crate) fn sanitize_captured_shell_text(text: &str) -> String {
     if !text.contains(CLIXML_MARKER) {

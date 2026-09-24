@@ -602,8 +602,7 @@ impl Workspace {
         let Some(detected) = mycode_tools::detect_default_shell() else {
             self.apply_action(
                 DesktopAction::Failed(
-                    "No usable shell was found. Browse to pwsh, powershell, cmd, or bash."
-                        .to_owned(),
+                    "No usable shell was found. Browse to pwsh or Git bash.".to_owned(),
                 ),
                 cx,
             );
@@ -635,6 +634,20 @@ impl Workspace {
             let program = path.to_string_lossy().into_owned();
             let kind = mycode_tools::ShellKind::from_program(path);
             let _ = this.update(cx, |workspace, cx| {
+                let stem = path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !matches!(stem.as_str(), "pwsh" | "bash" | "sh") {
+                    workspace.apply_action(
+                        DesktopAction::Failed(
+                            "Unsupported shell: only pwsh and bash are supported.".to_owned(),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
                 workspace.set_shell_preference(kind.as_str(), &program, "user", cx);
                 workspace.on_save_settings(cx);
             });
