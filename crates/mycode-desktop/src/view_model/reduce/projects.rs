@@ -89,9 +89,7 @@ pub(super) fn workspace_created(
     let id = workspace.id.clone();
     // Only the identity is unique: display names may repeat, and replacing
     // an existing workspace on a name collision would drop its folders.
-    state
-        .workspaces
-        .retain(|existing| existing.id != id);
+    state.workspaces.retain(|existing| existing.id != id);
     state.workspaces.insert(0, workspace);
     state.workspaces.truncate(mycode_config::MAX_WORKSPACES);
     state.active_workspace = Some(id);
