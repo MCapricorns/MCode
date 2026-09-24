@@ -79,8 +79,15 @@ pub const VALID_PALETTES: [&str; 8] = [
     "slate", "ocean", "forest", "dusk", "sand", "rose", "ink", "moss",
 ];
 
+/// UI language ids: follow the system, English, or Simplified Chinese.
+pub const VALID_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
+
 fn default_palette() -> String {
     "slate".to_owned()
+}
+
+fn default_language() -> String {
+    "auto".to_owned()
 }
 
 /// Appearance settings.
@@ -92,6 +99,9 @@ pub struct AppearanceSettings {
     /// `slate`, `ocean`, `forest`, `dusk`, `sand`, `rose`, `ink`, or `moss`.
     #[serde(default = "default_palette")]
     pub palette: String,
+    /// `auto`, `en`, or `zh`.
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 impl Default for AppearanceSettings {
@@ -99,6 +109,7 @@ impl Default for AppearanceSettings {
         Self {
             theme: "dark".to_owned(),
             palette: default_palette(),
+            language: default_language(),
         }
     }
 }
@@ -218,6 +229,9 @@ impl AppSettings {
             return Err(invalid(
                 "appearance.palette: must be slate, ocean, forest, dusk, sand, rose, ink, or moss",
             ));
+        }
+        if !VALID_LANGUAGES.contains(&self.appearance.language.as_str()) {
+            return Err(invalid("appearance.language: must be auto, en, or zh"));
         }
         self.validate_subagent_roles()?;
         self.validate_tools_shell()?;
